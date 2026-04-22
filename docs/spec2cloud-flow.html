@@ -1,0 +1,1033 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>spec2cloud Flow Animation</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --orange: #d29922;
+    --red: #f85149;
+    --purple: #bc8cff;
+    --pink: #f778ba;
+    --cyan: #79c0ff;
+    --glow-accent: rgba(88, 166, 255, 0.4);
+    --glow-green: rgba(63, 185, 80, 0.4);
+    --glow-orange: rgba(210, 153, 34, 0.4);
+    --glow-purple: rgba(188, 140, 255, 0.4);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    overflow-x: hidden;
+    min-height: 100vh;
+  }
+
+  /* ─── Header ─── */
+  .header {
+    text-align: center;
+    padding: 40px 20px 20px;
+  }
+  .header h1 {
+    font-size: 2.2rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--accent), var(--purple));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 8px;
+  }
+  .header p {
+    color: var(--text-muted);
+    font-size: 1rem;
+    max-width: 600px;
+    margin: 0 auto;
+  }
+
+  /* ─── Controls ─── */
+  .controls {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    padding: 16px 20px;
+    flex-wrap: wrap;
+  }
+  .controls button {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 20px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: all 0.2s;
+  }
+  .controls button:hover {
+    border-color: var(--accent);
+    background: rgba(88, 166, 255, 0.1);
+  }
+  .controls button.active {
+    border-color: var(--accent);
+    background: rgba(88, 166, 255, 0.15);
+    color: var(--accent);
+  }
+  .speed-label {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    align-self: center;
+  }
+
+  /* ─── Section titles ─── */
+  .section-title {
+    text-align: center;
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin: 30px 0 16px;
+  }
+  .section-title span {
+    color: var(--accent);
+  }
+
+  /* ─── Ralph Loop ─── */
+  .ralph-loop-container {
+    display: flex;
+    justify-content: center;
+    padding: 10px 20px 30px;
+  }
+  .ralph-loop {
+    position: relative;
+    width: 420px;
+    height: 420px;
+  }
+  .ralph-step {
+    position: absolute;
+    width: 110px;
+    text-align: center;
+    transition: all 0.4s ease;
+  }
+  .ralph-step .step-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: var(--surface);
+    border: 2px solid var(--border);
+    font-size: 0.8rem;
+    font-weight: 700;
+    margin-bottom: 4px;
+    transition: all 0.4s ease;
+  }
+  .ralph-step .step-label {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    line-height: 1.3;
+    transition: color 0.4s ease;
+  }
+  .ralph-step.active .step-num {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    box-shadow: 0 0 20px var(--glow-accent);
+    transform: scale(1.2);
+  }
+  .ralph-step.active .step-label {
+    color: var(--text);
+  }
+  .ralph-step.completed .step-num {
+    background: var(--green);
+    border-color: var(--green);
+    color: #fff;
+  }
+
+  /* Ralph loop SVG circle */
+  .ralph-svg {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+  }
+  .ralph-svg circle {
+    fill: none;
+    stroke: var(--border);
+    stroke-width: 1.5;
+  }
+  .ralph-svg .progress-ring {
+    stroke: var(--accent);
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    transition: stroke-dashoffset 0.4s ease;
+    filter: drop-shadow(0 0 6px var(--glow-accent));
+  }
+  .ralph-center-label {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+  }
+  .ralph-center-label .title {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--accent);
+  }
+  .ralph-center-label .subtitle {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+
+  /* ─── Phase Pipeline ─── */
+  .pipeline-container {
+    padding: 10px 20px 30px;
+    overflow-x: auto;
+  }
+  .pipeline {
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 0;
+    min-width: 900px;
+    padding: 20px 0;
+    margin: 0 auto;
+    max-width: 1200px;
+  }
+  .phase-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    position: relative;
+  }
+  .phase-node {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 14px 16px;
+    background: var(--surface);
+    border: 2px solid var(--border);
+    border-radius: 12px;
+    min-width: 120px;
+    transition: all 0.5s ease;
+    position: relative;
+  }
+  .phase-node .phase-icon {
+    font-size: 1.5rem;
+    margin-bottom: 6px;
+  }
+  .phase-node .phase-name {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-align: center;
+    line-height: 1.3;
+  }
+  .phase-node .phase-sub {
+    font-size: 0.6rem;
+    color: var(--text-muted);
+    text-align: center;
+    margin-top: 3px;
+  }
+  .phase-node.active {
+    border-color: var(--accent);
+    box-shadow: 0 0 24px var(--glow-accent);
+    transform: translateY(-4px);
+  }
+  .phase-node.active .phase-name {
+    color: var(--accent);
+  }
+  .phase-node.completed {
+    border-color: var(--green);
+    background: rgba(63, 185, 80, 0.08);
+  }
+  .phase-node.completed .phase-name {
+    color: var(--green);
+  }
+
+  /* Phase connector arrows */
+  .phase-arrow {
+    display: flex;
+    align-items: center;
+    padding: 0 4px;
+    color: var(--border);
+    font-size: 1.2rem;
+    transition: color 0.4s;
+    align-self: center;
+    margin-top: 14px;
+  }
+  .phase-arrow.active {
+    color: var(--accent);
+  }
+  .phase-arrow.completed {
+    color: var(--green);
+  }
+  .phase-arrow svg {
+    width: 32px;
+    height: 16px;
+  }
+
+  /* Approval gate badge */
+  .gate-badge {
+    position: absolute;
+    bottom: -18px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    background: rgba(210, 153, 34, 0.15);
+    border: 1px solid var(--orange);
+    border-radius: 10px;
+    padding: 2px 8px;
+    font-size: 0.55rem;
+    color: var(--orange);
+    white-space: nowrap;
+    transition: all 0.4s;
+  }
+  .gate-badge.approved {
+    background: rgba(63, 185, 80, 0.15);
+    border-color: var(--green);
+    color: var(--green);
+  }
+  .gate-badge .gate-icon {
+    font-size: 0.7rem;
+  }
+
+  /* ─── Increment Delivery ─── */
+  .increment-container {
+    padding: 10px 20px 40px;
+  }
+  .increment-track {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 0;
+    padding: 20px 0;
+    max-width: 1000px;
+    margin: 0 auto;
+    position: relative;
+  }
+  .increment-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 16px 14px;
+    background: var(--surface);
+    border: 2px solid var(--border);
+    border-radius: 12px;
+    min-width: 150px;
+    max-width: 180px;
+    transition: all 0.5s ease;
+    position: relative;
+  }
+  .increment-step .step-icon {
+    font-size: 1.4rem;
+    margin-bottom: 6px;
+  }
+  .increment-step .step-name {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-align: center;
+  }
+  .increment-step .step-detail {
+    font-size: 0.6rem;
+    color: var(--text-muted);
+    text-align: center;
+    margin-top: 4px;
+    line-height: 1.3;
+  }
+  .increment-step.active {
+    border-color: var(--purple);
+    box-shadow: 0 0 24px var(--glow-purple);
+    transform: translateY(-4px);
+  }
+  .increment-step.active .step-name {
+    color: var(--purple);
+  }
+  .increment-step.completed {
+    border-color: var(--green);
+    background: rgba(63, 185, 80, 0.08);
+  }
+  .increment-step.completed .step-name {
+    color: var(--green);
+  }
+
+  .inc-arrow {
+    display: flex;
+    align-items: center;
+    padding: 0 4px;
+    color: var(--border);
+    font-size: 1.2rem;
+    transition: color 0.4s;
+  }
+  .inc-arrow.active { color: var(--purple); }
+  .inc-arrow.completed { color: var(--green); }
+  .inc-arrow svg { width: 32px; height: 16px; }
+
+  /* Iteration loop-back arrow */
+  .loop-back {
+    position: absolute;
+    bottom: -40px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    opacity: 0;
+    transition: opacity 0.5s;
+  }
+  .loop-back.visible {
+    opacity: 1;
+  }
+  .loop-back svg {
+    width: 200px;
+    height: 30px;
+  }
+
+  /* Increment counter */
+  .increment-counter {
+    text-align: center;
+    margin-top: 10px;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+  .increment-counter .current {
+    color: var(--purple);
+    font-weight: 700;
+    font-size: 1rem;
+  }
+
+  /* ─── Status Bar ─── */
+  .status-bar {
+    text-align: center;
+    padding: 10px 20px 30px;
+  }
+  .status-text {
+    display: inline-block;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 24px;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    min-width: 300px;
+    transition: all 0.3s;
+  }
+  .status-text.active {
+    border-color: var(--accent);
+    color: var(--text);
+  }
+
+  /* ─── Final deployed ─── */
+  .deployed-banner {
+    text-align: center;
+    padding: 20px;
+    opacity: 0;
+    transition: opacity 0.6s;
+  }
+  .deployed-banner.visible {
+    opacity: 1;
+  }
+  .deployed-banner .banner-text {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: rgba(63, 185, 80, 0.1);
+    border: 2px solid var(--green);
+    border-radius: 12px;
+    padding: 16px 32px;
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--green);
+    box-shadow: 0 0 30px var(--glow-green);
+  }
+
+  /* Pulse animation for active elements */
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+  }
+  .pulsing {
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    .ralph-loop { width: 340px; height: 340px; }
+    .ralph-step { width: 90px; }
+    .ralph-step .step-label { font-size: 0.55rem; }
+    .pipeline, .increment-track { min-width: 0; flex-wrap: wrap; gap: 8px; }
+    .phase-arrow, .inc-arrow { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <h1>spec2cloud</h1>
+  <p>From product requirements to deployed application — animated flow visualization</p>
+</div>
+
+<!-- Controls -->
+<div class="controls">
+  <button id="btnPlay" class="active" onclick="play()">▶ Play</button>
+  <button id="btnPause" onclick="pause()">⏸ Pause</button>
+  <button id="btnReset" onclick="reset()">↺ Reset</button>
+  <span class="speed-label">Speed:</span>
+  <button id="btnSlow" onclick="setSpeed(2000)">0.5×</button>
+  <button id="btnNormal" class="active" onclick="setSpeed(1000)">1×</button>
+  <button id="btnFast" onclick="setSpeed(500)">2×</button>
+</div>
+
+<!-- ─── Section 1: Ralph Loop ─── -->
+<div class="section-title">The <span>Ralph Loop</span> — Core Engine</div>
+
+<div class="ralph-loop-container">
+  <div class="ralph-loop">
+    <svg class="ralph-svg" viewBox="0 0 420 420">
+      <circle cx="210" cy="210" r="175" />
+      <circle class="progress-ring" cx="210" cy="210" r="175"
+              stroke-dasharray="1099.56"
+              stroke-dashoffset="1099.56"
+              transform="rotate(-90 210 210)"
+              id="ralphProgress" />
+    </svg>
+    <div class="ralph-center-label">
+      <div class="title">Ralph Loop</div>
+      <div class="subtitle">Step <span id="ralphStepNum">—</span> of 11</div>
+    </div>
+    <!-- Steps placed in a circle -->
+    <div class="ralph-step" id="rs0" style="top: 2px; left: 155px;">
+      <div class="step-num">1</div>
+      <div class="step-label">Read State</div>
+    </div>
+    <div class="ralph-step" id="rs1" style="top: 32px; left: 275px;">
+      <div class="step-num">2</div>
+      <div class="step-label">Next Task</div>
+    </div>
+    <div class="ralph-step" id="rs2" style="top: 105px; left: 340px;">
+      <div class="step-num">3</div>
+      <div class="step-label">Check Skills</div>
+    </div>
+    <div class="ralph-step" id="rs3" style="top: 195px; left: 345px;">
+      <div class="step-num">4</div>
+      <div class="step-label">Search skills.sh</div>
+    </div>
+    <div class="ralph-step" id="rs4" style="top: 280px; left: 310px;">
+      <div class="step-num">5</div>
+      <div class="step-label">Research</div>
+    </div>
+    <div class="ralph-step" id="rs5" style="top: 340px; left: 230px;">
+      <div class="step-num">6</div>
+      <div class="step-label">Execute Task</div>
+    </div>
+    <div class="ralph-step" id="rs6" style="top: 340px; left: 80px;">
+      <div class="step-num">7</div>
+      <div class="step-label">Verify</div>
+    </div>
+    <div class="ralph-step" id="rs7" style="top: 280px; left: -5px;">
+      <div class="step-num">8</div>
+      <div class="step-label">Create Skill?</div>
+    </div>
+    <div class="ralph-step" id="rs8" style="top: 195px; left: -35px;">
+      <div class="step-num">9</div>
+      <div class="step-label">Update State</div>
+    </div>
+    <div class="ralph-step" id="rs9" style="top: 105px; left: -30px;">
+      <div class="step-num">10</div>
+      <div class="step-label">Gate Check</div>
+    </div>
+    <div class="ralph-step" id="rs10" style="top: 32px; left: 35px;">
+      <div class="step-num">11</div>
+      <div class="step-label">Loop / Advance</div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Section 2: Phase Pipeline ─── -->
+<div class="section-title">Phase <span>Pipeline</span></div>
+
+<div class="pipeline-container">
+  <div class="pipeline">
+    <!-- Phase 0 -->
+    <div class="phase-group">
+      <div class="phase-node" id="p0">
+        <div class="phase-icon">🏗️</div>
+        <div class="phase-name">Phase 0</div>
+        <div class="phase-sub">Shell Setup</div>
+        <div class="gate-badge" id="g0"><span class="gate-icon">🔒</span> Approve</div>
+      </div>
+    </div>
+
+    <div class="phase-arrow" id="a01">
+      <svg viewBox="0 0 32 16"><path d="M0 8 L24 8 M20 3 L27 8 L20 13" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+    </div>
+
+    <!-- Phase 1a -->
+    <div class="phase-group">
+      <div class="phase-node" id="p1a">
+        <div class="phase-icon">📋</div>
+        <div class="phase-name">1a: Spec</div>
+        <div class="phase-sub">PRD → FRDs</div>
+        <div class="gate-badge" id="g1a"><span class="gate-icon">🔒</span> Approve FRDs</div>
+      </div>
+    </div>
+
+    <div class="phase-arrow" id="a1a1b">
+      <svg viewBox="0 0 32 16"><path d="M0 8 L24 8 M20 3 L27 8 L20 13" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+    </div>
+
+    <!-- Phase 1b -->
+    <div class="phase-group">
+      <div class="phase-node" id="p1b">
+        <div class="phase-icon">🎨</div>
+        <div class="phase-name">1b: UI/UX</div>
+        <div class="phase-sub">Prototypes</div>
+        <div class="gate-badge" id="g1b"><span class="gate-icon">🔒</span> Approve UI</div>
+      </div>
+    </div>
+
+    <div class="phase-arrow" id="a1b1c">
+      <svg viewBox="0 0 32 16"><path d="M0 8 L24 8 M20 3 L27 8 L20 13" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+    </div>
+
+    <!-- Phase 1c -->
+    <div class="phase-group">
+      <div class="phase-node" id="p1c">
+        <div class="phase-icon">📊</div>
+        <div class="phase-name">1c: Plan</div>
+        <div class="phase-sub">Increments</div>
+        <div class="gate-badge" id="g1c"><span class="gate-icon">🔒</span> Approve Plan</div>
+      </div>
+    </div>
+
+    <div class="phase-arrow" id="a1c1d">
+      <svg viewBox="0 0 32 16"><path d="M0 8 L24 8 M20 3 L27 8 L20 13" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+    </div>
+
+    <!-- Phase 1d -->
+    <div class="phase-group">
+      <div class="phase-node" id="p1d">
+        <div class="phase-icon">🔧</div>
+        <div class="phase-name">1d: Tech</div>
+        <div class="phase-sub">Stack Resolution</div>
+        <div class="gate-badge" id="g1d"><span class="gate-icon">🔒</span> Approve Stack</div>
+      </div>
+    </div>
+
+    <div class="phase-arrow" id="a1d2">
+      <svg viewBox="0 0 32 16"><path d="M0 8 L24 8 M20 3 L27 8 L20 13" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+    </div>
+
+    <!-- Phase 2 -->
+    <div class="phase-group">
+      <div class="phase-node" id="p2" style="border-color: var(--purple); min-width: 140px;">
+        <div class="phase-icon">🔄</div>
+        <div class="phase-name">Phase 2</div>
+        <div class="phase-sub">Increment Delivery<br>(repeats per increment)</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Section 3: Increment Delivery ─── -->
+<div class="section-title">Increment <span>Delivery</span> Cycle</div>
+
+<div class="increment-counter">
+  Increment <span class="current" id="incNum">1</span> of <span id="incTotal">3</span>
+</div>
+
+<div class="increment-container">
+  <div class="increment-track">
+    <!-- Step 1: Tests -->
+    <div class="increment-step" id="is1">
+      <div class="step-icon">🧪</div>
+      <div class="step-name">Step 1: Tests</div>
+      <div class="step-detail">e2e → Gherkin → BDD<br>Red baseline</div>
+      <div class="gate-badge" id="gi1"><span class="gate-icon">🔒</span> Approve Gherkin</div>
+    </div>
+
+    <div class="inc-arrow" id="ia12">
+      <svg viewBox="0 0 32 16"><path d="M0 8 L24 8 M20 3 L27 8 L20 13" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+    </div>
+
+    <!-- Step 2: Contracts -->
+    <div class="increment-step" id="is2">
+      <div class="step-icon">📝</div>
+      <div class="step-name">Step 2: Contracts</div>
+      <div class="step-detail">API specs, shared types,<br>infra requirements</div>
+    </div>
+
+    <div class="inc-arrow" id="ia23">
+      <svg viewBox="0 0 32 16"><path d="M0 8 L24 8 M20 3 L27 8 L20 13" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+    </div>
+
+    <!-- Step 3: Implementation -->
+    <div class="increment-step" id="is3">
+      <div class="step-icon">⚡</div>
+      <div class="step-name">Step 3: Implement</div>
+      <div class="step-detail">API → Web → Integration<br>All tests green</div>
+      <div class="gate-badge" id="gi3"><span class="gate-icon">🔒</span> PR Review</div>
+    </div>
+
+    <div class="inc-arrow" id="ia34">
+      <svg viewBox="0 0 32 16"><path d="M0 8 L24 8 M20 3 L27 8 L20 13" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+    </div>
+
+    <!-- Step 4: Verify & Ship -->
+    <div class="increment-step" id="is4">
+      <div class="step-icon">🚀</div>
+      <div class="step-name">Step 4: Ship</div>
+      <div class="step-detail">azd provision → deploy<br>Smoke tests pass</div>
+      <div class="gate-badge" id="gi4"><span class="gate-icon">🔒</span> Verify Deploy</div>
+    </div>
+
+    <!-- Loop-back arrow -->
+    <div class="loop-back" id="loopBack">
+      <svg viewBox="0 0 200 30">
+        <path d="M180 2 C190 2, 195 10, 195 15 C195 25, 185 28, 175 28 L25 28 C15 28, 5 25, 5 15 C5 10, 10 2, 20 2"
+              fill="none" stroke="var(--purple)" stroke-width="1.5" stroke-dasharray="4 3" />
+        <path d="M25 2 L15 2 L20 8" fill="none" stroke="var(--purple)" stroke-width="1.5"/>
+      </svg>
+      <span style="color: var(--purple);">Next increment →</span>
+    </div>
+  </div>
+</div>
+
+<!-- Status bar -->
+<div class="status-bar">
+  <div class="status-text" id="statusText">Press Play to start the animation</div>
+</div>
+
+<!-- Deployed banner -->
+<div class="deployed-banner" id="deployedBanner">
+  <div class="banner-text">✅ All Increments Delivered — Product Complete!</div>
+</div>
+
+<script>
+(function () {
+  /* ─── Configuration ─── */
+  var TOTAL_INCREMENTS = 3;
+  var speed = 1000;
+  var timer = null;
+  var running = false;
+
+  /* ─── Animation timeline ─── */
+  // The timeline is a sequence of "frames", each describing what to show.
+  // We build it dynamically.
+  var timeline = [];
+  var currentFrame = -1;
+
+  function buildTimeline() {
+    timeline = [];
+
+    // ── Ralph Loop demonstration (11 steps) ──
+    for (var r = 0; r < 11; r++) {
+      timeline.push({ type: 'ralph', step: r });
+    }
+
+    // ── Phase 0: Shell Setup ──
+    timeline.push({ type: 'phase', id: 'p0', status: 'Ralph loop finds Phase 0 → Shell Setup' });
+    timeline.push({ type: 'gate', phase: 'p0', gate: 'g0', status: '🔒 Human gate: Approve shell setup' });
+    timeline.push({ type: 'approve', phase: 'p0', gate: 'g0', arrow: 'a01', status: '✅ Shell setup approved — advancing to Phase 1' });
+
+    // ── Phase 1a: Spec Refinement ──
+    timeline.push({ type: 'phase', id: 'p1a', status: 'Phase 1a → Spec Refinement: PRD reviewed through product + technical lenses' });
+    timeline.push({ type: 'gate', phase: 'p1a', gate: 'g1a', status: '🔒 Human gate: Approve all FRDs' });
+    timeline.push({ type: 'approve', phase: 'p1a', gate: 'g1a', arrow: 'a1a1b', status: '✅ FRDs approved — moving to UI/UX design' });
+
+    // ── Phase 1b: UI/UX ──
+    timeline.push({ type: 'phase', id: 'p1b', status: 'Phase 1b → UI/UX Design: Interactive HTML wireframe prototypes' });
+    timeline.push({ type: 'gate', phase: 'p1b', gate: 'g1b', status: '🔒 Human gate: Approve UI prototypes' });
+    timeline.push({ type: 'approve', phase: 'p1b', gate: 'g1b', arrow: 'a1b1c', status: '✅ UI approved — creating increment plan' });
+
+    // ── Phase 1c: Increment Planning ──
+    timeline.push({ type: 'phase', id: 'p1c', status: 'Phase 1c → Increment Planning: Breaking FRDs into ordered increments' });
+    timeline.push({ type: 'gate', phase: 'p1c', gate: 'g1c', status: '🔒 Human gate: Approve increment plan' });
+    timeline.push({ type: 'approve', phase: 'p1c', gate: 'g1c', arrow: 'a1c1d', status: '✅ Plan approved — resolving tech stack' });
+
+    // ── Phase 1d: Tech Stack ──
+    timeline.push({ type: 'phase', id: 'p1d', status: 'Phase 1d → Tech Stack Resolution: Researching & resolving all technologies' });
+    timeline.push({ type: 'gate', phase: 'p1d', gate: 'g1d', status: '🔒 Human gate: Approve technology choices' });
+    timeline.push({ type: 'approve', phase: 'p1d', gate: 'g1d', arrow: 'a1d2', status: '✅ Tech stack approved — entering increment delivery!' });
+
+    // ── Phase 2: Increment Delivery (repeats) ──
+    timeline.push({ type: 'phase', id: 'p2', status: 'Phase 2 → Increment Delivery begins!' });
+
+    for (var inc = 1; inc <= TOTAL_INCREMENTS; inc++) {
+      var isLast = inc === TOTAL_INCREMENTS;
+
+      // Increment start
+      timeline.push({ type: 'increment-start', num: inc, status: '🔄 Starting Increment ' + inc + ' of ' + TOTAL_INCREMENTS });
+
+      // Step 1: Tests
+      timeline.push({ type: 'inc-step', step: 'is1', status: 'Inc ' + inc + ' → Step 1: Generating e2e + Gherkin + BDD tests (red baseline)' });
+      timeline.push({ type: 'inc-gate', step: 'is1', gate: 'gi1', status: '🔒 Human gate: Approve Gherkin scenarios' });
+      timeline.push({ type: 'inc-approve', step: 'is1', gate: 'gi1', arrow: 'ia12', status: '✅ Gherkin approved — generating contracts' });
+
+      // Step 2: Contracts
+      timeline.push({ type: 'inc-step', step: 'is2', status: 'Inc ' + inc + ' → Step 2: Generating API specs, shared types, infra contracts' });
+      timeline.push({ type: 'inc-complete', step: 'is2', arrow: 'ia23', status: '✅ Contracts generated — implementing' });
+
+      // Step 3: Implementation
+      timeline.push({ type: 'inc-step', step: 'is3', status: 'Inc ' + inc + ' → Step 3: Implementing API → Web → Integration slices' });
+      timeline.push({ type: 'inc-gate', step: 'is3', gate: 'gi3', status: '🔒 Human gate: PR review — all tests green?' });
+      timeline.push({ type: 'inc-approve', step: 'is3', gate: 'gi3', arrow: 'ia34', status: '✅ PR approved — deploying to Azure' });
+
+      // Step 4: Verify & Ship
+      timeline.push({ type: 'inc-step', step: 'is4', status: 'Inc ' + inc + ' → Step 4: azd provision → deploy → smoke tests' });
+      timeline.push({ type: 'inc-gate', step: 'is4', gate: 'gi4', status: '🔒 Human gate: Verify deployment works' });
+
+      if (!isLast) {
+        timeline.push({ type: 'inc-approve', step: 'is4', gate: 'gi4', status: '✅ Increment ' + inc + ' delivered! Looping back for next increment...' });
+        timeline.push({ type: 'inc-loop', num: inc, status: '🔄 Resetting for Increment ' + (inc + 1) });
+      } else {
+        timeline.push({ type: 'inc-approve', step: 'is4', gate: 'gi4', status: '✅ Final increment delivered!' });
+        timeline.push({ type: 'complete', status: '🎉 All increments delivered — product complete!' });
+      }
+    }
+  }
+
+  /* ─── Rendering ─── */
+  var ralphSteps = [];
+  for (var i = 0; i < 11; i++) {
+    ralphSteps.push(document.getElementById('rs' + i));
+  }
+  var ralphProgress = document.getElementById('ralphProgress');
+  var ralphStepNum = document.getElementById('ralphStepNum');
+  var circumference = 2 * Math.PI * 175;
+  var statusText = document.getElementById('statusText');
+  var incNum = document.getElementById('incNum');
+  var incTotal = document.getElementById('incTotal');
+  var loopBack = document.getElementById('loopBack');
+  var deployedBanner = document.getElementById('deployedBanner');
+
+  incTotal.textContent = TOTAL_INCREMENTS;
+
+  function clearRalph() {
+    ralphSteps.forEach(function (s) {
+      s.classList.remove('active', 'completed');
+      s.querySelector('.step-num').classList.remove('pulsing');
+    });
+    ralphProgress.style.strokeDashoffset = circumference;
+    ralphStepNum.textContent = '—';
+  }
+
+  function setRalphStep(n) {
+    ralphSteps.forEach(function (s, i) {
+      s.classList.remove('active');
+      s.querySelector('.step-num').classList.remove('pulsing');
+      if (i < n) s.classList.add('completed');
+    });
+    if (n < 11) {
+      ralphSteps[n].classList.add('active');
+      ralphSteps[n].querySelector('.step-num').classList.add('pulsing');
+    }
+    var offset = circumference - ((n + 1) / 11) * circumference;
+    ralphProgress.style.strokeDashoffset = Math.max(0, offset);
+    ralphStepNum.textContent = n + 1;
+  }
+
+  function clearPhases() {
+    ['p0', 'p1a', 'p1b', 'p1c', 'p1d', 'p2'].forEach(function (id) {
+      var el = document.getElementById(id);
+      el.classList.remove('active', 'completed');
+    });
+    ['a01', 'a1a1b', 'a1b1c', 'a1c1d', 'a1d2'].forEach(function (id) {
+      var el = document.getElementById(id);
+      el.classList.remove('active', 'completed');
+    });
+    ['g0', 'g1a', 'g1b', 'g1c', 'g1d'].forEach(function (id) {
+      var el = document.getElementById(id);
+      el.classList.remove('approved');
+      el.querySelector('.gate-icon').textContent = '🔒';
+      el.classList.remove('pulsing');
+    });
+  }
+
+  function clearIncrementSteps() {
+    ['is1', 'is2', 'is3', 'is4'].forEach(function (id) {
+      var el = document.getElementById(id);
+      el.classList.remove('active', 'completed');
+    });
+    ['ia12', 'ia23', 'ia34'].forEach(function (id) {
+      var el = document.getElementById(id);
+      el.classList.remove('active', 'completed');
+    });
+    ['gi1', 'gi3', 'gi4'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) {
+        el.classList.remove('approved');
+        el.querySelector('.gate-icon').textContent = '🔒';
+      }
+    });
+    loopBack.classList.remove('visible');
+  }
+
+  function setStatus(msg) {
+    statusText.textContent = msg;
+    statusText.classList.add('active');
+  }
+
+  function applyFrame(idx) {
+    var frame = timeline[idx];
+    if (!frame) return;
+
+    setStatus(frame.status || '');
+
+    switch (frame.type) {
+      case 'ralph':
+        setRalphStep(frame.step);
+        break;
+
+      case 'phase':
+        document.getElementById(frame.id).classList.add('active');
+        break;
+
+      case 'gate':
+        var gateEl = document.getElementById(frame.gate);
+        gateEl.classList.add('pulsing');
+        gateEl.querySelector('.gate-icon').textContent = '⏳';
+        break;
+
+      case 'approve':
+        var gateEl2 = document.getElementById(frame.gate);
+        gateEl2.classList.remove('pulsing');
+        gateEl2.classList.add('approved');
+        gateEl2.querySelector('.gate-icon').textContent = '✅';
+        document.getElementById(frame.phase).classList.remove('active');
+        document.getElementById(frame.phase).classList.add('completed');
+        if (frame.arrow) document.getElementById(frame.arrow).classList.add('completed');
+        break;
+
+      case 'increment-start':
+        clearIncrementSteps();
+        incNum.textContent = frame.num;
+        break;
+
+      case 'inc-step':
+        document.getElementById(frame.step).classList.add('active');
+        break;
+
+      case 'inc-gate':
+        var gateEl3 = document.getElementById(frame.gate);
+        if (gateEl3) {
+          gateEl3.classList.add('pulsing');
+          gateEl3.querySelector('.gate-icon').textContent = '⏳';
+        }
+        break;
+
+      case 'inc-approve':
+        var gateEl4 = document.getElementById(frame.gate);
+        if (gateEl4) {
+          gateEl4.classList.remove('pulsing');
+          gateEl4.classList.add('approved');
+          gateEl4.querySelector('.gate-icon').textContent = '✅';
+        }
+        document.getElementById(frame.step).classList.remove('active');
+        document.getElementById(frame.step).classList.add('completed');
+        if (frame.arrow) document.getElementById(frame.arrow).classList.add('completed');
+        break;
+
+      case 'inc-complete':
+        document.getElementById(frame.step).classList.remove('active');
+        document.getElementById(frame.step).classList.add('completed');
+        if (frame.arrow) document.getElementById(frame.arrow).classList.add('completed');
+        break;
+
+      case 'inc-loop':
+        loopBack.classList.add('visible');
+        break;
+
+      case 'complete':
+        deployedBanner.classList.add('visible');
+        pause();
+        break;
+    }
+  }
+
+  function advance() {
+    currentFrame++;
+    if (currentFrame >= timeline.length) {
+      pause();
+      return;
+    }
+    applyFrame(currentFrame);
+  }
+
+  /* ─── Public controls ─── */
+  window.play = function () {
+    if (running) return;
+    running = true;
+    document.getElementById('btnPlay').classList.add('active');
+    document.getElementById('btnPause').classList.remove('active');
+    if (currentFrame < 0 || currentFrame >= timeline.length - 1) {
+      // If at end or start, reset first
+      if (currentFrame >= timeline.length - 1) doReset();
+    }
+    timer = setInterval(advance, speed);
+  };
+
+  window.pause = function () {
+    running = false;
+    clearInterval(timer);
+    timer = null;
+    document.getElementById('btnPlay').classList.remove('active');
+    document.getElementById('btnPause').classList.add('active');
+  };
+
+  function doReset() {
+    currentFrame = -1;
+    clearRalph();
+    clearPhases();
+    clearIncrementSteps();
+    deployedBanner.classList.remove('visible');
+    incNum.textContent = '1';
+    statusText.textContent = 'Press Play to start the animation';
+    statusText.classList.remove('active');
+  }
+
+  window.reset = function () {
+    pause();
+    doReset();
+  };
+
+  window.setSpeed = function (s) {
+    speed = s;
+    document.getElementById('btnSlow').classList.remove('active');
+    document.getElementById('btnNormal').classList.remove('active');
+    document.getElementById('btnFast').classList.remove('active');
+    if (s === 2000) document.getElementById('btnSlow').classList.add('active');
+    else if (s === 1000) document.getElementById('btnNormal').classList.add('active');
+    else document.getElementById('btnFast').classList.add('active');
+    if (running) {
+      clearInterval(timer);
+      timer = setInterval(advance, speed);
+    }
+  };
+
+  /* ─── Initialize ─── */
+  buildTimeline();
+  // Auto-play after a short delay
+  setTimeout(function () { play(); }, 800);
+})();
+</script>
+</body>
+</html>

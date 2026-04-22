@@ -1,0 +1,121 @@
+name: Deploy Devbox (AKS)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.devbox/**'
+      - '.github/workflows/deploy-devbox.yml'
+  workflow_dispatch:
+    inputs:
+      skipInfra:
+        description: 'Skip bicep deployment (only rebuild image + re-apply k8s)'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  NAME_PREFIX: crgar-liliput
+  LOCATION:    swedencentral
+
+jobs:
+  deploy:
+    name: Provision AKS + deploy devbox
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve resource names
+        id: names
+        run: |
+          set -euo pipefail
+          prefix='${{ env.NAME_PREFIX }}'
+          echo "rg=${prefix}-rg"          >> "$GITHUB_OUTPUT"
+          echo "aks=${prefix}-aks"        >> "$GITHUB_OUTPUT"
+          echo "acr=${prefix//-/}acr"     >> "$GITHUB_OUTPUT"
+
+      - name: Provision infrastructure (Bicep)
+        if: ${{ inputs.skipInfra != 'true' }}
+        run: |
+          set -euo pipefail
+          az deployment sub create \
+            --name "liliput-devbox-${GITHUB_RUN_ID}" \
+            --location "${LOCATION}" \
+            --template-file     .devbox/infra/main.bicep \
+            --parameters        .devbox/infra/main.parameters.json \
+            --parameters        namePrefix="${NAME_PREFIX}" location="${LOCATION}" \
+            --output none
+
+      - name: Build devbox image in ACR
+        run: |
+          set -euo pipefail
+          az acr build \
+            --registry '${{ steps.names.outputs.acr }}' \
+            --image    'devbox:${{ github.sha }}' \
+            --image    'devbox:latest' \
+            --file     .devbox/Dockerfile \
+            .devbox
+
+      - name: Get AKS credentials
+        uses: azure/aks-set-context@v4
+        with:
+          resource-group: ${{ steps.names.outputs.rg }}
+          cluster-name:   ${{ steps.names.outputs.aks }}
+
+      - name: Apply k8s manifest
+        run: |
+          set -euo pipefail
+          acr_login_server="$(az acr show -n '${{ steps.names.outputs.acr }}' -g '${{ steps.names.outputs.rg }}' --query loginServer -o tsv)"
+          sed "s|__ACR_LOGIN_SERVER__|${acr_login_server}|g" .devbox/k8s/devbox.yaml > /tmp/devbox.yaml
+          kubectl apply -f /tmp/devbox.yaml
+
+          # Roll to pick up the new image tag for this commit
+          kubectl -n devbox set image statefulset/devbox \
+            devbox="${acr_login_server}/devbox:${GITHUB_SHA}"
+
+      - name: Wait for rollout
+        run: kubectl -n devbox rollout status statefulset/devbox --timeout=10m
+
+      - name: Smoke-test devbox (tool versions)
+        run: |
+          set -euo pipefail
+          kubectl -n devbox exec devbox-0 -- bash -lc '
+            set -e
+            copilot --version
+            gh --version | head -1
+            az version --query "\"azure-cli\"" -o tsv
+            kubectl version --client
+            tmux -V
+            node --version
+            git --version
+          '
+
+      - name: Summary
+        run: |
+          {
+            echo "### Devbox deployed ✅"
+            echo ""
+            echo "- Resource group: \`${{ steps.names.outputs.rg }}\`"
+            echo "- AKS:            \`${{ steps.names.outputs.aks }}\`"
+            echo "- ACR:            \`${{ steps.names.outputs.acr }}\`"
+            echo "- Image tag:      \`${GITHUB_SHA}\`"
+            echo ""
+            echo "Connect locally:"
+            echo ""
+            echo '```'
+            echo "az aks get-credentials -g ${{ steps.names.outputs.rg }} -n ${{ steps.names.outputs.aks }} --overwrite-existing"
+            echo "kubectl -n devbox exec -it devbox-0 -- bash -lc 'tmux new -A -s agent'"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,65 @@
+name: Android CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/android/**'
+      - '.github/workflows/android.yml'
+  push:
+    branches: [feature/android-auto]
+    paths:
+      - 'src/android/**'
+      - '.github/workflows/android.yml'
+
+jobs:
+  build:
+    name: Build Android app
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/android
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Generate Gradle wrapper if missing
+        run: |
+          if [ ! -f gradlew ]; then
+            gradle wrapper --gradle-version 8.11.1
+          fi
+
+      - name: Build debug APK
+        run: ./gradlew assembleDevDebug
+
+      - name: Run unit tests
+        run: ./gradlew testDevDebugUnitTest
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: podcraft-debug-apk
+          path: src/android/app/build/outputs/apk/dev/debug/*.apk
+          retention-days: 30
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: src/android/app/build/reports/tests/
+          retention-days: 14

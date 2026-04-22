@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 550" width="1000" height="550">
+  <defs>
+    <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="2" dy="2" stdDeviation="2" flood-color="#00000020"/>
+    </filter>
+  </defs>
+  <rect width="1000" height="550" fill="#F8FAFC"/>
+
+  <text x="500" y="40" text-anchor="middle" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="24" font-weight="bold" fill="#1E293B">43 Specialized Skills</text>
+  <text x="500" y="65" text-anchor="middle" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#64748B">Built on agentskills.io standard</text>
+
+  <!-- Row 1 -->
+  <!-- Phase Skills -->
+  <g transform="translate(30, 90)" filter="url(#shadow)">
+    <rect width="460" height="130" rx="4" fill="#FFFFFF"/>
+    <path d="M 0 4 L 0 126" stroke="#059669" stroke-width="4" fill="none" transform="translate(0, 0)"/>
+    <text x="15" y="30" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="16" font-weight="bold" fill="#1E293B">Phase Skills (3)</text>
+    <text x="15" y="60" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#64748B">spec-refinement, ui-ux-design,</text>
+    <text x="15" y="80" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#64748B">tech-stack-resolution</text>
+  </g>
+
+  <!-- Protocol Skills -->
+  <g transform="translate(510, 90)" filter="url(#shadow)">
+    <rect width="460" height="130" rx="4" fill="#FFFFFF"/>
+    <path d="M 0 4 L 0 126" stroke="#1E40AF" stroke-width="4" fill="none"/>
+    <text x="15" y="30" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="16" font-weight="bold" fill="#1E293B">Protocol Skills (6)</text>
+    <text x="15" y="60" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#64748B">state-management, commit-protocol, audit-log,</text>
+    <text x="15" y="80" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#64748B">human-gate, resume, error-handling</text>
+  </g>
+
+  <!-- Row 2 -->
+  <!-- Delivery Skills -->
+  <g transform="translate(30, 240)" filter="url(#shadow)">
+    <rect width="460" height="130" rx="4" fill="#FFFFFF"/>
+    <path d="M 0 4 L 0 126" stroke="#D97706" stroke-width="4" fill="none"/>
+    <text x="15" y="30" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="16" font-weight="bold" fill="#1E293B">Delivery Skills (6)</text>
+    <text x="15" y="60" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#64748B">e2e-generation, gherkin-generation, test-generation,</text>
+    <text x="15" y="80" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#64748B">contract-generation, implementation, azure-deployment</text>
+  </g>
+
+  <!-- Utility Skills -->
+  <g transform="translate(510, 240)" filter="url(#shadow)">
+    <rect width="460" height="130" rx="4" fill="#FFFFFF"/>
+    <path d="M 0 4 L 0 126" stroke="#4338CA" stroke-width="4" fill="none"/>
+    <text x="15" y="30" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="16" font-weight="bold" fill="#1E293B">Utility Skills (8)</text>
+    <text x="15" y="60" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#64748B">spec-validator, test-runner, build-check,</text>
+    <text x="15" y="80" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#64748B">deploy-diagnostics, research, skill-creator,</text>
+    <text x="15" y="100" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#64748B">skill-discovery, find-skills</text>
+  </g>
+
+  <!-- Row 3 -->
+  <!-- Extraction + Specs -->
+  <g transform="translate(30, 390)" filter="url(#shadow)">
+    <rect width="460" height="130" rx="4" fill="#FFFFFF"/>
+    <path d="M 0 4 L 0 126" stroke="#78350F" stroke-width="4" fill="none"/>
+    <text x="15" y="30" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="16" font-weight="bold" fill="#1E293B">Extraction + Specs (8)</text>
+    <text x="15" y="60" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#64748B">codebase-scanner, dependency-inventory,</text>
+    <text x="15" y="80" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#64748B">architecture-mapper, api-extractor, data-model-extractor,</text>
+    <text x="15" y="100" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#64748B">test-discovery, prd-generator, frd-generator</text>
+  </g>
+
+  <!-- Assessment + Planning -->
+  <g transform="translate(510, 390)" filter="url(#shadow)">
+    <rect width="460" height="130" rx="4" fill="#FFFFFF"/>
+    <path d="M 0 4 L 0 126" stroke="#EF4444" stroke-width="4" fill="none"/>
+    <text x="15" y="30" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="16" font-weight="bold" fill="#1E293B">Assessment + Planning (10)</text>
+    <text x="15" y="60" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#64748B">Modernize, Rewrite, Cloud-Native, Security, Performance</text>
+    <text x="15" y="80" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#64748B">(Assessment + Planner pairs)</text>
+  </g>
+
+</svg>

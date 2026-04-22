@@ -1,0 +1,44 @@
+{
+  "name": "nextjs-typescript",
+  "version": "1.0.0",
+  "description": "A spec2cloud shell template for building full-stack applications with: - **Frontend**: Next.js (TypeScript, App Router) - **Backend**: Express.js (TypeScript, Node.js) - **Deployment**: Azure Container Apps via AZD - **Testing**: Playwright (e2e) + Cucumber.js (Gherkin) + Vitest (unit)",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "dev": "cd src/web && npm run dev",
+    "dev:api": "cd src/api && npm run dev",
+    "dev:docs": "mkdocs serve --dev-addr 0.0.0.0:8000",
+    "dev:all": "npx concurrently \"npm run dev:api\" \"npm run dev\" \"npm run dev:docs\"",
+    "dev:aspire": "aspire start",
+    "build": "cd src/web && npm run build",
+    "build:api": "cd src/api && npm run build",
+    "build:all": "npm run build:api && npm run build",
+    "test:e2e": "npx playwright test --config=e2e/playwright.config.ts",
+    "test:cucumber": "npx cucumber-js",
+    "test:api": "cd src/api && npm test",
+    "test:all": "npm run test:api && npm run test:cucumber && npm run test:e2e",
+    "docs:generate": "npx ts-node scripts/generate-docs.ts",
+    "docs:screenshots": "GENERATE_SCREENSHOTS=true npx cucumber-js --format progress",
+    "docs:full": "npm run docs:screenshots && npm run docs:generate",
+    "docs:serve": "npx mkdocs serve",
+    "docs:build": "npx mkdocs build"
+  },
+  "keywords": ["spec2cloud", "ai-agents", "azure", "nextjs", "express", "template"],
+  "author": "spec2cloud contributors",
+  "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/EmeaAppGbb/shell-typescript.git"
+  },
+  "type": "commonjs",
+  "devDependencies": {
+    "@cucumber/cucumber": "^12.6.0",
+    "@cucumber/gherkin": "^29.0.0",
+    "@cucumber/messages": "^26.0.0",
+    "@playwright/test": "^1.58.2",
+    "concurrently": "^9.1.0",
+    "ts-node": "^10.9.2"
+  }
+}

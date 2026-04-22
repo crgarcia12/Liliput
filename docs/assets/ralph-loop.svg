@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600" width="1000" height="600">
+  <defs>
+    <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="2" dy="2" stdDeviation="2" flood-color="#00000020"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#94A3B8"/>
+    </marker>
+  </defs>
+  <rect width="1000" height="600" fill="#F8FAFC"/>
+
+  <!-- Center Text -->
+  <text x="500" y="300" text-anchor="middle" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="24" font-weight="bold" fill="#1E293B">The Ralph Loop</text>
+  <text x="500" y="325" text-anchor="middle" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#64748B">11-step orchestration cycle</text>
+
+  <!-- Top Row -->
+  <!-- 1. Read State -->
+  <g transform="translate(30, 60)" filter="url(#shadow)">
+    <rect width="180" height="55" rx="27.5" fill="#DBEAFE" stroke="#1E40AF" stroke-width="1"/>
+    <text x="90" y="33" text-anchor="middle" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" font-weight="bold" fill="#1E40AF">1. Read State</text>
+  </g>
+  <path d="M 210 87.5 L 260 87.5" stroke="#94A3B8" stroke-width="2" marker-end="url(#arrow)" fill="none"/>
+
+  <!-- 2. Determine Task -->
+  <g transform="translate(260, 60)" filter="url(#shadow)">
+    <rect width="180" height="55" rx="27.5" fill="#F1F5F9" stroke="#64748B" stroke-width="1"/>
+    <text x="90" y="33" text-anchor="middle" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" font-weight="bold" fill="#1E293B">2. Determine Task</text>
+  </g>
+  <path d="M 440 87.5 L 490 87.5" stroke="#94A3B8" stroke-width="2" marker-end="url(#arrow)" fill="none"/>
+
+  <!-- 3. Check Skills -->
+  <g transform="translate(490, 60)" filter="url(#shadow)">
+    <rect width="180" height="55" rx="27.5" fill="#F1F5F9" stroke="#64748B" stroke-width="1"/>
+    <text x="90" y="33" text-anchor="middle" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" font-weight="bold" fill="#1E293B">3. Check Skills</text>
+  </g>
+  <path d="M 670 87.5 L 720 87.5" stroke="#94A3B8" stroke-width="2" marker-end="url(#arrow)" fill="none"/>
+
+  <!-- 4. Search Community -->
+  <g transform="translate(720, 60)" filter="url(#shadow)">
+    <rect width="180" height="55" rx="27.5" fill="#F1F5F9" stroke="#64748B" stroke-width="1"/>
+    <text x="90" y="33" text-anchor="middle" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" font-weight="bold" fill="#1E293B">4. Search Community</text>
+  </g>
+
+  <!-- Right Column -->
+  <path d="M 810 115 L 810 160" stroke="#94A3B8" stroke-width="2" marker-end="url(#arrow)" fill="none"/>
+
+  <!-- 5. Research -->
+  <g transform="translate(720, 160)" filter="url(#shadow)">
+    <rect width="180" height="55" rx="27.5" fill="#F1F5F9" stroke="#64748B" stroke-width="1"/>
+    <text x="90" y="33" text-anchor="middle" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" font-weight="bold" fill="#1E293B">5. Research</text>
+  </g>
+  <path d="M 810 215 L 810 260" stroke="#94A3B8" stroke-width="2" marker-end="url(#arrow)" fill="none"/>
+
+  <!-- 6. Execute (Bigger) -->
+  <g transform="translate(710, 260)" filter="url(#shadow)">
+    <rect width="200" height="65" rx="32.5" fill="#D1FAE5" stroke="#059669" stroke-width="2"/>
+    <text x="100" y="38" text-anchor="middle" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="16" font-weight="bold" fill="#065F46">6. Execute</text>
+  </g>
+  <path d="M 810 325 L 810 460" stroke="#94A3B8" stroke-width="2" marker-end="url(#arrow)" fill="none"/> <!-- Long path down -->
+
+  <!-- Bottom Row (Right to Left) -->
+  
+  <!-- 7. Verify -->
+  <g transform="translate(720, 460)" filter="url(#shadow)">
+    <rect width="180" height="55" rx="27.5" fill="#F1F5F9" stroke="#64748B" stroke-width="1"/>
+    <text x="90" y="33" text-anchor="middle" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" font-weight="bold" fill="#1E293B">7. Verify</text>
+  </g>
+  <path d="M 720 487.5 L 670 487.5" stroke="#94A3B8" stroke-width="2" marker-end="url(#arrow)" fill="none"/>
+
+  <!-- 8. Create Skill? -->
+  <g transform="translate(490, 460)" filter="url(#shadow)">
+    <rect width="180" height="55" rx="27.5" fill="#F1F5F9" stroke="#64748B" stroke-width="1"/>
+    <text x="90" y="33" text-anchor="middle" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" font-weight="bold" fill="#1E293B">8. Create Skill?</text>
+  </g>
+  <path d="M 490 487.5 L 440 487.5" stroke="#94A3B8" stroke-width="2" marker-end="url(#arrow)" fill="none"/>
+
+  <!-- 9. Update State -->
+  <g transform="translate(260, 460)" filter="url(#shadow)">
+    <rect width="180" height="55" rx="27.5" fill="#DBEAFE" stroke="#1E40AF" stroke-width="1"/>
+    <text x="90" y="33" text-anchor="middle" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" font-weight="bold" fill="#1E40AF">9. Update State</text>
+  </g>
+  <path d="M 260 487.5 L 120 487.5 L 120 455" stroke="#94A3B8" stroke-width="2" marker-end="url(#arrow)" fill="none"/>
+
+  <!-- Left Column (Bottom to Top) -->
+  
+  <!-- 10. Phase Done? -->
+  <g transform="translate(30, 400)" filter="url(#shadow)">
+    <rect width="180" height="55" rx="27.5" fill="#F1F5F9" stroke="#64748B" stroke-width="1"/>
+    <text x="90" y="33" text-anchor="middle" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" font-weight="bold" fill="#1E293B">10. Phase Done?</text>
+  </g>
+  <path d="M 120 400 L 120 345" stroke="#94A3B8" stroke-width="2" marker-end="url(#arrow)" fill="none"/>
+
+  <!-- 11. Human Gate (Bigger) -->
+  <g transform="translate(20, 280)" filter="url(#shadow)">
+    <rect width="200" height="65" rx="32.5" fill="#FEF3C7" stroke="#D97706" stroke-width="2"/>
+    <text x="100" y="38" text-anchor="middle" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="16" font-weight="bold" fill="#92400E">11. Human Gate</text>
+  </g>
+  <path d="M 120 280 L 120 115" stroke="#94A3B8" stroke-width="2" marker-end="url(#arrow)" fill="none"/>
+
+</svg>

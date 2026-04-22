@@ -1,0 +1,202 @@
+name: Android Release
+
+on:
+  # Manual trigger with version input
+  workflow_dispatch:
+    inputs:
+      track:
+        description: 'Play Store track to deploy to'
+        required: true
+        default: 'internal'
+        type: choice
+        options:
+          - internal
+          - beta
+          - production
+      bump_version:
+        description: 'Bump version before building'
+        required: true
+        default: true
+        type: boolean
+
+  # Auto-trigger on version tags
+  push:
+    tags:
+      - 'android-v*'
+
+jobs:
+  test:
+    name: Run tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/android
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Generate Gradle wrapper if missing
+        run: |
+          if [ ! -f gradlew ]; then
+            gradle wrapper --gradle-version 8.11.1
+          fi
+
+      - name: Run unit tests
+        run: ./gradlew testDevDebugUnitTest
+
+  build-release:
+    name: Build signed release AAB
+    runs-on: ubuntu-latest
+    needs: test
+    defaults:
+      run:
+        working-directory: src/android
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Generate Gradle wrapper if missing
+        run: |
+          if [ ! -f gradlew ]; then
+            gradle wrapper --gradle-version 8.11.1
+          fi
+
+      - name: Decode keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > release.keystore
+
+      - name: Bump version code
+        if: ${{ github.event.inputs.bump_version == 'true' || startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          FILE="version.properties"
+          CURRENT=$(grep VERSION_CODE "$FILE" | cut -d= -f2)
+          NEW=$((CURRENT + 1))
+          sed -i "s/VERSION_CODE=$CURRENT/VERSION_CODE=$NEW/" "$FILE"
+          echo "Bumped versionCode: $CURRENT → $NEW"
+
+          # Extract version from tag if available
+          if [[ "$GITHUB_REF" == refs/tags/android-v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/android-v}"
+            sed -i "s/VERSION_NAME=.*/VERSION_NAME=$VERSION/" "$FILE"
+            echo "Set versionName: $VERSION"
+          fi
+
+          cat "$FILE"
+
+      - name: Build release AAB
+        env:
+          KEYSTORE_FILE: release.keystore
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew bundleProdRelease
+
+      - name: Build release APK
+        env:
+          KEYSTORE_FILE: release.keystore
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew assembleProdRelease
+
+      - name: Upload release AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: podcraft-release-aab
+          path: src/android/app/build/outputs/bundle/prodRelease/*.aab
+          retention-days: 90
+
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: podcraft-release-apk
+          path: src/android/app/build/outputs/apk/prod/release/*.apk
+          retention-days: 90
+
+      - name: Upload version properties
+        uses: actions/upload-artifact@v4
+        with:
+          name: version-properties
+          path: src/android/version.properties
+          retention-days: 90
+
+  deploy:
+    name: Deploy to Play Store
+    runs-on: ubuntu-latest
+    needs: build-release
+    if: ${{ github.event.inputs.track != '' || startsWith(github.ref, 'refs/tags/') }}
+    environment: play-store
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download AAB
+        uses: actions/download-artifact@v4
+        with:
+          name: podcraft-release-aab
+          path: src/android/app/build/outputs/bundle/prodRelease/
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: true
+
+      - name: Install Fastlane
+        run: gem install fastlane
+
+      - name: Decode Play Store service account key
+        env:
+          PLAY_STORE_KEY_BASE64: ${{ secrets.PLAY_STORE_KEY_BASE64 }}
+        run: |
+          echo "$PLAY_STORE_KEY_BASE64" | base64 -d > src/android/play-store-key.json
+
+      - name: Deploy to Play Store
+        working-directory: src/android
+        env:
+          PLAY_STORE_KEY_PATH: play-store-key.json
+        run: |
+          TRACK="${{ github.event.inputs.track || 'internal' }}"
+          echo "Deploying to track: $TRACK"
+
+          if [ "$TRACK" = "internal" ]; then
+            fastlane deploy_internal
+          elif [ "$TRACK" = "beta" ]; then
+            fastlane promote_to_beta
+          elif [ "$TRACK" = "production" ]; then
+            fastlane promote_to_production
+          fi
+
+      - name: Clean up secrets
+        if: always()
+        run: rm -f src/android/play-store-key.json

@@ -1,0 +1,21 @@
+{
+  "name": "Node.js (TypeScript)",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:20",
+  "features": {
+    "ghcr.io/devcontainers/features/azure-cli:1": {},
+    "ghcr.io/devcontainers/features/node:1": {},
+    "ghcr.io/devcontainers-community/npm-features/typescript:1": {},
+    "ghcr.io/azure/azure-dev/azd:0": {},
+    "ghcr.io/devcontainers/features/copilot-cli:1": {},
+    "ghcr.io/devcontainers/features/python": {
+      "version": "latest"
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker": {
+      "moby": false
+    }
+  },
+
+  "postStartCommand": "copilot plugin marketplace add microsoft/github-copilot-for-azure && copilot plugin install azure@github-copilot-for-azure",
+
+  "postCreateCommand": "bash .devcontainer/post-create.sh"
+}

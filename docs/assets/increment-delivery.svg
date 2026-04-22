@@ -1,0 +1,81 @@
+<svg width="1000" height="380" viewBox="0 0 1000 380" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="2" dy="2" stdDeviation="2" flood-color="#00000020"/>
+    </filter>
+  </defs>
+
+  <rect width="1000" height="380" fill="#F8FAFC"/>
+
+  <!-- Card 1: Tests -->
+  <g filter="url(#shadow)">
+    <rect x="20" y="20" width="225" height="290" rx="12" fill="white" stroke="#F1F5F9" stroke-width="1"/>
+    <rect x="20" y="20" width="225" height="6" rx="3" fill="#EF4444"/>
+    <text x="132" y="55" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="13" fill="#64748B" text-anchor="middle">Step 1</text>
+    <text x="132" y="80" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="20" font-weight="bold" fill="#B91C1C" text-anchor="middle">TESTS</text>
+    <text x="40" y="115" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#334155">E2E Playwright specs</text>
+    <text x="40" y="140" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#334155">Gherkin scenarios</text>
+    <text x="40" y="165" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#334155">Cucumber step defs</text>
+    <text x="40" y="190" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#334155">Vitest unit stubs</text>
+    <rect x="50" y="220" width="145" height="30" rx="15" fill="#FEE2E2"/>
+    <text x="122" y="240" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="13" font-weight="bold" fill="#B91C1C" text-anchor="middle">Red baseline</text>
+  </g>
+  <!-- Gate below card 1 -->
+  <circle cx="132" cy="325" r="8" fill="#D97706"/>
+  <text x="132" y="355" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="11" fill="#92400E" text-anchor="middle">Gherkin Review</text>
+
+  <!-- Arrow 1→2 -->
+  <line x1="250" y1="165" x2="265" y2="165" stroke="#94A3B8" stroke-width="2"/>
+  <polygon points="265,160 275,165 265,170" fill="#94A3B8"/>
+
+  <!-- Card 2: Contracts -->
+  <g filter="url(#shadow)">
+    <rect x="275" y="20" width="225" height="290" rx="12" fill="white" stroke="#F1F5F9" stroke-width="1"/>
+    <rect x="275" y="20" width="225" height="6" rx="3" fill="#3B82F6"/>
+    <text x="387" y="55" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="13" fill="#64748B" text-anchor="middle">Step 2</text>
+    <text x="387" y="80" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="20" font-weight="bold" fill="#1E40AF" text-anchor="middle">CONTRACTS</text>
+    <text x="295" y="115" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#334155">OpenAPI specs</text>
+    <text x="295" y="140" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#334155">TypeScript types</text>
+    <text x="295" y="165" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#334155">Infra contracts (Bicep)</text>
+    <rect x="305" y="220" width="165" height="30" rx="15" fill="#DBEAFE"/>
+    <text x="387" y="240" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="13" font-weight="bold" fill="#1E40AF" text-anchor="middle">Enables parallel</text>
+  </g>
+
+  <!-- Arrow 2→3 -->
+  <line x1="505" y1="165" x2="520" y2="165" stroke="#94A3B8" stroke-width="2"/>
+  <polygon points="520,160 530,165 520,170" fill="#94A3B8"/>
+
+  <!-- Card 3: Implement -->
+  <g filter="url(#shadow)">
+    <rect x="530" y="20" width="225" height="290" rx="12" fill="white" stroke="#F1F5F9" stroke-width="1"/>
+    <rect x="530" y="20" width="225" height="6" rx="3" fill="#059669"/>
+    <text x="642" y="55" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="13" fill="#64748B" text-anchor="middle">Step 3</text>
+    <text x="642" y="80" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="20" font-weight="bold" fill="#059669" text-anchor="middle">IMPLEMENT</text>
+    <text x="550" y="115" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#334155">API slice (Express)</text>
+    <text x="550" y="140" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#334155">Web slice (Next.js)</text>
+    <text x="550" y="165" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#334155">Integration wiring</text>
+    <rect x="560" y="220" width="165" height="30" rx="15" fill="#D1FAE5"/>
+    <text x="642" y="240" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="13" font-weight="bold" fill="#059669" text-anchor="middle">All tests pass</text>
+  </g>
+  <!-- Gate below card 3 -->
+  <circle cx="642" cy="325" r="8" fill="#D97706"/>
+  <text x="642" y="355" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="11" fill="#92400E" text-anchor="middle">PR Review</text>
+
+  <!-- Arrow 3→4 -->
+  <line x1="760" y1="165" x2="775" y2="165" stroke="#94A3B8" stroke-width="2"/>
+  <polygon points="775,160 785,165 775,170" fill="#94A3B8"/>
+
+  <!-- Card 4: Deploy -->
+  <g filter="url(#shadow)">
+    <rect x="785" y="20" width="195" height="290" rx="12" fill="white" stroke="#F1F5F9" stroke-width="1"/>
+    <rect x="785" y="20" width="195" height="6" rx="3" fill="#D97706"/>
+    <text x="882" y="55" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="13" fill="#64748B" text-anchor="middle">Step 4</text>
+    <text x="882" y="80" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="20" font-weight="bold" fill="#D97706" text-anchor="middle">DEPLOY</text>
+    <text x="805" y="115" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#334155">azd provision</text>
+    <text x="805" y="140" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#334155">azd deploy</text>
+    <text x="805" y="165" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#334155">Smoke tests</text>
+    <text x="805" y="190" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="14" fill="#334155">Full regression</text>
+    <rect x="810" y="220" width="155" height="30" rx="15" fill="#FEF3C7"/>
+    <text x="887" y="240" font-family="-apple-system, system-ui, Segoe UI, sans-serif" font-size="13" font-weight="bold" fill="#D97706" text-anchor="middle">Live on Azure</text>
+  </g>
+</svg>

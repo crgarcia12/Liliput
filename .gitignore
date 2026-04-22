@@ -1,0 +1,55 @@
+# Dependencies
+node_modules/
+.pnp.*
+
+# Build
+.next/
+out/
+dist/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test results
+test-results/
+playwright-report/
+coverage/
+
+# AZD
+.azure/
+
+# Docs (auto-generated)
+docs/features/
+docs/design/
+docs/screenshots/
+docs/nav.yml
+site/
+
+# UI/UX prototypes (generated, not committed)
+specs/ui/prototypes/
+
+# Aspire
+.aspire/
+.agents/
+
+# Generated settings
+apphost.settings.json
+
+# Secret key files
+*.key
+*.pfx
+*.crt
+*.p12

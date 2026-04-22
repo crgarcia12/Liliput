@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install API dependencies
+        run: npm ci
+        working-directory: src/api
+
+      - name: Install web dependencies
+        run: npm ci
+        working-directory: src/web
+
+      - name: Build API
+        run: npm run build
+        working-directory: src/api
+
+      - name: Build web
+        run: npm run build
+        working-directory: src/web
+
+      - name: Run API tests
+        run: npm run test:api
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Start API
+        run: |
+          cd src/api
+          JWT_SECRET=ci-jwt-secret COOKIE_SECURE=false REGISTRATION_ENABLED=true npm run dev > ../../api.log 2>&1 &
+          echo $! > ../../api.pid
+
+      - name: Start web
+        run: |
+          cd src/web
+          NEXT_PUBLIC_API_URL=http://localhost:5001 npm run dev > ../../web.log 2>&1 &
+          echo $! > ../../web.pid
+
+      - name: Wait for services
+        run: |
+          for i in {1..60}; do
+            if curl -fsS http://localhost:5001/health > /dev/null; then
+              break
+            fi
+            sleep 2
+          done
+
+          for i in {1..60}; do
+            if curl -fsS http://localhost:3000 > /dev/null; then
+              break
+            fi
+            sleep 2
+          done
+
+          curl -fsS http://localhost:5001/health > /dev/null
+          curl -fsS http://localhost:3000 > /dev/null
+
+      - name: Run Cucumber tests
+        run: npx cucumber-js
+        env:
+          API_URL: http://localhost:5001
+          WEB_URL: http://localhost:3000
+
+      - name: Run Playwright tests
+        run: npx playwright test --config=e2e/playwright.config.ts
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+          PLAYWRIGHT_API_BASE_URL: http://localhost:5001
+
+      - name: Upload test artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ci-artifacts
+          path: |
+            playwright-report/
+            api.log
+            web.log
+          retention-days: 30
