@@ -1,21 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import request from 'supertest';
-import { createApp } from '../../src/app.js';
+import express from 'express';
+import healthRouter from '../../src/routes/health.js';
 
-describe('Health Endpoints', () => {
-  const app = createApp();
+function buildApp(): express.Express {
+  const app = express();
+  app.use(healthRouter);
+  return app;
+}
 
-  it('GET /health should return healthy status', async () => {
-    const res = await request(app).get('/health');
+describe('GET /api/health', () => {
+  it('should return status ok', async () => {
+    const res = await request(buildApp()).get('/api/health');
     expect(res.status).toBe(200);
-    expect(res.body.status).toBe('healthy');
-    expect(res.body.timestamp).toBeDefined();
-  });
-
-  it('GET /api/info should return version info', async () => {
-    const res = await request(app).get('/api/info');
-    expect(res.status).toBe(200);
-    expect(res.body.version).toBe('1.0.0');
-    expect(res.body.framework).toBe('spec2cloud');
+    expect(res.body).toEqual({ status: 'ok', service: 'liliput-api' });
   });
 });

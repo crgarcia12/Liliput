@@ -1,11 +1,10 @@
-import { type Express } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from 'express';
 
-export function mapHealthEndpoints(app: Express): void {
-  app.get('/health', (_req, res) => {
-    res.json({ status: 'healthy', timestamp: new Date().toISOString() });
-  });
+const router = Router();
 
-  app.get('/api/info', (_req, res) => {
-    res.json({ version: '1.0.0', framework: 'spec2cloud' });
-  });
-}
+router.get('/api/health', (_req: Request, res: Response) => {
+  res.json({ status: 'ok', service: 'liliput-api' });
+});
+
+export default router;

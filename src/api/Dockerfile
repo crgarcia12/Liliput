@@ -1,22 +1,24 @@
-FROM node:20-alpine AS base
+# Build context: repo root (for az acr build from .)
+FROM node:20-alpine AS deps
 WORKDIR /app
-
-FROM base AS deps
-COPY package.json package-lock.json* ./
+COPY src/api/package.json src/api/package-lock.json* ./
 RUN npm ci --omit=dev
 
-FROM base AS build
-COPY package.json package-lock.json* ./
+FROM node:20-alpine AS build
+WORKDIR /app
+COPY src/api/package.json src/api/package-lock.json* ./
 RUN npm ci
-COPY tsconfig.json ./
-COPY src/ ./src/
-RUN npm run build
+COPY src/api/tsconfig.json ./
+COPY src/api/src/ ./src/
+COPY src/shared/ /shared/
+RUN npx tsc
 
-FROM base AS runner
+FROM node:20-alpine AS runner
+WORKDIR /app
 ENV NODE_ENV=production
+ENV PORT=8080
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
-COPY package.json ./
+COPY --from=build /app/package.json ./
 EXPOSE 8080
-ENV PORT=8080
-CMD ["node", "dist/index.js"]
+CMD ["node", "dist/api/src/index.js"]

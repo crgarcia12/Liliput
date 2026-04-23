@@ -1,0 +1,189 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: liliput
+---
+# ─── NGINX Reverse Proxy Config ───
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: liliput
+data:
+  nginx.conf: |
+    events { worker_connections 1024; }
+    http {
+      upstream api { server liliput-api:80; }
+      upstream web { server liliput-web:80; }
+
+      map $http_upgrade $connection_upgrade {
+        default upgrade;
+        ''      close;
+      }
+
+      server {
+        listen 80;
+
+        # API routes
+        location /api/ {
+          proxy_pass http://api;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+        }
+
+        # Socket.io (WebSocket + polling)
+        location /socket.io/ {
+          proxy_pass http://api;
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection $connection_upgrade;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_read_timeout 86400;
+        }
+
+        # Everything else → web
+        location / {
+          proxy_pass http://web;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+        }
+      }
+    }
+---
+# ─── API Deployment ───
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: liliput-api
+  namespace: liliput
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: liliput-api
+  template:
+    metadata:
+      labels:
+        app: liliput-api
+    spec:
+      containers:
+        - name: api
+          image: crgarliliputacr.azurecr.io/liliput-api:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            - name: NODE_ENV
+              value: "production"
+          resources:
+            requests: { cpu: "250m", memory: "256Mi" }
+            limits:   { cpu: "500m", memory: "512Mi" }
+          readinessProbe:
+            httpGet: { path: /api/health, port: 8080 }
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet: { path: /api/health, port: 8080 }
+            initialDelaySeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: liliput-api
+  namespace: liliput
+spec:
+  selector: { app: liliput-api }
+  ports:
+    - port: 80
+      targetPort: 8080
+---
+# ─── Web Deployment ───
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: liliput-web
+  namespace: liliput
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: liliput-web
+  template:
+    metadata:
+      labels:
+        app: liliput-web
+    spec:
+      containers:
+        - name: web
+          image: crgarliliputacr.azurecr.io/liliput-web:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: NODE_ENV
+              value: "production"
+          resources:
+            requests: { cpu: "250m", memory: "256Mi" }
+            limits:   { cpu: "500m", memory: "512Mi" }
+          readinessProbe:
+            httpGet: { path: /, port: 3000 }
+            initialDelaySeconds: 10
+          livenessProbe:
+            httpGet: { path: /, port: 3000 }
+            initialDelaySeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: liliput-web
+  namespace: liliput
+spec:
+  selector: { app: liliput-web }
+  ports:
+    - port: 80
+      targetPort: 3000
+---
+# ─── NGINX Gateway (single entry point) ───
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: liliput-gateway
+  namespace: liliput
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: liliput-gateway
+  template:
+    metadata:
+      labels:
+        app: liliput-gateway
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1-alpine
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+          resources:
+            requests: { cpu: "100m", memory: "64Mi" }
+            limits:   { cpu: "200m", memory: "128Mi" }
+      volumes:
+        - name: config
+          configMap:
+            name: nginx-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: liliput-gateway
+  namespace: liliput
+spec:
+  type: LoadBalancer
+  selector: { app: liliput-gateway }
+  ports:
+    - port: 80
+      targetPort: 80

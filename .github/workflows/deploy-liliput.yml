@@ -1,0 +1,86 @@
+name: Deploy Liliput (AKS)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'k8s/**'
+      - '.github/workflows/deploy-liliput.yml'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RG: crgar-liliput-rg
+  AKS: crgar-liliput-aks
+  ACR: crgarliliputacr
+  ACR_LOGIN_SERVER: crgarliliputacr.azurecr.io
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build API image
+        run: |
+          az acr build \
+            --registry $ACR \
+            --image "liliput-api:${{ github.sha }}" \
+            --image "liliput-api:latest" \
+            --file src/api/Dockerfile \
+            .
+
+      - name: Build Web image
+        run: |
+          az acr build \
+            --registry $ACR \
+            --image "liliput-web:${{ github.sha }}" \
+            --image "liliput-web:latest" \
+            --file src/web/Dockerfile \
+            .
+
+      - name: Get AKS credentials
+        uses: azure/aks-set-context@v4
+        with:
+          resource-group: ${{ env.RG }}
+          cluster-name: ${{ env.AKS }}
+
+      - name: Deploy to AKS
+        run: |
+          kubectl apply -f k8s/liliput.yaml
+          kubectl -n liliput set image deployment/liliput-api \
+            api=$ACR_LOGIN_SERVER/liliput-api:${{ github.sha }}
+          kubectl -n liliput set image deployment/liliput-web \
+            web=$ACR_LOGIN_SERVER/liliput-web:${{ github.sha }}
+
+      - name: Wait for rollout
+        run: |
+          kubectl -n liliput rollout status deployment/liliput-api --timeout=5m
+          kubectl -n liliput rollout status deployment/liliput-web --timeout=5m
+          kubectl -n liliput rollout status deployment/liliput-gateway --timeout=5m
+
+      - name: Get service URL
+        run: |
+          {
+            echo "### Liliput Deployed ✅"
+            echo ""
+            for i in $(seq 1 30); do
+              EXTERNAL_IP=$(kubectl -n liliput get svc liliput-gateway -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+              [ -n "$EXTERNAL_IP" ] && break
+              echo "Waiting for LoadBalancer IP... ($i/30)" >&2
+              sleep 10
+            done
+            echo "- **Liliput URL: http://$EXTERNAL_IP**"
+            echo "- Image tag: \`${{ github.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

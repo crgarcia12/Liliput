@@ -1,6 +1,6 @@
-import { beforeEach } from 'vitest';
-import { clearUsers } from '../src/models/user-store.js';
+// Test setup — runs before each test file
+import { resetStore } from '../src/stores/task-store.js';
 
 beforeEach(() => {
-  clearUsers();
+  resetStore();
 });

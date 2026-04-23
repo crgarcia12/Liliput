@@ -1,12 +1,6 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist_Mono } from "next/font/google";
 import "./globals.css";
-import NavBar from "./components/NavBar";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
 
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
@@ -14,8 +8,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "UserAuth",
-  description: "A secure user authentication demo application.",
+  title: "Liliput — Agent Orchestrator",
+  description: "Your tiny workers, building features at scale. A Gulliver's Travels-inspired AI agent platform.",
 };
 
 export default function RootLayout({
@@ -24,26 +18,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: `
-          // Remove Next.js route announcer custom element to prevent aria-live conflicts
-          (function() {
-            function fix() {
-              var els = document.getElementsByTagName('next-route-announcer');
-              for (var i = els.length - 1; i >= 0; i--) els[i].remove();
-            }
-            setInterval(fix, 100);
-            if (typeof MutationObserver !== 'undefined') {
-              new MutationObserver(fix).observe(document.documentElement, { childList: true, subtree: true });
-            }
-          })();
-        `}} />
-      </head>
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
-        <NavBar />
+    <html lang="en" className="dark">
+      <body className={`${geistMono.variable} antialiased bg-[#0a0a0f] text-[#e0e0e8] min-h-screen font-mono`}>
         {children}
       </body>
     </html>

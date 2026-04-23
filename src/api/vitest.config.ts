@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import path from 'path';
 
 export default defineConfig({
   test: {
@@ -6,13 +7,15 @@ export default defineConfig({
     environment: 'node',
     include: ['tests/**/*.test.ts'],
     setupFiles: ['./tests/setup.ts'],
-    env: {
-      JWT_SECRET: 'test-jwt-secret-for-vitest',
-    },
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
       exclude: ['src/index.ts'],
+    },
+  },
+  resolve: {
+    alias: {
+      '@shared': path.resolve(__dirname, '../../shared'),
     },
   },
 });
