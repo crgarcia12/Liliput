@@ -58,6 +58,8 @@ jobs:
 
       - name: Deploy to AKS
         run: |
+          # Clean up stale pods/replicasets from previous failed deployments
+          kubectl delete deployments --all -n liliput --ignore-not-found 2>/dev/null || true
           kubectl apply -f k8s/liliput.yaml
           kubectl -n liliput set image deployment/liliput-api \
             api=$ACR_LOGIN_SERVER/liliput-api:${{ github.sha }}

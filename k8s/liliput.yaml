@@ -59,6 +59,8 @@ metadata:
   namespace: liliput
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: liliput-api
@@ -106,6 +108,8 @@ metadata:
   namespace: liliput
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: liliput-web
@@ -151,6 +155,8 @@ metadata:
   namespace: liliput
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: liliput-gateway
