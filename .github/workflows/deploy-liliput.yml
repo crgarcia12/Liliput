@@ -66,9 +66,24 @@ jobs:
 
       - name: Wait for rollout
         run: |
+          set +e
           kubectl -n liliput rollout status deployment/liliput-api --timeout=5m
+          API_RC=$?
           kubectl -n liliput rollout status deployment/liliput-web --timeout=5m
+          WEB_RC=$?
           kubectl -n liliput rollout status deployment/liliput-gateway --timeout=5m
+          GW_RC=$?
+          if [ $API_RC -ne 0 ] || [ $WEB_RC -ne 0 ] || [ $GW_RC -ne 0 ]; then
+            echo "::group::Diagnostics"
+            kubectl -n liliput get pods -o wide
+            kubectl -n liliput get events --sort-by='.lastTimestamp' | tail -30
+            kubectl -n liliput logs -l app=liliput-api --tail=50 2>/dev/null || true
+            kubectl -n liliput logs -l app=liliput-web --tail=50 2>/dev/null || true
+            kubectl -n liliput describe pod -l app=liliput-api 2>/dev/null | tail -40 || true
+            kubectl -n liliput describe pod -l app=liliput-web 2>/dev/null | tail -40 || true
+            echo "::endgroup::"
+            exit 1
+          fi
 
       - name: Get service URL
         run: |
