@@ -80,8 +80,8 @@ spec:
             - name: NODE_ENV
               value: "production"
           resources:
-            requests: { cpu: "50m", memory: "128Mi" }
-            limits:   { cpu: "250m", memory: "384Mi" }
+            requests: { cpu: "10m", memory: "64Mi" }
+            limits:   { cpu: "500m", memory: "384Mi" }
           readinessProbe:
             httpGet: { path: /api/health, port: 8080 }
             initialDelaySeconds: 5
@@ -127,8 +127,8 @@ spec:
             - name: NODE_ENV
               value: "production"
           resources:
-            requests: { cpu: "50m", memory: "128Mi" }
-            limits:   { cpu: "250m", memory: "384Mi" }
+            requests: { cpu: "10m", memory: "64Mi" }
+            limits:   { cpu: "500m", memory: "384Mi" }
           readinessProbe:
             httpGet: { path: /, port: 3000 }
             initialDelaySeconds: 10
@@ -175,8 +175,8 @@ spec:
               mountPath: /etc/nginx/nginx.conf
               subPath: nginx.conf
           resources:
-            requests: { cpu: "25m", memory: "32Mi" }
-            limits:   { cpu: "100m", memory: "64Mi" }
+            requests: { cpu: "10m", memory: "32Mi" }
+            limits:   { cpu: "200m", memory: "64Mi" }
       volumes:
         - name: config
           configMap:
