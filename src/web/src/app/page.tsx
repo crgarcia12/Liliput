@@ -28,6 +28,9 @@ export default function Home() {
   const [currentTask, setCurrentTask] = useState<Task | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [isWorking, setIsWorking] = useState(false);
+  const [targetRepo, setTargetRepo] = useState('');
+  const [baseBranch, setBaseBranch] = useState('main');
+  const [commitMode, setCommitMode] = useState<'pr' | 'direct'>('pr');
 
   // Merge local + socket messages
   const allMessages = useMemo(
@@ -71,7 +74,11 @@ export default function Home() {
         if (!currentTask) {
           // First message creates a task
           setIsWorking(true);
-          const task = await createTask(message, message);
+          const task = await createTask(message, message, {
+            repository: targetRepo.trim() || undefined,
+            baseBranch: baseBranch.trim() || 'main',
+            commitMode,
+          });
           setCurrentTask(task);
 
           const sysMsg: ChatMessage = {
@@ -97,7 +104,7 @@ export default function Home() {
         setIsWorking(false);
       }
     },
-    [currentTask, createTask, sendMessage]
+    [currentTask, createTask, sendMessage, targetRepo, baseBranch, commitMode]
   );
 
   const activeCount = agents.filter((a) => a.status === 'working').length;
@@ -128,6 +135,44 @@ export default function Home() {
       </header>
 
       {/* Main content */}
+      {!currentTask && (
+        <div className="px-6 py-3 border-b border-[#1a1a2e] bg-[#0d0d14] flex flex-wrap items-center gap-3 text-xs">
+          <label className="flex items-center gap-2">
+            <span className="text-gray-400">Target repo:</span>
+            <input
+              type="text"
+              value={targetRepo}
+              onChange={(e) => setTargetRepo(e.target.value)}
+              placeholder="owner/repo (e.g. crgarcia12/Liliput)"
+              className="bg-[#050510] border border-[#1a1a2e] rounded px-2 py-1 w-72 text-gray-200 focus:outline-none focus:border-cyan-500"
+            />
+          </label>
+          <label className="flex items-center gap-2">
+            <span className="text-gray-400">Base:</span>
+            <input
+              type="text"
+              value={baseBranch}
+              onChange={(e) => setBaseBranch(e.target.value)}
+              className="bg-[#050510] border border-[#1a1a2e] rounded px-2 py-1 w-24 text-gray-200 focus:outline-none focus:border-cyan-500"
+            />
+          </label>
+          <label className="flex items-center gap-2">
+            <span className="text-gray-400">Commit mode:</span>
+            <select
+              value={commitMode}
+              onChange={(e) => setCommitMode(e.target.value as 'pr' | 'direct')}
+              className="bg-[#050510] border border-[#1a1a2e] rounded px-2 py-1 text-gray-200 focus:outline-none focus:border-cyan-500"
+            >
+              <option value="pr">Pull request</option>
+              <option value="direct">Direct (auto-merge)</option>
+            </select>
+          </label>
+          <span className="text-gray-600 ml-auto">
+            Leave repo empty to use the default ({process.env.NEXT_PUBLIC_DEFAULT_REPO || 'configured server-side'})
+          </span>
+        </div>
+      )}
+
       <main className="flex-1 flex overflow-hidden">
         {/* Left: Terminal (60%) */}
         <div className="w-[60%] p-3">

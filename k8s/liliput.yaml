@@ -16,6 +16,47 @@ metadata:
   labels:
     azure.workload.identity/use: "true"
 ---
+# ─── ClusterRole granting the agent perms to manage dev environments ───
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: liliput-agent
+rules:
+  # Manage namespaces (create per-task dev envs, tear them down)
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  # Manage workloads in any namespace
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services", "configmaps", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log", "pods/exec"]
+    verbs: ["get", "create"]
+  # Read events for diagnostics
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: liliput-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: liliput-agent
+subjects:
+  - kind: ServiceAccount
+    name: liliput-agent
+    namespace: liliput
+---
 # ─── NGINX Reverse Proxy Config ───
 apiVersion: v1
 kind: ConfigMap
@@ -54,6 +95,9 @@ data:
           proxy_set_header X-Real-IP $remote_addr;
           proxy_read_timeout 86400;
         }
+
+        # === LILIPUT-DEV-ENVS-BEGIN ===
+        # === LILIPUT-DEV-ENVS-END ===
 
         # Everything else → web
         location / {

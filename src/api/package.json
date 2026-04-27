@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@github/copilot-sdk": "^0.3.0",
+    "@kubernetes/client-node": "^1.4.0",
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "pino": "^9.7.0",

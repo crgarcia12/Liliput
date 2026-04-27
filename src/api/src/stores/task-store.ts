@@ -9,13 +9,20 @@ function now(): string {
 
 // ─── Tasks ───────────────────────────────────────────────────
 
-export function createTask(title: string, description: string, repository?: string): Task {
+export function createTask(
+  title: string,
+  description: string,
+  repository?: string,
+  options: { baseBranch?: string; commitMode?: import('../../../shared/types/index.js').CommitMode } = {},
+): Task {
   const task: Task = {
     id: uuid(),
     title,
     description,
     status: 'clarifying',
     repository,
+    baseBranch: options.baseBranch ?? 'main',
+    commitMode: options.commitMode ?? 'pr',
     agents: [],
     chatHistory: [],
     createdAt: now(),
@@ -33,7 +40,26 @@ export function getTasks(): Task[] {
   return Array.from(tasks.values());
 }
 
-export function updateTask(id: string, updates: Partial<Pick<Task, 'status' | 'spec' | 'repository' | 'branch' | 'pullRequestUrl'>>): Task | undefined {
+export function updateTask(
+  id: string,
+  updates: Partial<
+    Pick<
+      Task,
+      | 'status'
+      | 'spec'
+      | 'repository'
+      | 'baseBranch'
+      | 'branch'
+      | 'commitMode'
+      | 'pullRequestUrl'
+      | 'commitSha'
+      | 'imageRef'
+      | 'devNamespace'
+      | 'devUrl'
+      | 'errorMessage'
+    >
+  >,
+): Task | undefined {
   const task = tasks.get(id);
   if (!task) return undefined;
   Object.assign(task, updates, { updatedAt: now() });

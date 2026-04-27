@@ -2,7 +2,18 @@
 
 // ─── Task (Feature Request) ───────────────────────────────────
 
-export type TaskStatus = 'clarifying' | 'specifying' | 'building' | 'deploying' | 'completed' | 'failed';
+export type TaskStatus =
+  | 'clarifying'
+  | 'specifying'
+  | 'building'
+  | 'deploying'
+  | 'review'        // Built + deployed to dev env, awaiting user ship/discard
+  | 'shipping'      // PR being opened or direct push in flight
+  | 'completed'
+  | 'discarded'
+  | 'failed';
+
+export type CommitMode = 'pr' | 'direct';
 
 export interface Task {
   id: string;
@@ -10,9 +21,16 @@ export interface Task {
   description: string;
   status: TaskStatus;
   spec?: string;              // Generated specification markdown
-  repository?: string;        // GitHub repo URL
-  branch?: string;            // Working branch
-  pullRequestUrl?: string;    // Created PR URL
+  repository?: string;        // Target GitHub repo (e.g. "owner/repo") — what the agent edits
+  baseBranch?: string;        // Branch to fork from (default "main")
+  branch?: string;            // Working branch the agent commits to
+  commitMode?: CommitMode;    // 'pr' (default) or 'direct'
+  pullRequestUrl?: string;    // Created PR URL (commitMode='pr') or direct commit URL
+  commitSha?: string;         // SHA of the agent's last commit
+  imageRef?: string;          // ACR image reference built for the dev env
+  devNamespace?: string;      // K8s namespace hosting the dev env
+  devUrl?: string;            // Public URL where the dev env is reachable
+  errorMessage?: string;      // Populated when status='failed'
   agents: Agent[];
   chatHistory: ChatMessage[];
   createdAt: string;
@@ -94,6 +112,13 @@ export interface CreateTaskRequest {
   title: string;
   description: string;
   repository?: string;
+  baseBranch?: string;
+  commitMode?: CommitMode;
+}
+
+export interface ShipTaskRequest {
+  /** Optional override — defaults to the task's commitMode. */
+  commitMode?: CommitMode;
 }
 
 export interface ChatRequest {

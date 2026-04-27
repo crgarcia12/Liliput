@@ -23,12 +23,13 @@ export default function TaskPage() {
   const taskId = params.id as string;
 
   const { connected, agentEvents, chatMessages: socketMessages, joinTask, leaveTask } = useSocket();
-  const { getTask, sendMessage } = useTasks();
+  const { getTask, sendMessage, shipTask, discardTask } = useTasks();
 
   const [task, setTask] = useState<Task | null>(null);
   const [localMessages, setLocalMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [actionPending, setActionPending] = useState<'ship' | 'discard' | null>(null);
 
   // Load task data
   useEffect(() => {
@@ -59,6 +60,27 @@ export default function TaskPage() {
       return () => leaveTask(taskId);
     }
   }, [connected, taskId, joinTask, leaveTask]);
+
+  // Refresh task whenever a status event arrives
+  useEffect(() => {
+    if (!taskId) return;
+    const handler = (e: MessageEvent) => {
+      if (e.data === `task-status:${taskId}`) {
+        getTask(taskId).then(setTask).catch(() => {});
+      }
+    };
+    window.addEventListener('message', handler);
+    // Poll every 5s while task is in an active build state (cheap fallback for live updates)
+    const interval = setInterval(() => {
+      if (task && ['building', 'deploying', 'review', 'shipping'].includes(task.status)) {
+        getTask(taskId).then(setTask).catch(() => {});
+      }
+    }, 5000);
+    return () => {
+      window.removeEventListener('message', handler);
+      clearInterval(interval);
+    };
+  }, [taskId, task, getTask]);
 
   const allMessages = useMemo(
     () => [...localMessages, ...socketMessages],
@@ -153,10 +175,74 @@ export default function TaskPage() {
               {task.status}
             </span>
           )}
+          {task?.devUrl && (
+            <a
+              href={task.devUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs px-2 py-0.5 rounded bg-cyan-900/30 border border-cyan-700/50 text-cyan-300 hover:bg-cyan-900/50"
+              title="Open the live dev environment"
+            >
+              🌐 Open dev preview
+            </a>
+          )}
+          {task?.pullRequestUrl && (
+            <a
+              href={task.pullRequestUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs px-2 py-0.5 rounded bg-purple-900/30 border border-purple-700/50 text-purple-300 hover:bg-purple-900/50"
+            >
+              🔀 PR
+            </a>
+          )}
         </div>
-        <span className={`text-xs ${connected ? 'text-green-400' : 'text-red-400'}`}>
-          {connected ? '● Connected' : '○ Disconnected'}
-        </span>
+        <div className="flex items-center gap-3">
+          {task?.status === 'review' && (
+            <>
+              <button
+                onClick={async () => {
+                  if (!task) return;
+                  setActionPending('ship');
+                  try {
+                    const updated = await shipTask(task.id);
+                    setTask(updated);
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : 'Ship failed');
+                  } finally {
+                    setActionPending(null);
+                  }
+                }}
+                disabled={actionPending !== null}
+                className="text-xs px-3 py-1 rounded bg-green-700 hover:bg-green-600 text-white disabled:opacity-50"
+              >
+                {actionPending === 'ship' ? 'Shipping…' : `🚀 Ship (${task.commitMode === 'direct' ? 'merge' : 'PR'})`}
+              </button>
+              <button
+                onClick={async () => {
+                  if (!task) return;
+                  if (!confirm('Discard this task? Dev environment + branch will be deleted.')) return;
+                  setActionPending('discard');
+                  try {
+                    const updated = await discardTask(task.id);
+                    setTask(updated);
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : 'Discard failed');
+                  } finally {
+                    setActionPending(null);
+                  }
+                }}
+                disabled={actionPending !== null}
+                className="text-xs px-3 py-1 rounded bg-red-800 hover:bg-red-700 text-white disabled:opacity-50"
+              >
+                {actionPending === 'discard' ? 'Discarding…' : '🗑️ Discard'}
+              </button>
+            </>
+          )}
+          <span className={`text-xs ${connected ? 'text-green-400' : 'text-red-400'}`}>
+            {connected ? '● Connected' : '○ Disconnected'}
+          </span>
+        </div>
       </header>
 
       {/* Main content */}

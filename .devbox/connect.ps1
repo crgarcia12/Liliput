@@ -4,7 +4,7 @@
 [CmdletBinding()]
 param(
     [string]$NamePrefix = 'crgar-liliput',
-    [string]$Session    = 'agent'
+    [string]$Session    = 'gulliver'
 )
 
 $ErrorActionPreference = 'Stop'

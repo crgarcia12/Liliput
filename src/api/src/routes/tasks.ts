@@ -4,7 +4,7 @@ import type { Server as SocketServer } from 'socket.io';
 import type { CreateTaskRequest, ChatRequest } from '../../../shared/types/index.js';
 import * as store from '../stores/task-store.js';
 import { generateSpec as defaultGenerateSpec, type SpecGenerator } from '../engine/spec-generator.js';
-import { startBuild } from '../engine/agent-engine.js';
+import { startBuild, shipTask, discardTask } from '../engine/agent-engine.js';
 import { logger } from '../logger.js';
 
 export function createTasksRouter(
@@ -16,13 +16,17 @@ export function createTasksRouter(
   // POST /api/tasks — create a new task
   router.post('/api/tasks', (req: Request, res: Response) => {
     try {
-      const { title, description, repository } = req.body as CreateTaskRequest;
+      const { title, description, repository, baseBranch, commitMode } =
+        req.body as CreateTaskRequest;
       if (!title || !description) {
         res.status(400).json({ error: 'title and description are required' });
         return;
       }
 
-      const task = store.createTask(title, description, repository);
+      const task = store.createTask(title, description, repository, {
+        baseBranch,
+        commitMode,
+      });
 
       // Add system welcome message
       store.addChatMessage(
@@ -196,6 +200,32 @@ export function createTasksRouter(
       const message = err instanceof Error ? err.message : String(err);
       logger.error({ err: message }, 'Failed to delete task');
       res.status(500).json({ error: 'Failed to delete task', details: message });
+    }
+  });
+
+  // POST /api/tasks/:id/ship — open PR (or auto-merge for direct mode)
+  router.post('/api/tasks/:id/ship', async (req: Request, res: Response) => {
+    try {
+      const taskId = req.params['id'] as string;
+      const updated = await shipTask(io, taskId);
+      res.json({ task: updated });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error({ err: message }, 'Failed to ship task');
+      res.status(500).json({ error: 'Failed to ship task', details: message });
+    }
+  });
+
+  // POST /api/tasks/:id/discard — tear down dev env + delete branch
+  router.post('/api/tasks/:id/discard', async (req: Request, res: Response) => {
+    try {
+      const taskId = req.params['id'] as string;
+      const updated = await discardTask(io, taskId);
+      res.json({ task: updated });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error({ err: message }, 'Failed to discard task');
+      res.status(500).json({ error: 'Failed to discard task', details: message });
     }
   });
 

@@ -3,20 +3,28 @@
 import { useCallback } from 'react';
 import type {
   Task,
+  CommitMode,
   CreateTaskRequest,
   TaskListResponse,
   TaskDetailResponse,
 } from '@shared/types';
 
-// Use relative URLs — requests go through Next.js rewrites to the API service
 const API_URL = '';
 
+interface CreateTaskOptions {
+  repository?: string;
+  baseBranch?: string;
+  commitMode?: CommitMode;
+}
+
 interface UseTasksReturn {
-  createTask: (title: string, description: string) => Promise<Task>;
+  createTask: (title: string, description: string, options?: CreateTaskOptions) => Promise<Task>;
   getTasks: () => Promise<Task[]>;
   getTask: (id: string) => Promise<Task>;
   sendMessage: (taskId: string, message: string) => Promise<void>;
   approveSpec: (taskId: string) => Promise<void>;
+  shipTask: (taskId: string) => Promise<Task>;
+  discardTask: (taskId: string) => Promise<Task>;
 }
 
 async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {
@@ -32,14 +40,23 @@ async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export function useTasks(): UseTasksReturn {
-  const createTask = useCallback(async (title: string, description: string): Promise<Task> => {
-    const body: CreateTaskRequest = { title, description };
-    const data = await apiRequest<TaskDetailResponse>('/api/tasks', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
-    return data.task;
-  }, []);
+  const createTask = useCallback(
+    async (title: string, description: string, options?: CreateTaskOptions): Promise<Task> => {
+      const body: CreateTaskRequest = {
+        title,
+        description,
+        repository: options?.repository,
+        baseBranch: options?.baseBranch,
+        commitMode: options?.commitMode,
+      };
+      const data = await apiRequest<TaskDetailResponse>('/api/tasks', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      return data.task;
+    },
+    [],
+  );
 
   const getTasks = useCallback(async (): Promise<Task[]> => {
     const data = await apiRequest<TaskListResponse>('/api/tasks');
@@ -64,5 +81,20 @@ export function useTasks(): UseTasksReturn {
     });
   }, []);
 
-  return { createTask, getTasks, getTask, sendMessage, approveSpec };
+  const shipTask = useCallback(async (taskId: string): Promise<Task> => {
+    const data = await apiRequest<TaskDetailResponse>(`/api/tasks/${taskId}/ship`, {
+      method: 'POST',
+    });
+    return data.task;
+  }, []);
+
+  const discardTask = useCallback(async (taskId: string): Promise<Task> => {
+    const data = await apiRequest<TaskDetailResponse>(`/api/tasks/${taskId}/discard`, {
+      method: 'POST',
+    });
+    return data.task;
+  }, []);
+
+  return { createTask, getTasks, getTask, sendMessage, approveSpec, shipTask, discardTask };
 }
+
