@@ -5,8 +5,15 @@ import { Server as SocketServer } from 'socket.io';
 import http from 'node:http';
 import { createTasksRouter } from '../../src/routes/tasks.js';
 import { resetStore } from '../../src/stores/task-store.js';
+import type { SpecGenerator } from '../../src/engine/spec-generator.js';
 
-function buildApp(): { app: express.Express; io: SocketServer } {
+const FAKE_SPEC = '# Specification: T\n\n## Overview\nMocked spec.';
+
+function buildApp(opts: { specGenerator?: SpecGenerator } = {}): {
+  app: express.Express;
+  io: SocketServer;
+  generator: SpecGenerator;
+} {
   const server = http.createServer();
   const io = new SocketServer(server);
 
@@ -14,10 +21,20 @@ function buildApp(): { app: express.Express; io: SocketServer } {
   const emitStub = vi.fn();
   vi.spyOn(io, 'to').mockReturnValue({ emit: emitStub } as never);
 
+  // Default mock generator: resolves immediately with a static spec.
+  const generator: SpecGenerator = opts.specGenerator ?? vi.fn(async () => FAKE_SPEC);
+
   const app = express();
   app.use(express.json());
-  app.use(createTasksRouter(io));
-  return { app, io };
+  app.use(createTasksRouter(io, generator));
+  return { app, io, generator };
+}
+
+/** Wait for the async spec generator to settle (queued microtasks). */
+async function flushAsync(): Promise<void> {
+  // Two macrotask hops cover: HTTP response → background promise → store update.
+  await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
 }
 
 beforeEach(() => {
@@ -83,7 +100,7 @@ describe('GET /api/tasks/:id', () => {
 });
 
 describe('POST /api/tasks/:id/chat', () => {
-  it('should send a chat message and transition to specifying', async () => {
+  it('should transition to specifying immediately and produce spec asynchronously', async () => {
     const { app } = buildApp();
     const createRes = await request(app)
       .post('/api/tasks')
@@ -96,7 +113,46 @@ describe('POST /api/tasks/:id/chat', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.task.status).toBe('specifying');
-    expect(res.body.task.spec).toBeDefined();
+    // Spec is generated asynchronously — not yet present in the HTTP response.
+    expect(res.body.task.spec).toBeUndefined();
+
+    // After awaiting, the mock generator has resolved and the store holds the spec.
+    await flushAsync();
+    const detailRes = await request(app).get(`/api/tasks/${id}`);
+    expect(detailRes.body.task.spec).toBe(FAKE_SPEC);
+  });
+
+  it('should call the injected generator with task title + chat context', async () => {
+    const generator = vi.fn(async () => FAKE_SPEC);
+    const { app } = buildApp({ specGenerator: generator });
+    const createRes = await request(app)
+      .post('/api/tasks')
+      .send({ title: 'My Title', description: 'Original' });
+
+    const id = createRes.body.task.id;
+    await request(app).post(`/api/tasks/${id}/chat`).send({ message: 'Extra' });
+
+    await flushAsync();
+    expect(generator).toHaveBeenCalledTimes(1);
+    expect(generator).toHaveBeenCalledWith('My Title', expect.stringContaining('Extra'));
+  });
+
+  it('should report a system error message when spec generation rejects', async () => {
+    const generator = vi.fn(async () => {
+      throw new Error('boom');
+    });
+    const { app } = buildApp({ specGenerator: generator });
+    const createRes = await request(app)
+      .post('/api/tasks')
+      .send({ title: 'T', description: 'D' });
+
+    const id = createRes.body.task.id;
+    await request(app).post(`/api/tasks/${id}/chat`).send({ message: 'm' });
+
+    await flushAsync();
+    const detailRes = await request(app).get(`/api/tasks/${id}`);
+    const lastMsg = detailRes.body.task.chatHistory.at(-1);
+    expect(lastMsg.message).toMatch(/Spec generation failed/);
   });
 
   it('should return 400 when message is missing', async () => {
@@ -123,10 +179,11 @@ describe('POST /api/tasks/:id/approve-spec', () => {
 
     const id = createRes.body.task.id;
 
-    // Move to specifying first
+    // Move to specifying first; wait for the async spec to land.
     await request(app)
       .post(`/api/tasks/${id}/chat`)
       .send({ message: 'Details' });
+    await flushAsync();
 
     const res = await request(app).post(`/api/tasks/${id}/approve-spec`);
     expect(res.status).toBe(200);

@@ -3,11 +3,14 @@ import type { Request, Response } from 'express';
 import type { Server as SocketServer } from 'socket.io';
 import type { CreateTaskRequest, ChatRequest } from '../../../shared/types/index.js';
 import * as store from '../stores/task-store.js';
-import { generateSpec } from '../engine/spec-generator.js';
+import { generateSpec as defaultGenerateSpec, type SpecGenerator } from '../engine/spec-generator.js';
 import { startBuild } from '../engine/agent-engine.js';
 import { logger } from '../logger.js';
 
-export function createTasksRouter(io: SocketServer): Router {
+export function createTasksRouter(
+  io: SocketServer,
+  specGenerator: SpecGenerator = defaultGenerateSpec,
+): Router {
   const router = Router();
 
   // POST /api/tasks — create a new task
@@ -89,16 +92,37 @@ export function createTasksRouter(io: SocketServer): Router {
         store.updateTask(task.id, { status: 'specifying' });
         io.to(`task:${task.id}`).emit('task:status', { taskId: task.id, status: 'specifying' });
 
-        const spec = generateSpec(task.title, `${task.description}\n\nAdditional context: ${message}`);
-        store.updateTask(task.id, { spec });
-        io.to(`task:${task.id}`).emit('task:spec', { taskId: task.id, spec });
-
-        const sysMsg = store.addChatMessage(
+        const ackMsg = store.addChatMessage(
           task.id,
           'liliput',
-          'I\'ve drafted a specification based on your requirements. Please review and approve it to start building!',
+          'Drafting a specification with the LLM — this can take a moment…',
         );
-        io.to(`task:${task.id}`).emit('chat:message', sysMsg);
+        io.to(`task:${task.id}`).emit('chat:message', ackMsg);
+
+        // Generate spec asynchronously; HTTP response returns immediately.
+        // The spec arrives over WebSocket via `task:spec` when ready.
+        void specGenerator(task.title, `${task.description}\n\nAdditional context: ${message}`)
+          .then((spec) => {
+            store.updateTask(task.id, { spec });
+            io.to(`task:${task.id}`).emit('task:spec', { taskId: task.id, spec });
+
+            const sysMsg = store.addChatMessage(
+              task.id,
+              'liliput',
+              'I\'ve drafted a specification based on your requirements. Please review and approve it to start building!',
+            );
+            io.to(`task:${task.id}`).emit('chat:message', sysMsg);
+          })
+          .catch((specErr: unknown) => {
+            const errMessage = specErr instanceof Error ? specErr.message : String(specErr);
+            logger.error({ taskId: task.id, err: errMessage }, 'Spec generation failed');
+            const sysMsg = store.addChatMessage(
+              task.id,
+              'system',
+              `Spec generation failed: ${errMessage}`,
+            );
+            io.to(`task:${task.id}`).emit('chat:message', sysMsg);
+          });
       } else {
         const sysMsg = store.addChatMessage(
           task.id,

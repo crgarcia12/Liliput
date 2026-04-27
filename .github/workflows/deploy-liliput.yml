@@ -56,6 +56,24 @@ jobs:
           resource-group: ${{ env.RG }}
           cluster-name: ${{ env.AKS }}
 
+      - name: Sync Copilot GitHub token secret
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: |
+          # Ensure the namespace exists before applying the manifest below
+          kubectl create namespace liliput --dry-run=client -o yaml | kubectl apply -f -
+
+          if [ -z "$COPILOT_GITHUB_TOKEN" ]; then
+            echo "::warning::COPILOT_GITHUB_TOKEN secret is not set. The API will start without LLM access; the UI will show an auth banner."
+            kubectl -n liliput create secret generic liliput-secrets \
+              --from-literal=COPILOT_GITHUB_TOKEN="" \
+              --dry-run=client -o yaml | kubectl apply -f -
+          else
+            kubectl -n liliput create secret generic liliput-secrets \
+              --from-literal=COPILOT_GITHUB_TOKEN="$COPILOT_GITHUB_TOKEN" \
+              --dry-run=client -o yaml | kubectl apply -f -
+          fi
+
       - name: Deploy to AKS
         run: |
           # Clean up stale pods/replicasets from previous failed deployments
@@ -65,6 +83,8 @@ jobs:
             api=$ACR_LOGIN_SERVER/liliput-api:${{ github.sha }}
           kubectl -n liliput set image deployment/liliput-web \
             web=$ACR_LOGIN_SERVER/liliput-web:${{ github.sha }}
+          # Pick up secret changes even when the image SHA didn't change
+          kubectl -n liliput rollout restart deployment/liliput-api
 
       - name: Wait for rollout
         run: |

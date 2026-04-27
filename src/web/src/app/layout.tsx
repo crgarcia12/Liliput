@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { AuthStatusBanner } from "../components/AuthStatusBanner";
 
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
@@ -20,6 +21,7 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <body className={`${geistMono.variable} antialiased bg-[#0a0a0f] text-[#e0e0e8] min-h-screen font-mono`}>
+        <AuthStatusBanner />
         {children}
       </body>
     </html>

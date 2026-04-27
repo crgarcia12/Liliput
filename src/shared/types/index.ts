@@ -107,3 +107,23 @@ export interface TaskListResponse {
 export interface TaskDetailResponse {
   task: Task;
 }
+
+// ─── Auth Status (Copilot SDK health) ─────────────────────────
+
+export type AuthErrorKind =
+  | 'missing_token'
+  | 'unauthorized'
+  | 'forbidden'
+  | 'quota'
+  | 'network'
+  | 'timeout'
+  | 'unknown';
+
+export interface AuthStatus {
+  /** true = healthy; false = failing; null = not yet probed. */
+  ok: boolean | null;
+  lastCheckedAt: string | null;
+  errorKind?: AuthErrorKind;
+  message?: string;
+  hasToken: boolean;
+}

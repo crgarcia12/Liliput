@@ -1,0 +1,108 @@
+name: Rotate Copilot Token
+
+# Manual rotation workflow.
+#
+# Procedure:
+#   1. Generate a new Personal Access Token from a GitHub user with an active
+#      Copilot subscription. Required scopes: `read:user` (the SDK uses the
+#      token directly against the Copilot API).
+#   2. Update the `COPILOT_GITHUB_TOKEN` secret in this repo
+#      (Settings → Secrets and variables → Actions).
+#   3. Run this workflow (Actions → Rotate Copilot Token → Run workflow).
+#
+# What it does:
+#   * Validates the new token against api.github.com/user — fails fast if invalid.
+#   * Refreshes the `liliput-secrets` k8s secret in the `liliput` namespace.
+#   * Restarts the API deployment so pods pick up the new token.
+#   * Calls `/api/auth/check` against the live service to confirm health.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RG: crgar-liliput-rg
+  AKS: crgar-liliput-aks
+
+jobs:
+  rotate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate token against GitHub API
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: |
+          if [ -z "$COPILOT_GITHUB_TOKEN" ]; then
+            echo "::error::COPILOT_GITHUB_TOKEN secret is empty. Set it before running this workflow."
+            exit 1
+          fi
+          HTTP_CODE=$(curl -sS -o /tmp/user.json -w "%{http_code}" \
+            -H "Authorization: Bearer $COPILOT_GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/user)
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Token validation failed (HTTP $HTTP_CODE). The token is invalid or expired."
+            cat /tmp/user.json
+            exit 1
+          fi
+          LOGIN=$(jq -r .login /tmp/user.json)
+          echo "Token belongs to GitHub user: $LOGIN"
+          echo "user=$LOGIN" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get AKS credentials
+        uses: azure/aks-set-context@v4
+        with:
+          resource-group: ${{ env.RG }}
+          cluster-name: ${{ env.AKS }}
+
+      - name: Refresh k8s secret
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: |
+          kubectl create namespace liliput --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n liliput create secret generic liliput-secrets \
+            --from-literal=COPILOT_GITHUB_TOKEN="$COPILOT_GITHUB_TOKEN" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Restart API to pick up new token
+        run: |
+          kubectl -n liliput rollout restart deployment/liliput-api
+          kubectl -n liliput rollout status deployment/liliput-api --timeout=3m
+
+      - name: Verify token works against running service
+        run: |
+          # Resolve the gateway external IP
+          for i in $(seq 1 18); do
+            EXTERNAL_IP=$(kubectl -n liliput get svc liliput-gateway \
+              -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+            [ -n "$EXTERNAL_IP" ] && break
+            echo "Waiting for gateway IP... ($i/18)"
+            sleep 10
+          done
+          if [ -z "$EXTERNAL_IP" ]; then
+            echo "::warning::No external IP yet — skipping live verification."
+            exit 0
+          fi
+          echo "Verifying via http://$EXTERNAL_IP/api/auth/check"
+          # Give the new pod a moment to fully come up
+          sleep 15
+          BODY=$(curl -sS -X POST "http://$EXTERNAL_IP/api/auth/check" || echo '{}')
+          echo "$BODY"
+          OK=$(echo "$BODY" | jq -r '.ok // empty')
+          if [ "$OK" != "true" ]; then
+            ERR_KIND=$(echo "$BODY" | jq -r '.errorKind // "unknown"')
+            MSG=$(echo "$BODY" | jq -r '.message // ""')
+            echo "::error::Auth check did not return ok=true (kind=$ERR_KIND, message=$MSG)"
+            exit 1
+          fi
+          echo "✅ Token rotation verified" >> "$GITHUB_STEP_SUMMARY"
