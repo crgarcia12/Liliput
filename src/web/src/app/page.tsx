@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import Terminal from '../components/Terminal';
 import AgentPanel from '../components/AgentPanel';
@@ -21,6 +22,7 @@ const LiliputIsland = dynamic(() => import('../components/LiliputIsland'), {
 });
 
 export default function Home() {
+  const router = useRouter();
   const { connected, agentEvents, chatMessages: socketMessages } = useSocket();
   const { createTask, sendMessage } = useTasks();
 
@@ -72,7 +74,8 @@ export default function Home() {
 
       try {
         if (!currentTask) {
-          // First message creates a task
+          // First message creates a task — then we redirect to /task/<id>
+          // so the user lands on the live activity / spec / chat view.
           setIsWorking(true);
           const task = await createTask(message, message, {
             repository: targetRepo.trim() || undefined,
@@ -81,17 +84,18 @@ export default function Home() {
           });
           setCurrentTask(task);
 
-          const sysMsg: ChatMessage = {
-            id: `sys-${Date.now()}`,
-            taskId: task.id,
-            role: 'liliput',
-            content: `📋 Task created: "${task.title}"\n🏗️  Summoning the Liliputians...`,
-            timestamp: new Date().toISOString(),
-          };
-          setLocalMessages((prev) => [...prev, sysMsg]);
-        } else {
-          await sendMessage(currentTask.id, message);
+          // Send the same message as a chat so the spec generator kicks off
+          try {
+            await sendMessage(task.id, message);
+          } catch {
+            /* surface on task page */
+          }
+
+          router.push(`/task/${task.id}`);
+          return;
         }
+
+        await sendMessage(currentTask.id, message);
       } catch {
         const errMsg: ChatMessage = {
           id: `err-${Date.now()}`,
@@ -104,7 +108,7 @@ export default function Home() {
         setIsWorking(false);
       }
     },
-    [currentTask, createTask, sendMessage, targetRepo, baseBranch, commitMode]
+    [currentTask, createTask, sendMessage, targetRepo, baseBranch, commitMode, router]
   );
 
   const activeCount = agents.filter((a) => a.status === 'working').length;
