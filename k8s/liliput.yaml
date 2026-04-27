@@ -2,6 +2,19 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: liliput
+  labels:
+    azure.workload.identity/use: "true"
+---
+# ─── ServiceAccount for the agent (federated to UAMI for ACR push) ───
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: liliput-agent
+  namespace: liliput
+  annotations:
+    azure.workload.identity/client-id: "f14665ae-86f5-41c2-95ba-96e817132222"
+  labels:
+    azure.workload.identity/use: "true"
 ---
 # ─── NGINX Reverse Proxy Config ───
 apiVersion: v1
@@ -68,7 +81,9 @@ spec:
     metadata:
       labels:
         app: liliput-api
+        azure.workload.identity/use: "true"
     spec:
+      serviceAccountName: liliput-agent
       containers:
         - name: api
           image: crgarliliputacr.azurecr.io/liliput-api:latest
@@ -79,24 +94,44 @@ spec:
               value: "8080"
             - name: NODE_ENV
               value: "production"
+            # Azure context for `az acr build`
+            - name: AZURE_TENANT_ID
+              value: "f75dc6d8-f0ea-4a54-9d3c-622e4aef8eb3"
+            - name: AZURE_SUBSCRIPTION_ID
+              value: "ac866176-3fcf-43c6-817a-6309be256398"
+            - name: AZURE_CLIENT_ID
+              value: "f14665ae-86f5-41c2-95ba-96e817132222"
+            - name: ACR_NAME
+              value: "crgarliliputacr"
+            - name: AGENT_WORKSPACE_ROOT
+              value: "/workspaces"
             # GitHub Copilot SDK auth — token rotated via GitHub Actions.
-            # If the secret is missing, the deployment still starts but
-            # /api/auth/status will report `missing_token` and the UI banner appears.
+            # Same token is used for git clone/push and PR creation.
             - name: COPILOT_GITHUB_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: liliput-secrets
                   key: COPILOT_GITHUB_TOKEN
                   optional: true
+          volumeMounts:
+            - name: workspaces
+              mountPath: /workspaces
+            - name: az-cache
+              mountPath: /home/node/.azure
           resources:
-            requests: { cpu: "10m", memory: "64Mi" }
-            limits:   { cpu: "500m", memory: "384Mi" }
+            requests: { cpu: "10m", memory: "128Mi" }
+            limits:   { cpu: "1000m", memory: "1Gi" }
           readinessProbe:
             httpGet: { path: /api/health, port: 8080 }
             initialDelaySeconds: 5
           livenessProbe:
             httpGet: { path: /api/health, port: 8080 }
             initialDelaySeconds: 10
+      volumes:
+        - name: workspaces
+          emptyDir: {}
+        - name: az-cache
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

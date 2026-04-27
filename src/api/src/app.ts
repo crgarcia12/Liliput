@@ -4,6 +4,7 @@ import type { Server as SocketServer } from 'socket.io';
 import healthRouter from './routes/health.js';
 import { createTasksRouter } from './routes/tasks.js';
 import { createAuthRouter } from './routes/auth.js';
+import { createAgentRouter } from './routes/agent.js';
 import type { SpecGenerator } from './engine/spec-generator.js';
 
 export interface AppOptions {
@@ -21,6 +22,7 @@ export function createApp(io: SocketServer, options: AppOptions = {}): express.E
   // Routes
   app.use(healthRouter);
   app.use(createAuthRouter(io));
+  app.use('/api/agent', createAgentRouter());
   app.use(createTasksRouter(io, options.specGenerator));
 
   return app;
