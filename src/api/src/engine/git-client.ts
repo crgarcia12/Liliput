@@ -162,6 +162,19 @@ export async function push(handle: RepoHandle): Promise<void> {
   });
 }
 
+/** Returns the list of files modified in the working tree relative to HEAD. */
+export async function changedFiles(handle: RepoHandle): Promise<string[]> {
+  const { stdout } = await run('git', ['status', '--porcelain'], {
+    cwd: handle.cwd,
+  });
+  return stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^\S+\s+/, '').trim())
+    .filter(Boolean);
+}
+
 /** Remove the workspace directory. Best-effort — never throws. */
 export async function cleanup(handle: RepoHandle): Promise<void> {
   try {

@@ -135,6 +135,19 @@ export function useSocket(): UseSocketReturn {
       });
     });
 
+    socket.on('agent:tool-event', (e: { taskId: string; agentId: string; kind: string; tool?: string; summary: string; details?: string; timestamp?: string }) => {
+      // Skip the very chatty events to keep the activity log scannable.
+      if (e.kind === 'tool-complete' && (!e.summary || e.summary === '✓ ')) return;
+      pushActivity({
+        taskId: e.taskId,
+        kind: 'agent-log',
+        agentId: e.agentId,
+        level: e.kind === 'error' ? 'error' : 'info',
+        message: e.summary,
+        output: e.details,
+      });
+    });
+
     socket.on('agent:completed', (e: { taskId: string; agentId: string; timestamp?: string }) => {
       setAgentEvents((prev) => [
         ...prev,

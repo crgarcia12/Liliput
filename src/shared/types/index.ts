@@ -66,6 +66,32 @@ export interface Agent {
 
 // ─── Agent Events (WebSocket) ─────────────────────────────────
 
+/**
+ * High-level activity event emitted by the SDK during a session.
+ * Surfaced to the UI so the user can watch the agent work in real time.
+ */
+export interface AgentToolEvent {
+  taskId: string;
+  agentId: string;
+  /** Monotonic id within an agent session, used to correlate start/complete events. */
+  callId: string;
+  kind:
+    | 'tool-start'        // Agent invoked a tool (read, write, bash, grep, glob, edit…)
+    | 'tool-complete'     // Tool finished
+    | 'tool-progress'     // Long-running tool emitted a progress update
+    | 'skill-invoked'     // A skill from .github/skills/ kicked in
+    | 'subagent-start'    // A custom sub-agent (tester, reviewer…) was spawned
+    | 'subagent-complete'
+    | 'reasoning'         // Model "thinking" content
+    | 'message';          // Final assistant message
+  tool?: string;          // Tool / skill / sub-agent name
+  /** Short one-line summary suitable for the activity log. */
+  summary: string;
+  /** Optional structured details (truncated stdout, file path, etc). */
+  details?: string;
+  timestamp: string;
+}
+
 export type AgentEventType =
   | 'agent:spawned'
   | 'agent:status'
