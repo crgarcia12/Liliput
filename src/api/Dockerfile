@@ -1,12 +1,12 @@
 # Build context: repo root (for az acr build from .)
 # Replicate monorepo structure so tsc rootDir produces correct paths
 
-FROM public.ecr.aws/docker/library/node:22-alpine AS deps
+FROM node:22-alpine AS deps
 WORKDIR /build/src/api
 COPY src/api/package.json src/api/package-lock.json* ./
 RUN npm ci --omit=dev
 
-FROM public.ecr.aws/docker/library/node:22-alpine AS build
+FROM node:22-alpine AS build
 WORKDIR /build/src/api
 COPY src/api/package.json src/api/package-lock.json* ./
 RUN npm ci
@@ -17,7 +17,7 @@ RUN npx tsc
 
 # Runner: debian-slim so we can install git + azure-cli for the agent.
 # (Alpine has azure-cli only via pip with heavy build deps.)
-FROM public.ecr.aws/docker/library/node:22-bookworm-slim AS runner
+FROM node:22-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=8080

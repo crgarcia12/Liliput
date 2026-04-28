@@ -1,10 +1,10 @@
 # Build context: repo root (for az acr build from .)
-FROM public.ecr.aws/docker/library/node:20-alpine AS deps
+FROM node:20-alpine AS deps
 WORKDIR /app
 COPY src/web/package.json src/web/package-lock.json* ./
 RUN npm ci
 
-FROM public.ecr.aws/docker/library/node:20-alpine AS build
+FROM node:20-alpine AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY src/shared/ /shared/
@@ -12,7 +12,7 @@ COPY src/web/ ./
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
-FROM public.ecr.aws/docker/library/node:20-alpine AS runner
+FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
