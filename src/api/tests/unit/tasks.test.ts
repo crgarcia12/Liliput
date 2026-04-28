@@ -152,7 +152,7 @@ describe('POST /api/tasks/:id/chat', () => {
     await flushAsync();
     const detailRes = await request(app).get(`/api/tasks/${id}`);
     const lastMsg = detailRes.body.task.chatHistory.at(-1);
-    expect(lastMsg.message).toMatch(/Spec generation failed/);
+    expect(lastMsg.content).toMatch(/Spec generation failed/);
   });
 
   it('should return 400 when message is missing', async () => {
@@ -188,7 +188,10 @@ describe('POST /api/tasks/:id/approve-spec', () => {
     const res = await request(app).post(`/api/tasks/${id}/approve-spec`);
     expect(res.status).toBe(200);
     expect(res.body.task.status).toBe('building');
-    expect(res.body.task.agents.length).toBeGreaterThan(0);
+    // startBuild spawns the architect agent asynchronously; let it land.
+    await flushAsync();
+    const detail = await request(app).get(`/api/tasks/${id}`);
+    expect(detail.body.task.agents.length).toBeGreaterThan(0);
   });
 
   it('should return 400 when not in specifying status', async () => {

@@ -1,5 +1,20 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { classifyError } from '../../src/engine/auth-status.js';
+
+// classifyError consults the env to disambiguate "missing token" from "401".
+// In CI no token is set, so we ensure one is present for these unit tests.
+const TOKEN_KEYS = ['COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN'];
+const savedTokens: Record<string, string | undefined> = {};
+beforeAll(() => {
+  for (const k of TOKEN_KEYS) savedTokens[k] = process.env[k];
+  process.env['GITHUB_TOKEN'] = 'fake-test-token';
+});
+afterAll(() => {
+  for (const k of TOKEN_KEYS) {
+    if (savedTokens[k] === undefined) delete process.env[k];
+    else process.env[k] = savedTokens[k];
+  }
+});
 
 describe('classifyError', () => {
   it('classifies 401 as unauthorized', () => {
