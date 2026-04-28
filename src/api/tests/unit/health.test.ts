@@ -13,6 +13,7 @@ describe('GET /api/health', () => {
   it('should return status ok', async () => {
     const res = await request(buildApp()).get('/api/health');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: 'ok', service: 'liliput-api' });
+    expect(res.body).toMatchObject({ status: 'ok', service: 'liliput-api' });
+    expect(typeof res.body.version).toBe('string');
   });
 });

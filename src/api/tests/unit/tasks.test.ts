@@ -175,7 +175,7 @@ describe('POST /api/tasks/:id/approve-spec', () => {
     const { app } = buildApp();
     const createRes = await request(app)
       .post('/api/tasks')
-      .send({ title: 'T', description: 'D' });
+      .send({ title: 'T', description: 'D', repository: 'https://github.com/example/repo' });
 
     const id = createRes.body.task.id;
 
