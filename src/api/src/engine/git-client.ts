@@ -7,6 +7,11 @@
  *
  * Workspaces are scoped per-task under AGENT_WORKSPACE_ROOT (default
  * /workspaces). Each clone goes into a fresh subdir to avoid collisions.
+ *
+ * Retry policy: network-touching commands (clone, push) are wrapped in
+ * `runWithRetry()` which classifies failures and retries transient ones
+ * with exponential backoff. Each retry is reported via the optional
+ * `onLog` callback so the UI can show the agent recovering.
  */
 
 import { spawn } from 'node:child_process';
@@ -19,6 +24,52 @@ const DEFAULT_AUTHOR_NAME = process.env['GIT_AUTHOR_NAME'] ?? 'Liliput Agent';
 const DEFAULT_AUTHOR_EMAIL =
   process.env['GIT_AUTHOR_EMAIL'] ?? 'liliput-agent@users.noreply.github.com';
 
+const DEFAULT_MAX_ATTEMPTS = 3;
+const DEFAULT_BACKOFF_MS = [1000, 3000, 8000];
+
+export type RetryLog = (message: string) => void;
+
+/** Heuristics for transient errors that are worth retrying. */
+const TRANSIENT_PATTERNS: RegExp[] = [
+  /could not resolve host/i,
+  /temporary failure in name resolution/i,
+  /connection (?:refused|reset|timed out)/i,
+  /operation timed out/i,
+  /\bearly EOF\b/i,
+  /\brpc failed\b/i,
+  /\bremote end hung up\b/i,
+  /\bunexpected disconnect\b/i,
+  /\bThe remote server returned an error\b/i,
+  /\bHTTP\s*(?:408|425|429|500|502|503|504|520|521|522|524)\b/i,
+  /\bgnutls_handshake\b/i,
+  /\bSSL_(?:read|write|connect)\b/i,
+  /\bTLS handshake\b/i,
+  /\b(?:no error|error 0)\b.*?\bremote\b/i,
+];
+
+/** Heuristics for permanent errors — don't bother retrying. */
+const PERMANENT_PATTERNS: RegExp[] = [
+  /authentication failed/i,
+  /\bpermission denied\b/i,
+  /\brepository not found\b/i,
+  /\bcould not read username\b/i,
+  /\bcould not read password\b/i,
+  /\bdoes not appear to be a git repository\b/i,
+  /\b(?:remote ref|branch).*\bnot found\b/i,
+  /\bnothing to commit\b/i,
+  /\balready exists\b/i,
+  /\bnon-fast-forward\b/i,
+  /\brejected\b.*\bfetch first\b/i,
+];
+
+function classifyError(stderr: string): 'transient' | 'permanent' {
+  for (const re of PERMANENT_PATTERNS) if (re.test(stderr)) return 'permanent';
+  for (const re of TRANSIENT_PATTERNS) if (re.test(stderr)) return 'transient';
+  // Unknown errors: be conservative and treat as permanent so we don't loop
+  // forever on logic bugs. Genuine transient errors usually match a pattern.
+  return 'permanent';
+}
+
 export interface CloneOptions {
   /** "owner/repo" — public or private (token must have access). */
   repo: string;
@@ -28,6 +79,8 @@ export interface CloneOptions {
   workdirName?: string;
   /** Shallow clone depth. Default: 1 (fastest). Pass 0 for full history. */
   depth?: number;
+  /** Optional logger that receives one line per retry attempt + outcome. */
+  onLog?: RetryLog;
 }
 
 export interface RepoHandle {
@@ -90,6 +143,51 @@ function run(
   });
 }
 
+interface RetryConfig {
+  maxAttempts?: number;
+  backoffMs?: number[];
+  /** Called once per attempt: 1, 2, 3… */
+  onAttempt?: (attempt: number) => void;
+  /** Called on a transient failure with the attempt number and error. */
+  onRetry?: (attempt: number, err: Error, waitMs: number) => void;
+  /** Called on giving-up failure (permanent or attempts exhausted). */
+  onGiveUp?: (attempt: number, err: Error, classification: 'transient' | 'permanent') => void;
+  /** Optional async hook to run BEFORE each retry attempt (e.g. clean up partial state). */
+  beforeAttempt?: (attempt: number) => Promise<void>;
+}
+
+/**
+ * Run an async operation with classified retry. Transient failures
+ * (network, RPC) are retried up to `maxAttempts` with exponential
+ * backoff; permanent failures (auth, not found) bubble up immediately.
+ */
+export async function runWithRetry<T>(
+  op: () => Promise<T>,
+  cfg: RetryConfig = {},
+): Promise<T> {
+  const max = cfg.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+  const backoff = cfg.backoffMs ?? DEFAULT_BACKOFF_MS;
+  let attempt = 0;
+  for (;;) {
+    attempt += 1;
+    if (cfg.beforeAttempt) await cfg.beforeAttempt(attempt);
+    cfg.onAttempt?.(attempt);
+    try {
+      return await op();
+    } catch (err) {
+      const e = err instanceof Error ? err : new Error(String(err));
+      const cls = classifyError(e.message);
+      if (cls === 'permanent' || attempt >= max) {
+        cfg.onGiveUp?.(attempt, e, cls);
+        throw e;
+      }
+      const waitMs = backoff[attempt - 1] ?? backoff[backoff.length - 1] ?? 5000;
+      cfg.onRetry?.(attempt, e, waitMs);
+      await new Promise((r) => setTimeout(r, waitMs));
+    }
+  }
+}
+
 /** Clone a repo into a fresh workspace directory and return a handle. */
 export async function clone(options: CloneOptions): Promise<RepoHandle> {
   const token = getToken();
@@ -97,11 +195,9 @@ export async function clone(options: CloneOptions): Promise<RepoHandle> {
   const dirName =
     options.workdirName ?? `${repoSlug}-${Date.now().toString(36)}`;
   const cwd = path.join(WORKSPACE_ROOT, dirName);
+  const log = options.onLog;
 
   await mkdir(WORKSPACE_ROOT, { recursive: true });
-  if (existsSync(cwd)) {
-    await rm(cwd, { recursive: true, force: true });
-  }
 
   const args = ['clone'];
   const depth = options.depth ?? 1;
@@ -109,7 +205,23 @@ export async function clone(options: CloneOptions): Promise<RepoHandle> {
   if (options.ref) args.push('--branch', options.ref);
   args.push(authenticatedUrl(options.repo, token), cwd);
 
-  await run('git', args);
+  await runWithRetry(() => run('git', args), {
+    onAttempt: (n) => {
+      if (n > 1) log?.(`Retrying git clone (attempt ${n})…`);
+    },
+    onRetry: (n, err, waitMs) => {
+      const summary = err.message.split('\n').slice(-2).join(' ').trim();
+      log?.(`Transient failure on git clone attempt ${n}: ${summary}. Retrying in ${Math.round(waitMs / 1000)}s.`);
+    },
+    onGiveUp: (n, err, cls) => {
+      log?.(`git clone failed after ${n} attempt(s) [${cls}]: ${err.message.split('\n').pop()?.trim() ?? ''}`);
+    },
+    beforeAttempt: async () => {
+      // Each attempt needs a clean target dir or `git clone` errors with
+      // "already exists and is not an empty directory".
+      if (existsSync(cwd)) await rm(cwd, { recursive: true, force: true });
+    },
+  });
 
   // Set per-clone author config (avoids polluting global config)
   await run('git', ['config', 'user.name', DEFAULT_AUTHOR_NAME], { cwd });
@@ -156,10 +268,29 @@ export async function commitAll(
 }
 
 /** Push the current branch to origin. Sets upstream on first push. */
-export async function push(handle: RepoHandle): Promise<void> {
-  await run('git', ['push', '--set-upstream', 'origin', handle.branch], {
-    cwd: handle.cwd,
-  });
+export async function push(
+  handle: RepoHandle,
+  opts: { onLog?: RetryLog } = {},
+): Promise<void> {
+  const log = opts.onLog;
+  await runWithRetry(
+    () =>
+      run('git', ['push', '--set-upstream', 'origin', handle.branch], {
+        cwd: handle.cwd,
+      }),
+    {
+      onAttempt: (n) => {
+        if (n > 1) log?.(`Retrying git push (attempt ${n})…`);
+      },
+      onRetry: (n, err, waitMs) => {
+        const summary = err.message.split('\n').slice(-2).join(' ').trim();
+        log?.(`Transient failure on git push attempt ${n}: ${summary}. Retrying in ${Math.round(waitMs / 1000)}s.`);
+      },
+      onGiveUp: (n, err, cls) => {
+        log?.(`git push failed after ${n} attempt(s) [${cls}]: ${err.message.split('\n').pop()?.trim() ?? ''}`);
+      },
+    },
+  );
 }
 
 /** Returns the list of files modified in the working tree relative to HEAD. */

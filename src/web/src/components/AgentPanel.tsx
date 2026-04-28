@@ -15,6 +15,7 @@ const ROLE_CONFIG: Record<AgentRole, { icon: string; color: string }> = {
   deployer: { icon: '🚀', color: 'text-red-400' },
   reviewer: { icon: '👁️', color: 'text-cyan-400' },
   researcher: { icon: '🔍', color: 'text-yellow-400' },
+  fixer: { icon: '🔧', color: 'text-pink-400' },
 };
 
 const STATUS_STYLES: Record<AgentStatus, { bg: string; text: string; label: string }> = {

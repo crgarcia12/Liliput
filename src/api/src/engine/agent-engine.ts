@@ -29,6 +29,7 @@ import {
 } from './agent-loop.js';
 import { resolveDockerfile } from './dockerfile-detector.js';
 import { acrBuild } from './azure-builder.js';
+import { runOpsFixer } from './ops-fixer.js';
 import {
   ensureNamespace,
   deployApp,
@@ -43,6 +44,9 @@ import { openPullRequest, markPullRequestReady, closePullRequest } from './githu
 const ACR_NAME = process.env['ACR_NAME'] ?? '';
 const PUBLIC_BASE_URL = process.env['LILIPUT_PUBLIC_URL'] ?? 'http://4.165.50.135';
 const DEFAULT_REPO = process.env['LILIPUT_DEFAULT_TARGET_REPO'];
+/** How many times to invoke the ops-fixer agent for build/deploy failures. */
+const MAX_BUILD_FIX_ATTEMPTS = parseInt(process.env['MAX_BUILD_FIX_ATTEMPTS'] ?? '2', 10);
+const MAX_DEPLOY_FIX_ATTEMPTS = parseInt(process.env['MAX_DEPLOY_FIX_ATTEMPTS'] ?? '2', 10);
 
 interface DevEnvRecord {
   taskId: string;
@@ -152,6 +156,260 @@ function setTaskStatus(
   io.to(`task:${taskId}`).emit('task:status', { taskId, status, ...extra });
 }
 
+// ─── Fixer-driven scripted ops ────────────────────────────────────────
+//
+// The scripted `acrBuild` and `deployApp` are still the source of truth —
+// they handle az workload-identity login, exact Service/Deployment naming
+// (which the nginx gateway depends on), env-var injection (BASE_PATH /
+// NEXT_PUBLIC_BASE_PATH), readiness waits, etc. When they fail we spawn
+// the LLM ops-fixer, which inspects the workspace, edits files (Dockerfile
+// / app source), and returns. We commit + push any changes (so the PR
+// reflects the fix), recompute the image tag from the new SHA, and retry
+// the scripted op. Capped at MAX_*_FIX_ATTEMPTS so we don't loop forever.
+
+interface BuildContext {
+  io: SocketServer;
+  taskId: string;
+  builderAgentId: string;
+  agentSession: AgentSession;
+  handle: git.RepoHandle;
+  branch: string;
+  imageName: string;
+  dockerfile: string;
+  port: number;
+  /** Initial commit SHA to tag the first build attempt with. */
+  initialSha: string;
+}
+
+interface BuildOutcome {
+  imageRef: string;
+  /** Final commit SHA the image was built from (may be > initialSha if the fixer pushed). */
+  sha: string;
+}
+
+/**
+ * Run `acrBuild` with fixer-driven recovery. On failure: spawn fixer,
+ * commit/push any edits, retry. Returns the image ref of the successful build.
+ */
+async function buildWithFixer(ctx: BuildContext): Promise<BuildOutcome> {
+  let sha = ctx.initialSha;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= MAX_BUILD_FIX_ATTEMPTS + 1; attempt++) {
+    const tag = sha.substring(0, 12);
+    try {
+      logPhase(
+        ctx.io,
+        ctx.taskId,
+        ctx.builderAgentId,
+        'info',
+        `Starting az acr build → ${ctx.imageName}:${tag}… (attempt ${attempt}/${MAX_BUILD_FIX_ATTEMPTS + 1})`,
+      );
+      const buildStart = Date.now();
+      const result = await acrBuild({
+        cwd: ctx.handle.cwd,
+        imageName: ctx.imageName,
+        tag,
+        dockerfile: ctx.dockerfile,
+      });
+      logPhase(
+        ctx.io,
+        ctx.taskId,
+        ctx.builderAgentId,
+        'info',
+        `Image built in ${Math.round((Date.now() - buildStart) / 1000)}s`,
+        undefined,
+        result.imageRef,
+      );
+      return { imageRef: result.imageRef, sha };
+    } catch (err) {
+      lastErr = err;
+      const errMsg = err instanceof Error ? err.message : String(err);
+      logPhase(
+        ctx.io,
+        ctx.taskId,
+        ctx.builderAgentId,
+        'warn',
+        `acr build failed (attempt ${attempt}): ${errMsg.split('\n')[0] ?? errMsg}`,
+        undefined,
+        errMsg,
+      );
+      if (attempt > MAX_BUILD_FIX_ATTEMPTS) break;
+
+      // Spawn a fixer pseudo-agent so the user sees recovery in the UI.
+      const fixer = spawnPhase(ctx.io, ctx.taskId, 'fixer', `Fixer Liliputian (build #${attempt})`);
+      if (!fixer) break;
+      logPhase(ctx.io, ctx.taskId, fixer, 'info', 'Investigating build failure and proposing fixes…');
+      try {
+        await runOpsFixer({
+          session: ctx.agentSession,
+          phase: 'build',
+          attempt,
+          errorMessage: errMsg.split('\n')[0] ?? errMsg,
+          errorOutput: errMsg,
+          context: {
+            repo: ctx.handle.repo,
+            dockerfile: ctx.dockerfile,
+            port: ctx.port,
+            acrName: ACR_NAME,
+            imageRef: `${ACR_NAME}.azurecr.io/${ctx.imageName}:${tag}`,
+          },
+          onLog: (level, msg, cmd, out) => logPhase(ctx.io, ctx.taskId, fixer, level, msg, cmd, out),
+          onToolEvent: (event) =>
+            ctx.io.to(`task:${ctx.taskId}`).emit('agent:tool-event', { taskId: ctx.taskId, agentId: fixer, ...event }),
+        });
+      } catch (fixerErr) {
+        const m = fixerErr instanceof Error ? fixerErr.message : String(fixerErr);
+        failPhase(ctx.io, ctx.taskId, fixer, `Fixer turn failed: ${m}`);
+        break;
+      }
+
+      // If the fixer touched files, commit + push so the next build picks them up.
+      const changed = await git.changedFiles(ctx.handle);
+      if (changed.length === 0) {
+        logPhase(ctx.io, ctx.taskId, fixer, 'warn', 'Fixer made no file changes — the next build attempt would just repeat the same failure. Aborting fix loop.');
+        completePhase(ctx.io, ctx.taskId, fixer);
+        break;
+      }
+      logPhase(ctx.io, ctx.taskId, fixer, 'info', `Fixer changed ${changed.length} file(s); committing…`, undefined, changed.join('\n'));
+      const newSha = await git.commitAll(ctx.handle, `fix(agent): build failure recovery (attempt ${attempt})`);
+      logPhase(ctx.io, ctx.taskId, fixer, 'info', `Commit ${newSha.substring(0, 7)} created; pushing…`);
+      await git.push(ctx.handle, {
+        onLog: (msg) => logPhase(ctx.io, ctx.taskId, fixer, 'info', msg),
+      });
+      sha = newSha;
+      store.updateTask(ctx.taskId, { commitSha: sha });
+      completePhase(ctx.io, ctx.taskId, fixer);
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error('Build failed');
+}
+
+interface DeployContext {
+  io: SocketServer;
+  taskId: string;
+  deployerAgentId: string;
+  agentSession: AgentSession;
+  handle: git.RepoHandle;
+  branch: string;
+  imageName: string;
+  dockerfile: string;
+  port: number;
+  namespace: string;
+  pathPrefix: string;
+  /** The image to deploy (may be replaced if a fix triggers a rebuild). */
+  initialImageRef: string;
+  initialSha: string;
+}
+
+interface DeployOutcome {
+  imageRef: string;
+  sha: string;
+}
+
+/**
+ * Deploy + readiness with fixer-driven recovery. If the deployment doesn't
+ * become ready, the fixer is asked to repair the app/Dockerfile; we then
+ * rebuild a new image (new tag) and retry the deploy.
+ */
+async function deployWithFixer(ctx: DeployContext): Promise<DeployOutcome> {
+  let imageRef = ctx.initialImageRef;
+  let sha = ctx.initialSha;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= MAX_DEPLOY_FIX_ATTEMPTS + 1; attempt++) {
+    try {
+      logPhase(
+        ctx.io,
+        ctx.taskId,
+        ctx.deployerAgentId,
+        'info',
+        `Deploying ${imageRef}… (attempt ${attempt}/${MAX_DEPLOY_FIX_ATTEMPTS + 1})`,
+      );
+      await deployApp({
+        namespace: ctx.namespace,
+        appName: 'app',
+        image: imageRef,
+        port: ctx.port,
+        env: { PORT: String(ctx.port) },
+        pathPrefix: ctx.pathPrefix,
+      });
+      logPhase(ctx.io, ctx.taskId, ctx.deployerAgentId, 'info', 'Waiting for pod to become ready…');
+      const ready = await waitDeploymentReady(ctx.namespace, 'app', 180_000);
+      if (!ready) throw new Error('Deployment did not become ready within 3 minutes.');
+      return { imageRef, sha };
+    } catch (err) {
+      lastErr = err;
+      const errMsg = err instanceof Error ? err.message : String(err);
+      logPhase(
+        ctx.io,
+        ctx.taskId,
+        ctx.deployerAgentId,
+        'warn',
+        `deploy failed (attempt ${attempt}): ${errMsg.split('\n')[0] ?? errMsg}`,
+        undefined,
+        errMsg,
+      );
+      if (attempt > MAX_DEPLOY_FIX_ATTEMPTS) break;
+
+      const fixer = spawnPhase(ctx.io, ctx.taskId, 'fixer', `Fixer Liliputian (deploy #${attempt})`);
+      if (!fixer) break;
+      logPhase(ctx.io, ctx.taskId, fixer, 'info', 'Investigating deploy failure and proposing fixes…');
+      try {
+        await runOpsFixer({
+          session: ctx.agentSession,
+          phase: 'deploy',
+          attempt,
+          errorMessage: errMsg.split('\n')[0] ?? errMsg,
+          errorOutput: errMsg,
+          context: {
+            repo: ctx.handle.repo,
+            dockerfile: ctx.dockerfile,
+            port: ctx.port,
+            namespace: ctx.namespace,
+            pathPrefix: ctx.pathPrefix,
+            imageRef,
+          },
+          onLog: (level, msg, cmd, out) => logPhase(ctx.io, ctx.taskId, fixer, level, msg, cmd, out),
+          onToolEvent: (event) =>
+            ctx.io.to(`task:${ctx.taskId}`).emit('agent:tool-event', { taskId: ctx.taskId, agentId: fixer, ...event }),
+        });
+      } catch (fixerErr) {
+        const m = fixerErr instanceof Error ? fixerErr.message : String(fixerErr);
+        failPhase(ctx.io, ctx.taskId, fixer, `Fixer turn failed: ${m}`);
+        break;
+      }
+
+      const changed = await git.changedFiles(ctx.handle);
+      if (changed.length === 0) {
+        logPhase(ctx.io, ctx.taskId, fixer, 'warn', 'Fixer made no file changes — the next deploy attempt would just repeat the same failure. Aborting fix loop.');
+        completePhase(ctx.io, ctx.taskId, fixer);
+        break;
+      }
+      logPhase(ctx.io, ctx.taskId, fixer, 'info', `Fixer changed ${changed.length} file(s); committing + rebuilding…`, undefined, changed.join('\n'));
+      const newSha = await git.commitAll(ctx.handle, `fix(agent): deploy failure recovery (attempt ${attempt})`);
+      await git.push(ctx.handle, {
+        onLog: (msg) => logPhase(ctx.io, ctx.taskId, fixer, 'info', msg),
+      });
+      sha = newSha;
+      store.updateTask(ctx.taskId, { commitSha: sha });
+
+      // Rebuild the image with the new SHA so the next deploy picks up the fix.
+      const tag = sha.substring(0, 12);
+      logPhase(ctx.io, ctx.taskId, fixer, 'info', `Rebuilding ${ctx.imageName}:${tag}…`);
+      const rebuilt = await acrBuild({
+        cwd: ctx.handle.cwd,
+        imageName: ctx.imageName,
+        tag,
+        dockerfile: ctx.dockerfile,
+      });
+      imageRef = rebuilt.imageRef;
+      store.updateTask(ctx.taskId, { imageRef });
+      logPhase(ctx.io, ctx.taskId, fixer, 'info', `Rebuilt: ${imageRef}`);
+      completePhase(ctx.io, ctx.taskId, fixer);
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error('Deploy failed');
+}
+
 export function startBuild(io: SocketServer, taskId: string): void {
   void (async () => {
     try {
@@ -191,7 +449,12 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   if (!coder) throw new Error('Failed to register coder agent');
 
   logPhase(io, taskId, coder, 'info', `Cloning ${repo}…`, `git clone ${repo}`);
-  const handle = await git.clone({ repo, ref: baseBranch, workdirName: `task-${taskId}` });
+  const handle = await git.clone({
+    repo,
+    ref: baseBranch,
+    workdirName: `task-${taskId}`,
+    onLog: (msg) => logPhase(io, taskId, coder, 'info', msg),
+  });
   logPhase(io, taskId, coder, 'info', `Cloned to ${handle.cwd}`);
 
   logPhase(io, taskId, coder, 'info', `Creating branch ${branch}`, `git checkout -b ${branch}`);
@@ -250,7 +513,9 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   logPhase(io, taskId, builder, 'info', `Commit ${sha.substring(0, 7)} created`);
 
   logPhase(io, taskId, builder, 'info', 'Pushing branch…', `git push -u origin ${branch}`);
-  await git.push(handle);
+  await git.push(handle, {
+    onLog: (msg) => logPhase(io, taskId, builder, 'info', msg),
+  });
   logPhase(io, taskId, builder, 'info', `Branch pushed to ${repo}`);
 
   if (!ACR_NAME) {
@@ -260,25 +525,19 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
 
   const repoSlug = sanitiseK8sName(repo.replace('/', '-'));
   const imageName = `liliput-app-${repoSlug}`;
-  const tag = sha.substring(0, 12);
-  logPhase(io, taskId, builder, 'info', `Starting az acr build → ${imageName}:${tag}…`);
-  const buildStart = Date.now();
-  const buildResult = await acrBuild({
-    cwd: handle.cwd,
-    imageName,
-    tag,
-    dockerfile: df.dockerfile,
-  });
-  logPhase(
+  const buildOutcome = await buildWithFixer({
     io,
     taskId,
-    builder,
-    'info',
-    `Image built in ${Math.round((Date.now() - buildStart) / 1000)}s`,
-    undefined,
-    buildResult.imageRef,
-  );
-  store.updateTask(taskId, { imageRef: buildResult.imageRef });
+    builderAgentId: builder,
+    agentSession,
+    handle,
+    branch,
+    imageName,
+    dockerfile: df.dockerfile,
+    port: df.port,
+    initialSha: sha,
+  });
+  store.updateTask(taskId, { imageRef: buildOutcome.imageRef, commitSha: buildOutcome.sha });
   completePhase(io, taskId, coder);
   completePhase(io, taskId, builder);
 
@@ -296,22 +555,22 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   logPhase(io, taskId, deployer, 'info', `Ensuring namespace ${namespace}…`);
   await ensureNamespace({ name: namespace, labels: { 'liliput.dev/task-id': taskId } });
 
-  logPhase(io, taskId, deployer, 'info', `Deploying ${buildResult.imageRef}…`);
-  await deployApp({
-    namespace,
-    appName,
-    image: buildResult.imageRef,
+  const deployOutcome = await deployWithFixer({
+    io,
+    taskId,
+    deployerAgentId: deployer,
+    agentSession,
+    handle,
+    branch,
+    imageName,
+    dockerfile: df.dockerfile,
     port: df.port,
-    env: { PORT: String(df.port) },
+    namespace,
     pathPrefix,
+    initialImageRef: buildOutcome.imageRef,
+    initialSha: buildOutcome.sha,
   });
-
-  logPhase(io, taskId, deployer, 'info', 'Waiting for pod to become ready…');
-  const ready = await waitDeploymentReady(namespace, appName, 180_000);
-  if (!ready) {
-    failPhase(io, taskId, deployer, 'Deployment did not become ready within 3 minutes.');
-    throw new Error('Deployment readiness timeout');
-  }
+  store.updateTask(taskId, { imageRef: deployOutcome.imageRef, commitSha: deployOutcome.sha });
 
   logPhase(io, taskId, deployer, 'info', `Patching gateway route ${pathPrefix} → ${namespace}/${appName}`);
   devEnvs.set(taskId, {
@@ -625,7 +884,9 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   logPhase(io, taskId, builder, 'info', `Commit ${sha.substring(0, 7)} created`);
 
   logPhase(io, taskId, builder, 'info', 'Pushing branch…', `git push origin ${live.branch}`);
-  await git.push(live.repoHandle);
+  await git.push(live.repoHandle, {
+    onLog: (msg) => logPhase(io, taskId, builder, 'info', msg),
+  });
   logPhase(io, taskId, builder, 'info', 'Branch pushed; PR will pick up the new commit automatically.');
 
   if (!ACR_NAME) {
@@ -633,25 +894,19 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
     throw new Error('ACR_NAME not configured');
   }
 
-  const tag = sha.substring(0, 12);
-  logPhase(io, taskId, builder, 'info', `Rebuilding image → ${live.imageName}:${tag}…`);
-  const buildStart = Date.now();
-  const buildResult = await acrBuild({
-    cwd: live.repoHandle.cwd,
-    imageName: live.imageName,
-    tag,
-    dockerfile: live.dockerfile,
-  });
-  logPhase(
+  const buildOutcome = await buildWithFixer({
     io,
     taskId,
-    builder,
-    'info',
-    `Image rebuilt in ${Math.round((Date.now() - buildStart) / 1000)}s`,
-    undefined,
-    buildResult.imageRef,
-  );
-  store.updateTask(taskId, { imageRef: buildResult.imageRef });
+    builderAgentId: builder,
+    agentSession: live.agentSession,
+    handle: live.repoHandle,
+    branch: live.branch,
+    imageName: live.imageName,
+    dockerfile: live.dockerfile,
+    port: live.port,
+    initialSha: sha,
+  });
+  store.updateTask(taskId, { imageRef: buildOutcome.imageRef, commitSha: buildOutcome.sha });
   completePhase(io, taskId, coder);
   completePhase(io, taskId, builder);
 
@@ -659,22 +914,22 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   const deployer = spawnPhase(io, taskId, 'deployer', 'Deployer Liliputian');
   if (!deployer) throw new Error('Failed to register deployer agent');
 
-  logPhase(io, taskId, deployer, 'info', `Rolling out new image to ${live.namespace}…`);
-  await deployApp({
-    namespace: live.namespace,
-    appName: 'app',
-    image: buildResult.imageRef,
+  const deployOutcome = await deployWithFixer({
+    io,
+    taskId,
+    deployerAgentId: deployer,
+    agentSession: live.agentSession,
+    handle: live.repoHandle,
+    branch: live.branch,
+    imageName: live.imageName,
+    dockerfile: live.dockerfile,
     port: live.port,
-    env: { PORT: String(live.port) },
+    namespace: live.namespace,
     pathPrefix: live.pathPrefix,
+    initialImageRef: buildOutcome.imageRef,
+    initialSha: buildOutcome.sha,
   });
-
-  logPhase(io, taskId, deployer, 'info', 'Waiting for new pod to become ready…');
-  const ready = await waitDeploymentReady(live.namespace, 'app', 180_000);
-  if (!ready) {
-    failPhase(io, taskId, deployer, 'Deployment did not become ready within 3 minutes.');
-    throw new Error('Deployment readiness timeout');
-  }
+  store.updateTask(taskId, { imageRef: deployOutcome.imageRef, commitSha: deployOutcome.sha });
   completePhase(io, taskId, deployer);
 
   const devUrl = `${PUBLIC_BASE_URL}${live.pathPrefix}/`;

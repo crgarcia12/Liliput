@@ -72,7 +72,12 @@ function run(
   });
 }
 
-async function ensureAzLogin(): Promise<void> {
+/**
+ * Logs the Azure CLI in via workload-identity. Idempotent — safe to call
+ * multiple times. Exposed so other engine modules (ops-fixer, etc.) can
+ * ensure the CLI is authenticated before issuing follow-up `az` commands.
+ */
+export async function ensureAzLogin(): Promise<void> {
   if (azLoggedIn) return;
   if (!TENANT_ID || !CLIENT_ID || !FEDERATED_TOKEN_FILE) {
     throw new Error(

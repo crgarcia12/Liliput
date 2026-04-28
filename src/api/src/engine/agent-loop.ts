@@ -96,6 +96,17 @@ export interface RunAgentTurnOptions {
   followUp?: string;
   /** True for the very first turn (we include task title/spec); false for iterations. */
   isInitial: boolean;
+  /**
+   * If set, this string is sent verbatim as the prompt — bypassing both the
+   * initial template and the follow-up wrapper. Use for purpose-built turns
+   * (e.g. ops-fixer) where the wrapper text would be misleading.
+   */
+  promptOverride?: string;
+  /**
+   * Optional per-turn timeout override (milliseconds). Default = TIMEOUT_MS.
+   * Useful for ops turns that need longer than 15 minutes for build+fix loops.
+   */
+  timeoutMs?: number;
   onLog?: LogFn;
   onToolEvent?: ToolEventFn;
 }
@@ -352,15 +363,17 @@ export async function runAgentTurn(
   handle._callbacks.toolEvent = onEvent;
   const before = handle._callbacks.toolCount;
 
-  const prompt = opts.isInitial
-    ? buildInitialPrompt(opts)
-    : buildFollowUpPrompt(opts.followUp ?? '(no instruction)');
+  const prompt = opts.promptOverride
+    ? opts.promptOverride
+    : opts.isInitial
+      ? buildInitialPrompt(opts)
+      : buildFollowUpPrompt(opts.followUp ?? '(no instruction)');
 
   log('info', opts.isInitial ? 'Asking agent to plan and apply edits…' : 'Sending follow-up to agent…');
 
   let finalMessage = '';
   try {
-    const result = await handle._session.sendAndWait({ prompt }, TIMEOUT_MS);
+    const result = await handle._session.sendAndWait({ prompt }, opts.timeoutMs ?? TIMEOUT_MS);
     finalMessage = result?.data?.content?.trim() ?? '';
   } catch (err) {
     logger.error({ err: err instanceof Error ? err.message : String(err) }, 'SDK session turn failed');

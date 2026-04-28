@@ -14,6 +14,7 @@ const ROLE_COLORS: Record<AgentRole, string> = {
   deployer: '#ef4444',
   reviewer: '#06b6d4',
   researcher: '#eab308',
+  fixer: '#ec4899',
 };
 
 const BUILDING_DATA = [

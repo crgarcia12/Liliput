@@ -47,7 +47,8 @@ export type AgentRole =
   | 'builder'       // Runs builds/CI
   | 'deployer'      // Deploys to AKS
   | 'tester'        // Runs tests
-  | 'researcher';   // Looks up docs, patterns
+  | 'researcher'    // Looks up docs, patterns
+  | 'fixer';        // Investigates failures and edits files to make scripted ops succeed
 
 export type AgentStatus = 'idle' | 'working' | 'completed' | 'failed' | 'waiting';
 
