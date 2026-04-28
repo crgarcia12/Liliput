@@ -59,7 +59,7 @@ jobs:
       - name: Wait for services
         run: |
           for i in {1..60}; do
-            if curl -fsS http://localhost:5001/health > /dev/null; then
+            if curl -fsS http://localhost:5001/api/health > /dev/null; then
               break
             fi
             sleep 2
@@ -72,7 +72,7 @@ jobs:
             sleep 2
           done
 
-          curl -fsS http://localhost:5001/health > /dev/null
+          curl -fsS http://localhost:5001/api/health > /dev/null
           curl -fsS http://localhost:3000 > /dev/null
 
       - name: Run Cucumber tests

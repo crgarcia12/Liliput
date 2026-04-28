@@ -59,7 +59,12 @@ export interface ToolEvent {
   timestamp: string;
 }
 
-export type LogFn = (level: 'info' | 'warn' | 'error', message: string) => void;
+export type LogFn = (
+  level: 'info' | 'warn' | 'error',
+  message: string,
+  command?: string,
+  output?: string,
+) => void;
 export type ToolEventFn = (event: ToolEvent) => void;
 
 interface TurnCallbacks {
@@ -203,6 +208,8 @@ function makeEventHandler(callbacks: TurnCallbacks): (event: SessionEvent) => vo
         const { summary: resSummary, details } = summariseResult(data.result?.content);
         const ok = data.success;
         const summary = `${ok ? '✓' : '✗'} ${resSummary || '(done)'}`;
+        // Persist completion to logs so it appears after-the-fact (not just live wire events).
+        log(ok ? 'info' : 'warn', summary, undefined, details);
         if (!ok) log('warn', `Tool ${data.toolCallId} failed: ${data.error?.message ?? ''}`);
         toolEvent({
           callId: data.toolCallId,
@@ -257,6 +264,7 @@ function makeEventHandler(callbacks: TurnCallbacks): (event: SessionEvent) => vo
       case 'assistant.reasoning': {
         const content = event.data.content?.trim() ?? '';
         if (!content) break;
+        log('info', `🧠 ${truncate(content.split('\n')[0] ?? '', 120)}`, undefined, truncate(content, REASONING_PREVIEW));
         toolEvent({
           callId: event.data.reasoningId,
           kind: 'reasoning',
@@ -269,6 +277,7 @@ function makeEventHandler(callbacks: TurnCallbacks): (event: SessionEvent) => vo
       case 'assistant.message': {
         const content = event.data.content?.trim() ?? '';
         if (!content) break;
+        log('info', `💬 ${truncate(content.split('\n')[0] ?? '', 120)}`, undefined, truncate(content, RESULT_PREVIEW));
         toolEvent({
           callId: event.data.messageId,
           kind: 'message',

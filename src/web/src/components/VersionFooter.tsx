@@ -39,7 +39,7 @@ export default function VersionFooter() {
 
   return (
     <div
-      className="pointer-events-none fixed bottom-1 right-2 z-50 select-none font-mono text-[10px] text-gray-500"
+      className="pointer-events-none fixed bottom-1 left-0 right-0 z-50 select-none text-center font-mono text-[10px] text-gray-500"
       title="Frontend / Backend versions — bump in code to verify a deploy"
     >
       FE {FRONTEND_VERSION} | BE {backend}

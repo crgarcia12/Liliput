@@ -205,7 +205,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
     taskDescription: task.description,
     spec: task.spec,
     isInitial: true,
-    onLog: (level, msg) => logPhase(io, taskId, coder, level, msg),
+    onLog: (level, msg, cmd, out) => logPhase(io, taskId, coder, level, msg, cmd, out),
     onToolEvent: (event) => {
       io.to(`task:${taskId}`).emit('agent:tool-event', {
         taskId,
@@ -579,7 +579,7 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
     spec: task.spec,
     followUp: message,
     isInitial: false,
-    onLog: (level, msg) => logPhase(io, taskId, coder, level, msg),
+    onLog: (level, msg, cmd, out) => logPhase(io, taskId, coder, level, msg, cmd, out),
     onToolEvent: (event) => {
       io.to(`task:${taskId}`).emit('agent:tool-event', {
         taskId,
