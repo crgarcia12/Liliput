@@ -127,6 +127,9 @@ export default function Home() {
           </h1>
         </div>
         <div className="flex items-center gap-4 text-xs">
+          <a href="/requests" className="text-gray-400 hover:text-cyan-300">
+            📋 Requests
+          </a>
           <span className={connected ? 'text-green-400' : 'text-red-400'}>
             {connected ? '● Connected' : '○ Disconnected'}
           </span>

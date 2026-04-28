@@ -285,6 +285,9 @@ export default function TaskPage() {
           <span className={`text-xs ${connected ? 'text-green-400' : 'text-red-400'}`}>
             {connected ? '● Connected' : '○ Disconnected'}
           </span>
+          <a href="/requests" className="text-xs text-gray-400 hover:text-cyan-300">
+            📋 All requests
+          </a>
         </div>
       </header>
 
