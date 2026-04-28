@@ -1,10 +1,13 @@
 # Build context: repo root (for az acr build from .)
-FROM node:20-alpine AS deps
+#
+# Base images come from Microsoft Container Registry (MCR) to avoid the
+# Docker Hub anonymous pull rate limit. MCR is Azure-hosted, no limits.
+FROM mcr.microsoft.com/devcontainers/javascript-node:20-bookworm AS deps
 WORKDIR /app
 COPY src/web/package.json src/web/package-lock.json* ./
 RUN npm ci
 
-FROM node:20-alpine AS build
+FROM mcr.microsoft.com/devcontainers/javascript-node:20-bookworm AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY src/shared/ /shared/
@@ -12,13 +15,15 @@ COPY src/web/ ./
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
-FROM node:20-alpine AS runner
+FROM mcr.microsoft.com/devcontainers/javascript-node:20-bookworm AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+# bookworm-flavored user creation (devcontainer base already has a `node` user
+# at uid 1000, we make a dedicated `nextjs` for the runtime).
+RUN groupadd --system --gid 1001 nodejs \
+ && useradd  --system --uid 1001 --gid nodejs --shell /bin/false nextjs
 COPY --from=build /app/public ./public
 COPY --from=build --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=build --chown=nextjs:nodejs /app/.next/static ./.next/static

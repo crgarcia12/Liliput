@@ -1,12 +1,16 @@
 # Build context: repo root (for az acr build from .)
 # Replicate monorepo structure so tsc rootDir produces correct paths
+#
+# Base images come from Microsoft Container Registry (MCR) instead of Docker
+# Hub to avoid the 100-pull/6h anonymous Docker Hub rate limit on ACR build
+# agents. MCR is Azure-hosted and has no anonymous rate limits.
 
-FROM node:22-alpine AS deps
+FROM mcr.microsoft.com/devcontainers/javascript-node:22-bookworm AS deps
 WORKDIR /build/src/api
 COPY src/api/package.json src/api/package-lock.json* ./
 RUN npm ci --omit=dev
 
-FROM node:22-alpine AS build
+FROM mcr.microsoft.com/devcontainers/javascript-node:22-bookworm AS build
 WORKDIR /build/src/api
 COPY src/api/package.json src/api/package-lock.json* ./
 RUN npm ci
@@ -15,18 +19,17 @@ COPY src/api/src/ ./src/
 COPY src/shared/ /build/src/shared/
 RUN npx tsc
 
-# Runner: debian-slim so we can install git + azure-cli for the agent.
-# (Alpine has azure-cli only via pip with heavy build deps.)
-FROM node:22-bookworm-slim AS runner
+# Runner: same base — has git already, just add azure-cli for `az acr build`.
+FROM mcr.microsoft.com/devcontainers/javascript-node:22-bookworm AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=8080
 ENV AGENT_WORKSPACE_ROOT=/workspaces
 
-# git + azure-cli for the agent's clone/commit/push and `az acr build`
+# azure-cli for the agent's `az acr build` flow. git is already in the base image.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates curl gnupg lsb-release git apt-transport-https \
+      ca-certificates curl gnupg lsb-release apt-transport-https \
  && mkdir -p /etc/apt/keyrings \
  && curl -sLS https://packages.microsoft.com/keys/microsoft.asc \
       | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg \
@@ -43,8 +46,6 @@ COPY --from=deps  /build/src/api/node_modules ./node_modules
 COPY --from=build /build/src/api/dist          ./dist
 COPY --from=build /build/src/api/package.json  ./
 
-# Run as non-root (workload identity needs the SA token mounted, which works
-# for any UID; we create /home/node/.azure in the workspaces volume mount).
 USER node
 EXPOSE 8080
 CMD ["node", "dist/api/src/index.js"]
