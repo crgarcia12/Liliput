@@ -24,13 +24,13 @@
  */
 
 import { approveAll } from '@github/copilot-sdk';
-import type { SessionEvent } from '@github/copilot-sdk';
+import type { CopilotSession, SessionEvent } from '@github/copilot-sdk';
 import { getCopilotClient } from './copilot-client.js';
 import { logger } from '../logger.js';
 
 const MODEL = process.env['COPILOT_MODEL'] ?? 'claude-sonnet-4';
-// Default: 15 minutes for a single-spec edit. Bigger repos with multi-file
-// changes can take 8-10+ minutes once the agent is reading files itself.
+// Default: 15 minutes for a single turn. Bigger repos with multi-file changes
+// can take 8-10+ minutes once the agent is reading files itself.
 const TIMEOUT_MS = parseInt(process.env['AGENT_LOOP_TIMEOUT_MS'] ?? '900000', 10);
 
 // Truncation limits to keep the activity log readable.
@@ -59,29 +59,51 @@ export interface ToolEvent {
   timestamp: string;
 }
 
-export interface RunAgentOptions {
+export type LogFn = (level: 'info' | 'warn' | 'error', message: string) => void;
+export type ToolEventFn = (event: ToolEvent) => void;
+
+interface TurnCallbacks {
+  log: LogFn;
+  toolEvent: ToolEventFn;
+  toolCount: number;
+}
+
+/**
+ * A long-lived agent session bound to a single workspace.
+ *
+ * Conversation history accumulates across calls to {@link runAgentTurn},
+ * so follow-up turns inherit context from earlier ones — same model
+ * memory the user gets in `copilot` CLI between prompts.
+ */
+export interface AgentSession {
   workspaceRoot: string;
+  /** @internal */
+  _session: CopilotSession;
+  /** @internal mutable so callers can swap log/event callbacks per turn. */
+  _callbacks: TurnCallbacks;
+}
+
+export interface RunAgentTurnOptions {
   taskTitle: string;
   taskDescription: string;
   spec?: string;
-  /** Plain log line (level + message). Used for human-readable progress. */
-  onLog?: (level: 'info' | 'warn' | 'error', message: string) => void;
-  /** Rich SDK activity events for the UI activity log. */
-  onToolEvent?: (event: ToolEvent) => void;
+  /** Optional follow-up instruction from the user (chat message). */
+  followUp?: string;
+  /** True for the very first turn (we include task title/spec); false for iterations. */
+  isInitial: boolean;
+  onLog?: LogFn;
+  onToolEvent?: ToolEventFn;
 }
 
 export interface RunAgentResult {
   /** Final assistant message — typically a 2-3 sentence summary. */
   summary: string;
-  /** Files changed in the working tree (relative paths). */
-  changedFiles: string[];
-  /** Number of tool calls the agent made (approximate work done). */
+  /** Number of tool calls made during this turn. */
   toolCallCount: number;
 }
 
 function summariseArgs(args: Record<string, unknown> | undefined): string {
   if (!args) return '';
-  // Pull the first ~3 string-ish fields for a one-liner.
   const parts: string[] = [];
   for (const [k, v] of Object.entries(args)) {
     if (parts.length >= 3) break;
@@ -115,10 +137,10 @@ function summariseResult(content: unknown): { summary: string; details?: string 
   return { summary: '' };
 }
 
-function buildPrompt(opts: RunAgentOptions): string {
+function buildInitialPrompt(opts: RunAgentTurnOptions): string {
   return [
     'You are an autonomous coding agent operating directly on a git checkout.',
-    `The current working directory is the repository root and is already on a feature branch.`,
+    'The current working directory is the repository root and is already on a feature branch.',
     'You have full access to read, write, edit, grep, glob, and bash. Use them.',
     '',
     'Workflow:',
@@ -141,22 +163,33 @@ function buildPrompt(opts: RunAgentOptions): string {
     .join('\n');
 }
 
-function makeEventHandler(
-  log: (level: 'info' | 'warn' | 'error', message: string) => void,
-  onEvent: (e: ToolEvent) => void,
-  counters: { tools: number },
-): (event: SessionEvent) => void {
+function buildFollowUpPrompt(message: string): string {
+  return [
+    'Follow-up instruction from the user. The previous turn already produced a',
+    'commit and a draft PR; new edits will be appended to the same branch.',
+    'Continue editing the same workspace. Do not commit or push — Liliput handles git.',
+    '',
+    'When done, reply with a 1-2 sentence summary of what changed in this turn.',
+    '',
+    '## New instruction',
+    '',
+    message,
+  ].join('\n');
+}
+
+function makeEventHandler(callbacks: TurnCallbacks): (event: SessionEvent) => void {
   return (event: SessionEvent) => {
     const ts = event.timestamp ?? new Date().toISOString();
+    const { log, toolEvent } = callbacks;
 
     switch (event.type) {
       case 'tool.execution_start': {
-        counters.tools += 1;
+        callbacks.toolCount += 1;
         const data = event.data;
         const argSummary = summariseArgs(data.arguments);
         const summary = `▶ ${data.toolName}${argSummary ? ` ${argSummary}` : ''}`;
         log('info', summary);
-        onEvent({
+        toolEvent({
           callId: data.toolCallId,
           kind: 'tool-start',
           tool: data.toolName,
@@ -171,7 +204,7 @@ function makeEventHandler(
         const ok = data.success;
         const summary = `${ok ? '✓' : '✗'} ${resSummary || '(done)'}`;
         if (!ok) log('warn', `Tool ${data.toolCallId} failed: ${data.error?.message ?? ''}`);
-        onEvent({
+        toolEvent({
           callId: data.toolCallId,
           kind: 'tool-complete',
           summary: truncate(summary, ARGS_PREVIEW),
@@ -184,7 +217,7 @@ function makeEventHandler(
         const data = event.data;
         const summary = `🧩 skill: ${data.name}${data.description ? ` — ${data.description}` : ''}`;
         log('info', summary);
-        onEvent({
+        toolEvent({
           callId: event.id,
           kind: 'skill-invoked',
           tool: data.name,
@@ -197,7 +230,7 @@ function makeEventHandler(
         const data = event.data;
         const summary = `↪ sub-agent ${data.agentDisplayName} started`;
         log('info', summary);
-        onEvent({
+        toolEvent({
           callId: data.toolCallId,
           kind: 'subagent-start',
           tool: data.agentName,
@@ -212,7 +245,7 @@ function makeEventHandler(
         const dur = data.durationMs ? ` (${Math.round(data.durationMs / 1000)}s)` : '';
         const summary = `✓ sub-agent ${data.agentDisplayName} done${dur}`;
         log('info', summary);
-        onEvent({
+        toolEvent({
           callId: data.toolCallId,
           kind: 'subagent-complete',
           tool: data.agentName,
@@ -224,7 +257,7 @@ function makeEventHandler(
       case 'assistant.reasoning': {
         const content = event.data.content?.trim() ?? '';
         if (!content) break;
-        onEvent({
+        toolEvent({
           callId: event.data.reasoningId,
           kind: 'reasoning',
           summary: `🧠 ${truncate(content.split('\n')[0] ?? '', 120)}`,
@@ -236,7 +269,7 @@ function makeEventHandler(
       case 'assistant.message': {
         const content = event.data.content?.trim() ?? '';
         if (!content) break;
-        onEvent({
+        toolEvent({
           callId: event.data.messageId,
           kind: 'message',
           summary: `💬 ${truncate(content.split('\n')[0] ?? '', 120)}`,
@@ -249,7 +282,7 @@ function makeEventHandler(
         const data = event.data;
         const summary = `⚠ ${data.errorType}: ${data.message}`;
         log('error', summary);
-        onEvent({
+        toolEvent({
           callId: event.id,
           kind: 'error',
           summary,
@@ -265,43 +298,111 @@ function makeEventHandler(
   };
 }
 
-export async function runAgent(opts: RunAgentOptions): Promise<RunAgentResult> {
-  const log = opts.onLog ?? (() => {});
-  const onEvent = opts.onToolEvent ?? (() => {});
-  const counters = { tools: 0 };
+const noLog: LogFn = () => {};
+const noEvent: ToolEventFn = () => {};
 
-  log('info', `Starting Copilot SDK session in ${opts.workspaceRoot}…`);
-
+/**
+ * Creates a fresh SDK session bound to the given workspace.
+ * The session is left connected so subsequent {@link runAgentTurn} calls
+ * accumulate conversation history.
+ */
+export async function createAgentSession(workspaceRoot: string): Promise<AgentSession> {
   const client = await getCopilotClient();
+  // Mutable callbacks ref so per-turn callers can swap their log destination
+  // without recreating the session (and losing conversation memory).
+  const callbacks: TurnCallbacks = {
+    log: noLog,
+    toolEvent: noEvent,
+    toolCount: 0,
+  };
   const session = await client.createSession({
     model: MODEL,
-    workingDirectory: opts.workspaceRoot,
+    workingDirectory: workspaceRoot,
     enableConfigDiscovery: true, // auto-load .mcp.json + skills from target repo
     onPermissionRequest: approveAll,
-    onEvent: makeEventHandler(log, onEvent, counters),
+    onEvent: makeEventHandler(callbacks),
   });
+  return { workspaceRoot, _session: session, _callbacks: callbacks };
+}
 
-  const prompt = buildPrompt(opts);
+/**
+ * Runs one agent turn against the workspace. Conversation memory is preserved
+ * across calls — this is exactly the multi-turn loop you get with
+ * `copilot` CLI between prompts, but persistent in the cluster.
+ */
+export async function runAgentTurn(
+  handle: AgentSession,
+  opts: RunAgentTurnOptions,
+): Promise<RunAgentResult> {
+  const log = opts.onLog ?? noLog;
+  const onEvent = opts.onToolEvent ?? noEvent;
+
+  // Swap the live callbacks so the session-level event handler routes events
+  // to this turn's destinations.
+  handle._callbacks.log = log;
+  handle._callbacks.toolEvent = onEvent;
+  const before = handle._callbacks.toolCount;
+
+  const prompt = opts.isInitial
+    ? buildInitialPrompt(opts)
+    : buildFollowUpPrompt(opts.followUp ?? '(no instruction)');
+
+  log('info', opts.isInitial ? 'Asking agent to plan and apply edits…' : 'Sending follow-up to agent…');
+
   let finalMessage = '';
   try {
-    log('info', `Asking ${MODEL} to plan and apply edits…`);
-    const result = await session.sendAndWait({ prompt }, TIMEOUT_MS);
+    const result = await handle._session.sendAndWait({ prompt }, TIMEOUT_MS);
     finalMessage = result?.data?.content?.trim() ?? '';
   } catch (err) {
-    logger.error({ err: err instanceof Error ? err.message : String(err) }, 'SDK session failed');
+    logger.error({ err: err instanceof Error ? err.message : String(err) }, 'SDK session turn failed');
     throw err;
-  } finally {
-    await session.disconnect().catch(() => undefined);
   }
 
-  log(
-    'info',
-    `Agent finished after ${counters.tools} tool calls. Summary: ${truncate(finalMessage, 200)}`,
-  );
+  const tools = handle._callbacks.toolCount - before;
+  log('info', `Turn finished after ${tools} tool calls. Summary: ${truncate(finalMessage, 200)}`);
 
   return {
     summary: finalMessage || '(no summary)',
-    changedFiles: [], // populated by caller via git.changedFiles()
-    toolCallCount: counters.tools,
+    toolCallCount: tools,
   };
+}
+
+/** Disconnects the session, releasing in-memory handlers. Workspace files survive. */
+export async function disposeAgentSession(handle: AgentSession): Promise<void> {
+  try {
+    await handle._session.disconnect();
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'SDK session disconnect failed',
+    );
+  }
+}
+
+// ─── Backwards-compat wrapper ─────────────────────────────────────
+// Some callers may still import { runAgent } expecting a one-shot.
+// We keep a thin wrapper that creates → runs → disconnects.
+export interface RunAgentOptions {
+  workspaceRoot: string;
+  taskTitle: string;
+  taskDescription: string;
+  spec?: string;
+  onLog?: LogFn;
+  onToolEvent?: ToolEventFn;
+}
+
+export async function runAgent(opts: RunAgentOptions): Promise<RunAgentResult> {
+  const session = await createAgentSession(opts.workspaceRoot);
+  try {
+    return await runAgentTurn(session, {
+      taskTitle: opts.taskTitle,
+      taskDescription: opts.taskDescription,
+      spec: opts.spec,
+      isInitial: true,
+      onLog: opts.onLog,
+      onToolEvent: opts.onToolEvent,
+    });
+  } finally {
+    await disposeAgentSession(session);
+  }
 }

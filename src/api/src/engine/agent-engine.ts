@@ -21,7 +21,12 @@ import type { AgentRole, Task } from '../../../shared/types/index.js';
 import * as store from '../stores/task-store.js';
 import { logger } from '../logger.js';
 import * as git from './git-client.js';
-import { runAgent } from './agent-loop.js';
+import {
+  createAgentSession,
+  runAgentTurn,
+  disposeAgentSession,
+  type AgentSession,
+} from './agent-loop.js';
 import { resolveDockerfile } from './dockerfile-detector.js';
 import { acrBuild } from './azure-builder.js';
 import {
@@ -47,6 +52,24 @@ interface DevEnvRecord {
   namespace: string;
 }
 const devEnvs = new Map<string, DevEnvRecord>();
+
+/**
+ * Live per-task session state — kept in memory between iterations so the
+ * agent's conversation memory survives across follow-up chat messages
+ * (Copilot CLI–style multi-turn, but persistent in the cluster).
+ */
+interface LiveSession {
+  agentSession: AgentSession;
+  repoHandle: git.RepoHandle;
+  repo: string;
+  branch: string;
+  imageName: string;
+  pathPrefix: string;
+  namespace: string;
+  dockerfile: string;
+  port: number;
+}
+const liveSessions = new Map<string, LiveSession>();
 
 function activeRoutes(): DevRoute[] {
   return Array.from(devEnvs.values()).map((e) => ({
@@ -174,12 +197,14 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   logPhase(io, taskId, coder, 'info', `Creating branch ${branch}`, `git checkout -b ${branch}`);
   await git.createBranch(handle, branch);
 
+  logPhase(io, taskId, coder, 'info', 'Spawning Copilot SDK session…');
+  const agentSession = await createAgentSession(handle.cwd);
   logPhase(io, taskId, coder, 'info', 'Invoking LLM agent loop…');
-  const result = await runAgent({
-    workspaceRoot: handle.cwd,
+  const result = await runAgentTurn(agentSession, {
     taskTitle: task.title,
     taskDescription: task.description,
     spec: task.spec,
+    isInitial: true,
     onLog: (level, msg) => logPhase(io, taskId, coder, level, msg),
     onToolEvent: (event) => {
       io.to(`task:${taskId}`).emit('agent:tool-event', {
@@ -204,6 +229,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
 
   if (changedFiles.length === 0) {
     failPhase(io, taskId, coder, 'Agent produced no file changes — nothing to build.');
+    await disposeAgentSession(agentSession);
     throw new Error('Agent produced no file changes');
   }
 
@@ -341,14 +367,29 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
     ...(prNumber !== undefined ? { pullRequestNumber: prNumber } : {}),
   });
 
+  // Stash the live session so follow-up chat messages can iterate on this
+  // same workspace + branch + PR. Disposed by ship/discard or new task.
+  liveSessions.set(taskId, {
+    agentSession,
+    repoHandle: handle,
+    repo,
+    branch,
+    imageName,
+    pathPrefix,
+    namespace,
+    dockerfile: df.dockerfile,
+    port: df.port,
+  });
+
   const liliputMsg = store.addChatMessage(
     taskId,
     'liliput',
     `✨ Build complete!\n\n• **Preview:** ${devUrl}\n` +
       (prUrl ? `• **Draft PR:** ${prUrl}\n` : '') +
-      `\nWhen you're happy, click **Ship** to ${
+      `\n💬 Keep chatting to iterate — every message will run another turn ` +
+      `(same workspace, same branch, same PR). Or click **Ship** to ${
         task.commitMode === 'direct' ? 'merge' : 'mark the PR ready for review'
-      }, or **Discard** to close the PR and tear down the dev env.`,
+      }, or **Discard** to close it.`,
   );
   if (liliputMsg) io.to(`task:${taskId}`).emit('chat:message', liliputMsg);
 }
@@ -418,6 +459,8 @@ export async function shipTask(io: SocketServer, taskId: string): Promise<Task> 
       ...(prUrl ? { pullRequestUrl: prUrl } : {}),
       ...(prNumber !== undefined ? { pullRequestNumber: prNumber } : {}),
     });
+    // Free the live session — task is finished.
+    await tearDownLiveSession(taskId);
     return store.getTask(taskId)!;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -475,7 +518,186 @@ export async function discardTask(io: SocketServer, taskId: string): Promise<Tas
 
   if (cleaner) completePhase(io, taskId, cleaner);
   setTaskStatus(io, taskId, 'discarded', { devUrl: undefined });
+  await tearDownLiveSession(taskId);
   return store.getTask(taskId)!;
+}
+
+/**
+ * Disconnects the SDK session for a task and removes the workspace from disk.
+ * Safe to call when no live session exists.
+ */
+async function tearDownLiveSession(taskId: string): Promise<void> {
+  const live = liveSessions.get(taskId);
+  if (!live) return;
+  liveSessions.delete(taskId);
+  await disposeAgentSession(live.agentSession);
+  await git.cleanup(live.repoHandle);
+}
+
+/**
+ * Iterate on a task that's already in `review` (or `completed`) — the user
+ * sent a follow-up chat message and wants the agent to keep editing.
+ *
+ * Reuses the live SDK session (so conversation memory is preserved) and the
+ * existing workspace + branch. Produces a new commit on the same PR and
+ * a rolling redeploy of the dev preview.
+ */
+export function iterateTask(io: SocketServer, taskId: string, message: string): void {
+  void (async () => {
+    try {
+      await runIteration(io, taskId, message);
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      logger.error({ taskId, err: m }, 'Iteration failed');
+      setTaskStatus(io, taskId, 'failed', { errorMessage: m });
+      const sysMsg = store.addChatMessage(taskId, 'system', `❌ Iteration failed: ${m}`);
+      if (sysMsg) io.to(`task:${taskId}`).emit('chat:message', sysMsg);
+    }
+  })();
+}
+
+async function runIteration(io: SocketServer, taskId: string, message: string): Promise<void> {
+  const task = store.getTask(taskId);
+  if (!task) throw new Error('Task not found');
+
+  const live = liveSessions.get(taskId);
+  if (!live) {
+    throw new Error(
+      'This task has no live agent session — start a new task to iterate further.',
+    );
+  }
+
+  setTaskStatus(io, taskId, 'building');
+
+  const coder = spawnPhase(io, taskId, 'coder', 'Coder Liliputian');
+  if (!coder) throw new Error('Failed to register coder agent');
+
+  logPhase(io, taskId, coder, 'info', `Iteration: ${message.substring(0, 200)}`);
+  const result = await runAgentTurn(live.agentSession, {
+    taskTitle: task.title,
+    taskDescription: task.description,
+    spec: task.spec,
+    followUp: message,
+    isInitial: false,
+    onLog: (level, msg) => logPhase(io, taskId, coder, level, msg),
+    onToolEvent: (event) => {
+      io.to(`task:${taskId}`).emit('agent:tool-event', {
+        taskId,
+        agentId: coder,
+        ...event,
+      });
+    },
+  });
+
+  const changed = await git.changedFiles(live.repoHandle);
+  logPhase(
+    io,
+    taskId,
+    coder,
+    'info',
+    `Iteration: ${result.toolCallCount} tool calls, ${changed.length} file(s) changed`,
+    undefined,
+    result.summary,
+  );
+  if (changed.length === 0) {
+    logPhase(io, taskId, coder, 'info', 'No file changes this turn — staying on previous commit.');
+    completePhase(io, taskId, coder);
+    setTaskStatus(io, taskId, 'review');
+    const sysMsg = store.addChatMessage(
+      taskId,
+      'liliput',
+      `Done — but the agent didn't change any files this turn. Summary:\n${result.summary}`,
+    );
+    if (sysMsg) io.to(`task:${taskId}`).emit('chat:message', sysMsg);
+    return;
+  }
+
+  // Commit + push delta.
+  const builder = spawnPhase(io, taskId, 'builder', 'Builder Liliputian');
+  if (!builder) throw new Error('Failed to register builder agent');
+
+  logPhase(io, taskId, builder, 'info', 'Committing iteration changes…');
+  const sha = await git.commitAll(
+    live.repoHandle,
+    `iter(agent): ${truncate(message, 60)}\n\n${result.summary}\n\nLiliput iteration on task ${taskId}.`,
+  );
+  store.updateTask(taskId, { commitSha: sha });
+  logPhase(io, taskId, builder, 'info', `Commit ${sha.substring(0, 7)} created`);
+
+  logPhase(io, taskId, builder, 'info', 'Pushing branch…', `git push origin ${live.branch}`);
+  await git.push(live.repoHandle);
+  logPhase(io, taskId, builder, 'info', 'Branch pushed; PR will pick up the new commit automatically.');
+
+  if (!ACR_NAME) {
+    failPhase(io, taskId, builder, 'ACR_NAME env var not set — cannot rebuild image.');
+    throw new Error('ACR_NAME not configured');
+  }
+
+  const tag = sha.substring(0, 12);
+  logPhase(io, taskId, builder, 'info', `Rebuilding image → ${live.imageName}:${tag}…`);
+  const buildStart = Date.now();
+  const buildResult = await acrBuild({
+    cwd: live.repoHandle.cwd,
+    imageName: live.imageName,
+    tag,
+    dockerfile: live.dockerfile,
+  });
+  logPhase(
+    io,
+    taskId,
+    builder,
+    'info',
+    `Image rebuilt in ${Math.round((Date.now() - buildStart) / 1000)}s`,
+    undefined,
+    buildResult.imageRef,
+  );
+  store.updateTask(taskId, { imageRef: buildResult.imageRef });
+  completePhase(io, taskId, coder);
+  completePhase(io, taskId, builder);
+
+  setTaskStatus(io, taskId, 'deploying');
+  const deployer = spawnPhase(io, taskId, 'deployer', 'Deployer Liliputian');
+  if (!deployer) throw new Error('Failed to register deployer agent');
+
+  logPhase(io, taskId, deployer, 'info', `Rolling out new image to ${live.namespace}…`);
+  await deployApp({
+    namespace: live.namespace,
+    appName: 'app',
+    image: buildResult.imageRef,
+    port: live.port,
+    env: { PORT: String(live.port) },
+    pathPrefix: live.pathPrefix,
+  });
+
+  logPhase(io, taskId, deployer, 'info', 'Waiting for new pod to become ready…');
+  const ready = await waitDeploymentReady(live.namespace, 'app', 180_000);
+  if (!ready) {
+    failPhase(io, taskId, deployer, 'Deployment did not become ready within 3 minutes.');
+    throw new Error('Deployment readiness timeout');
+  }
+  completePhase(io, taskId, deployer);
+
+  const devUrl = `${PUBLIC_BASE_URL}${live.pathPrefix}/`;
+  setTaskStatus(io, taskId, 'review', { devUrl });
+
+  const liliputMsg = store.addChatMessage(
+    taskId,
+    'liliput',
+    `🔁 Iteration applied!\n\n• ${changed.length} file(s) changed (commit \`${sha.substring(0, 7)}\`)\n` +
+      `• **Preview:** ${devUrl}\n` +
+      (task.pullRequestUrl ? `• **PR:** ${task.pullRequestUrl}\n` : '') +
+      `\n${result.summary}\n\n💬 Keep chatting to keep iterating, or **Ship** / **Discard** when ready.`,
+  );
+  if (liliputMsg) io.to(`task:${taskId}`).emit('chat:message', liliputMsg);
+}
+
+/** Returns true if a follow-up chat message would trigger an iteration. */
+export function hasLiveSession(taskId: string): boolean {
+  return liveSessions.has(taskId);
+}
+
+function truncate(s: string, n: number): string {
+  return s.length <= n ? s : s.substring(0, n) + '…';
 }
 
 function getToken(): string {
