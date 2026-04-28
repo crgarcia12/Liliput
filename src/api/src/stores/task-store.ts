@@ -1,10 +1,113 @@
-import { v4 as uuid } from 'uuid';
-import type { Task, Agent, AgentRole, ChatMessage, ChatRole } from '../../../shared/types/index.js';
+/**
+ * SQLite-backed Task store.
+ *
+ * Hot fields (id, status, repository, timestamps) are materialised as columns
+ * for filtering/sorting; the rest of each Task/Agent/ChatMessage is round-
+ * tripped as JSON in a `data` column. This keeps schema migrations rare
+ * while letting us index what matters.
+ *
+ * All operations are synchronous (better-sqlite3) — fits Express's request
+ * handlers and matches the previous in-memory API exactly.
+ */
 
-const tasks = new Map<string, Task>();
+import { v4 as uuid } from 'uuid';
+import type {
+  Task,
+  Agent,
+  AgentRole,
+  AgentLogEntry,
+  ChatMessage,
+  ChatRole,
+  CommitMode,
+} from '../../../shared/types/index.js';
+import { getDb } from './db.js';
 
 function now(): string {
   return new Date().toISOString();
+}
+
+// ─── Row helpers ──────────────────────────────────────────────
+
+interface TaskRow {
+  id: string;
+  repository: string | null;
+  status: string;
+  data: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface AgentRow {
+  id: string;
+  task_id: string;
+  position: number;
+  data: string;
+}
+
+interface AgentLogRow {
+  agent_id: string;
+  ts: string;
+  level: string;
+  message: string;
+  command: string | null;
+  output: string | null;
+}
+
+interface ChatRow {
+  id: string;
+  task_id: string;
+  ts: string;
+  data: string;
+}
+
+/** Hydrate an Agent including its logs. */
+function hydrateAgent(row: AgentRow, logs: AgentLogEntry[]): Agent {
+  const base = JSON.parse(row.data) as Omit<Agent, 'logs'>;
+  return { ...base, logs };
+}
+
+/** Hydrate a Task including its agents (+logs) and chat history. */
+function hydrateTask(row: TaskRow): Task {
+  const db = getDb();
+  const base = JSON.parse(row.data) as Omit<Task, 'agents' | 'chatHistory'>;
+
+  const agentRows = db
+    .prepare('SELECT * FROM agents WHERE task_id = ? ORDER BY position ASC')
+    .all(row.id) as AgentRow[];
+
+  const agents: Agent[] = [];
+  if (agentRows.length > 0) {
+    const logsByAgent = new Map<string, AgentLogEntry[]>();
+    const logRows = db
+      .prepare(
+        `SELECT agent_id, ts, level, message, command, output
+           FROM agent_logs
+          WHERE agent_id IN (${agentRows.map(() => '?').join(',')})
+          ORDER BY id ASC`,
+      )
+      .all(...agentRows.map((a) => a.id)) as AgentLogRow[];
+    for (const lr of logRows) {
+      const list = logsByAgent.get(lr.agent_id) ?? [];
+      list.push({
+        timestamp: lr.ts,
+        level: lr.level as AgentLogEntry['level'],
+        message: lr.message,
+        ...(lr.command ? { command: lr.command } : {}),
+        ...(lr.output ? { output: lr.output } : {}),
+      });
+      logsByAgent.set(lr.agent_id, list);
+    }
+    for (const ar of agentRows) {
+      agents.push(hydrateAgent(ar, logsByAgent.get(ar.id) ?? []));
+    }
+  }
+
+  const chatRows = db
+    .prepare('SELECT * FROM chat_messages WHERE task_id = ? ORDER BY ts ASC, id ASC')
+    .all(row.id) as ChatRow[];
+  const chatHistory: ChatMessage[] = chatRows.map((r) => JSON.parse(r.data) as ChatMessage);
+
+  return { ...base, agents, chatHistory } as Task;
 }
 
 // ─── Tasks ───────────────────────────────────────────────────
@@ -13,8 +116,9 @@ export function createTask(
   title: string,
   description: string,
   repository?: string,
-  options: { baseBranch?: string; commitMode?: import('../../../shared/types/index.js').CommitMode } = {},
+  options: { baseBranch?: string; commitMode?: CommitMode } = {},
 ): Task {
+  const ts = now();
   const task: Task = {
     id: uuid(),
     title,
@@ -25,19 +129,38 @@ export function createTask(
     commitMode: options.commitMode ?? 'pr',
     agents: [],
     chatHistory: [],
-    createdAt: now(),
-    updatedAt: now(),
+    createdAt: ts,
+    updatedAt: ts,
   };
-  tasks.set(task.id, task);
+
+  // Strip nested collections before persisting (they live in their own tables).
+  const { agents: _a, chatHistory: _c, ...rest } = task;
+  void _a;
+  void _c;
+
+  getDb()
+    .prepare(
+      `INSERT INTO tasks (id, repository, status, data, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(task.id, task.repository ?? null, task.status, JSON.stringify(rest), ts, ts);
+
   return task;
 }
 
 export function getTask(id: string): Task | undefined {
-  return tasks.get(id);
+  const row = getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(id) as
+    | TaskRow
+    | undefined;
+  if (!row) return undefined;
+  return hydrateTask(row);
 }
 
 export function getTasks(): Task[] {
-  return Array.from(tasks.values());
+  const rows = getDb()
+    .prepare('SELECT * FROM tasks ORDER BY updated_at DESC')
+    .all() as TaskRow[];
+  return rows.map((r) => hydrateTask(r));
 }
 
 export function updateTask(
@@ -52,6 +175,7 @@ export function updateTask(
       | 'branch'
       | 'commitMode'
       | 'pullRequestUrl'
+      | 'pullRequestNumber'
       | 'commitSha'
       | 'imageRef'
       | 'devNamespace'
@@ -60,22 +184,47 @@ export function updateTask(
     >
   >,
 ): Task | undefined {
-  const task = tasks.get(id);
-  if (!task) return undefined;
-  Object.assign(task, updates, { updatedAt: now() });
-  return task;
+  const db = getDb();
+  const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as
+    | TaskRow
+    | undefined;
+  if (!row) return undefined;
+
+  const ts = now();
+  const baseObj = JSON.parse(row.data) as Omit<Task, 'agents' | 'chatHistory'>;
+  const merged = { ...baseObj, ...updates, updatedAt: ts };
+
+  db.prepare(
+    `UPDATE tasks
+        SET repository = ?, status = ?, data = ?, updated_at = ?
+      WHERE id = ?`,
+  ).run(
+    (merged.repository ?? null) as string | null,
+    merged.status,
+    JSON.stringify(merged),
+    ts,
+    id,
+  );
+
+  return hydrateTask({ ...row, repository: merged.repository ?? null, status: merged.status, data: JSON.stringify(merged), updated_at: ts });
 }
 
 export function deleteTask(id: string): boolean {
-  return tasks.delete(id);
+  // FK cascade removes agents, agent_logs, chat_messages.
+  const result = getDb().prepare('DELETE FROM tasks WHERE id = ?').run(id);
+  return result.changes > 0;
 }
 
 // ─── Agents ──────────────────────────────────────────────────
 
 export function addAgent(taskId: string, name: string, role: AgentRole): Agent | undefined {
-  const task = tasks.get(taskId);
-  if (!task) return undefined;
+  const db = getDb();
+  const taskRow = db.prepare('SELECT id FROM tasks WHERE id = ?').get(taskId) as
+    | { id: string }
+    | undefined;
+  if (!taskRow) return undefined;
 
+  const ts = now();
   const agent: Agent = {
     id: uuid(),
     taskId,
@@ -84,11 +233,24 @@ export function addAgent(taskId: string, name: string, role: AgentRole): Agent |
     status: 'idle',
     logs: [],
     progress: 0,
-    createdAt: now(),
-    updatedAt: now(),
+    createdAt: ts,
+    updatedAt: ts,
   };
-  task.agents.push(agent);
-  task.updatedAt = now();
+
+  const { logs: _logs, ...rest } = agent;
+  void _logs;
+
+  const positionRow = db
+    .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS next FROM agents WHERE task_id = ?')
+    .get(taskId) as { next: number };
+
+  db.prepare(
+    `INSERT INTO agents (id, task_id, position, data) VALUES (?, ?, ?, ?)`,
+  ).run(agent.id, taskId, positionRow.next, JSON.stringify(rest));
+
+  // Bump task's updated_at so the tree view re-sorts.
+  db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run(ts, taskId);
+
   return agent;
 }
 
@@ -97,21 +259,50 @@ export function updateAgent(
   agentId: string,
   updates: Partial<Pick<Agent, 'status' | 'currentAction' | 'progress'>>,
 ): Agent | undefined {
-  const task = tasks.get(taskId);
-  if (!task) return undefined;
+  const db = getDb();
+  const row = db
+    .prepare('SELECT * FROM agents WHERE id = ? AND task_id = ?')
+    .get(agentId, taskId) as AgentRow | undefined;
+  if (!row) return undefined;
 
-  const agent = task.agents.find((a: Agent) => a.id === agentId);
-  if (!agent) return undefined;
+  const ts = now();
+  const baseObj = JSON.parse(row.data) as Omit<Agent, 'logs'>;
+  const merged = { ...baseObj, ...updates, updatedAt: ts };
 
-  Object.assign(agent, updates, { updatedAt: now() });
-  task.updatedAt = now();
-  return agent;
+  db.prepare('UPDATE agents SET data = ? WHERE id = ?').run(
+    JSON.stringify(merged),
+    agentId,
+  );
+  db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run(ts, taskId);
+
+  return getAgent(taskId, agentId);
 }
 
 export function getAgent(taskId: string, agentId: string): Agent | undefined {
-  const task = tasks.get(taskId);
-  if (!task) return undefined;
-  return task.agents.find((a: Agent) => a.id === agentId);
+  const db = getDb();
+  const row = db
+    .prepare('SELECT * FROM agents WHERE id = ? AND task_id = ?')
+    .get(agentId, taskId) as AgentRow | undefined;
+  if (!row) return undefined;
+
+  const logRows = db
+    .prepare(
+      `SELECT ts, level, message, command, output
+         FROM agent_logs
+        WHERE agent_id = ?
+        ORDER BY id ASC`,
+    )
+    .all(agentId) as Omit<AgentLogRow, 'agent_id'>[];
+
+  const logs: AgentLogEntry[] = logRows.map((lr) => ({
+    timestamp: lr.ts,
+    level: lr.level as AgentLogEntry['level'],
+    message: lr.message,
+    ...(lr.command ? { command: lr.command } : {}),
+    ...(lr.output ? { output: lr.output } : {}),
+  }));
+
+  return hydrateAgent(row, logs);
 }
 
 export function addAgentLog(
@@ -122,9 +313,16 @@ export function addAgentLog(
   command?: string,
   output?: string,
 ): void {
-  const agent = getAgent(taskId, agentId);
-  if (!agent) return;
-  agent.logs.push({ timestamp: now(), level, message, command, output });
+  const db = getDb();
+  const exists = db
+    .prepare('SELECT 1 AS x FROM agents WHERE id = ? AND task_id = ?')
+    .get(agentId, taskId) as { x: number } | undefined;
+  if (!exists) return;
+
+  db.prepare(
+    `INSERT INTO agent_logs (agent_id, ts, level, message, command, output)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(agentId, now(), level, message, command ?? null, output ?? null);
 }
 
 // ─── Chat ────────────────────────────────────────────────────
@@ -136,30 +334,49 @@ export function addChatMessage(
   agentId?: string,
   agentName?: string,
 ): ChatMessage | undefined {
-  const task = tasks.get(taskId);
-  if (!task) return undefined;
+  const db = getDb();
+  const exists = db.prepare('SELECT 1 AS x FROM tasks WHERE id = ?').get(taskId) as
+    | { x: number }
+    | undefined;
+  if (!exists) return undefined;
 
+  const ts = now();
   const msg: ChatMessage = {
     id: uuid(),
     taskId,
     role,
-    agentId,
-    agentName,
+    ...(agentId ? { agentId } : {}),
+    ...(agentName ? { agentName } : {}),
     content,
-    timestamp: now(),
+    timestamp: ts,
   };
-  task.chatHistory.push(msg);
-  task.updatedAt = now();
+
+  db.prepare(
+    `INSERT INTO chat_messages (id, task_id, ts, data) VALUES (?, ?, ?, ?)`,
+  ).run(msg.id, taskId, ts, JSON.stringify(msg));
+  db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run(ts, taskId);
+
   return msg;
 }
 
 export function getChatHistory(taskId: string): ChatMessage[] {
-  const task = tasks.get(taskId);
-  return task?.chatHistory ?? [];
+  const rows = getDb()
+    .prepare('SELECT * FROM chat_messages WHERE task_id = ? ORDER BY ts ASC, id ASC')
+    .all(taskId) as ChatRow[];
+  return rows.map((r) => JSON.parse(r.data) as ChatMessage);
 }
 
 // ─── Reset (for testing) ────────────────────────────────────
 
 export function resetStore(): void {
-  tasks.clear();
+  // Lazy import to avoid creating a circular dep at module init.
+  // db.ts doesn't import this file, but resetStore is called from setup.ts
+  // before tests, and we want to ensure the DB is initialised.
+  const db = getDb();
+  db.exec(`
+    DELETE FROM agent_logs;
+    DELETE FROM agents;
+    DELETE FROM chat_messages;
+    DELETE FROM tasks;
+  `);
 }

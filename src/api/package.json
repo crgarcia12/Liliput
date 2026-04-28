@@ -8,14 +8,16 @@
     "build": "tsc",
     "start": "node dist/api/src/index.js",
     "lint": "eslint src/ tests/",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:unit": "vitest run tests/unit",
-    "test:integration": "vitest run tests/integration"
+    "test": "node --experimental-require-module ./node_modules/vitest/vitest.mjs run",
+    "test:watch": "node --experimental-require-module ./node_modules/vitest/vitest.mjs",
+    "test:unit": "node --experimental-require-module ./node_modules/vitest/vitest.mjs run tests/unit",
+    "test:integration": "node --experimental-require-module ./node_modules/vitest/vitest.mjs run tests/integration"
   },
   "dependencies": {
     "@github/copilot-sdk": "^0.3.0",
     "@kubernetes/client-node": "^1.4.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "better-sqlite3": "^12.9.0",
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "pino": "^9.7.0",

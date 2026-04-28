@@ -5,6 +5,23 @@ metadata:
   labels:
     azure.workload.identity/use: "true"
 ---
+# ─── Persistent storage for SQLite DB + agent workspaces ───
+# RWO Azure Disk (Standard SSD) — single API pod (Recreate strategy).
+# /data/liliput.db        → SQLite database (sessions persist across pod restarts)
+# /data/workspaces/<task> → cloned repos + Copilot SDK session DBs (resumable)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: liliput-data
+  namespace: liliput
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: managed-csi
+  resources:
+    requests:
+      storage: 4Gi
+---
 # ─── ServiceAccount for the agent (federated to UAMI for ACR push) ───
 apiVersion: v1
 kind: ServiceAccount
@@ -128,6 +145,11 @@ spec:
         azure.workload.identity/use: "true"
     spec:
       serviceAccountName: liliput-agent
+      securityContext:
+        # Node user in our base image is uid 1000; ensure the data PVC is
+        # group-writable by it so SQLite + workspaces work without root.
+        fsGroup: 1000
+        fsGroupChangePolicy: "OnRootMismatch"
       containers:
         - name: api
           image: crgarliliputacr.azurecr.io/liliput-api:latest
@@ -148,7 +170,9 @@ spec:
             - name: ACR_NAME
               value: "crgarliliputacr"
             - name: AGENT_WORKSPACE_ROOT
-              value: "/workspaces"
+              value: "/data/workspaces"
+            - name: DB_PATH
+              value: "/data/liliput.db"
             # GitHub Copilot SDK auth — token rotated via GitHub Actions.
             # Same token is used for git clone/push and PR creation.
             - name: COPILOT_GITHUB_TOKEN
@@ -158,8 +182,8 @@ spec:
                   key: COPILOT_GITHUB_TOKEN
                   optional: true
           volumeMounts:
-            - name: workspaces
-              mountPath: /workspaces
+            - name: data
+              mountPath: /data
             - name: az-cache
               mountPath: /home/node/.azure
           resources:
@@ -172,8 +196,9 @@ spec:
             httpGet: { path: /api/health, port: 8080 }
             initialDelaySeconds: 10
       volumes:
-        - name: workspaces
-          emptyDir: {}
+        - name: data
+          persistentVolumeClaim:
+            claimName: liliput-data
         - name: az-cache
           emptyDir: {}
 ---

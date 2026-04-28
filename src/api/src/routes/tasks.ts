@@ -36,7 +36,8 @@ export function createTasksRouter(
       );
 
       logger.info({ taskId: task.id }, 'Task created');
-      res.status(201).json({ task });
+      const created = store.getTask(task.id) ?? task;
+      res.status(201).json({ task: created });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       logger.error({ err: message }, 'Failed to create task');
