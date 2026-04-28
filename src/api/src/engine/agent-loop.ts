@@ -15,7 +15,9 @@ import { applyEditPlan, isEditPlan, type EditPlan, type ApplyResult } from './ed
 import { logger } from '../logger.js';
 
 const MODEL = process.env['COPILOT_MODEL'] ?? 'claude-sonnet-4';
-const TIMEOUT_MS = parseInt(process.env['AGENT_LOOP_TIMEOUT_MS'] ?? '180000', 10);
+// Default: 10 minutes. Big repos with multi-file edits routinely take 4-6
+// minutes for the LLM to plan the full EditPlan. Override via env if needed.
+const TIMEOUT_MS = parseInt(process.env['AGENT_LOOP_TIMEOUT_MS'] ?? '600000', 10);
 const TREE_MAX_FILES = 200;
 const FILE_PREVIEW_BYTES = 4000;
 

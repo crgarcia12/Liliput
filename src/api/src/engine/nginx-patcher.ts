@@ -19,7 +19,6 @@
  */
 
 import * as k8s from '@kubernetes/client-node';
-import { execInPod } from './k8s-deployer.js';
 
 const NS = 'liliput';
 const CM_NAME = 'nginx-config';
@@ -123,11 +122,11 @@ export async function syncRoutes(routes: DevRoute[]): Promise<void> {
 }
 
 export async function reloadGateway(): Promise<void> {
-  // ConfigMap projected as subPath does NOT auto-update the file inside the pod.
-  // We need to either restart the pod or — for nginx specifically — use the
-  // ConfigMap projection refresh window. The simplest reliable approach is to
-  // delete the pod (Recreate strategy means a new one will start with the
-  // fresh CM mount).
+  // The gateway mounts nginx.conf with `subPath`, which means kubelet does NOT
+  // auto-sync changes from the ConfigMap into the running pod. `nginx -s reload`
+  // would re-read the same stale file and silently no-op. So we ALWAYS delete
+  // the gateway pod after a CM update — its Deployment uses strategy: Recreate,
+  // so a new pod boots up immediately with the fresh CM mounted.
   const core = api();
   const list = await core.listNamespacedPod({
     namespace: NS,
@@ -135,15 +134,6 @@ export async function reloadGateway(): Promise<void> {
   });
   for (const pod of list.items) {
     if (!pod.metadata?.name) continue;
-    try {
-      // Try a lightweight reload via exec first — works only if the CM was
-      // mounted via the projected-volume kubelet update, which typically
-      // happens within ~60s. So the safer fallback is to delete the pod.
-      await execInPod(NS, 'app=liliput-gateway', ['nginx', '-s', 'reload']);
-      return;
-    } catch {
-      // Fall through to pod restart
-    }
     await core.deleteNamespacedPod({ name: pod.metadata.name, namespace: NS });
   }
 }
