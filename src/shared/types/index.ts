@@ -26,6 +26,7 @@ export interface Task {
   branch?: string;            // Working branch the agent commits to
   commitMode?: CommitMode;    // 'pr' (default) or 'direct'
   pullRequestUrl?: string;    // Created PR URL (commitMode='pr') or direct commit URL
+  pullRequestNumber?: number; // PR number (set together with pullRequestUrl)
   commitSha?: string;         // SHA of the agent's last commit
   imageRef?: string;          // ACR image reference built for the dev env
   devNamespace?: string;      // K8s namespace hosting the dev env

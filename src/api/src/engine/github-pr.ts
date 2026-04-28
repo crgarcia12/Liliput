@@ -79,3 +79,57 @@ export async function openPullRequest(
     state: data.state,
   };
 }
+
+/**
+ * Mark a draft PR as ready for review using the GraphQL API.
+ * REST has no endpoint for this — only GraphQL.
+ */
+export async function markPullRequestReady(repo: string, prNumber: number): Promise<void> {
+  const token = getToken();
+  // Need the PR's node_id first
+  const meta = await fetch(`https://api.github.com/repos/${repo}/pulls/${prNumber}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+    },
+  });
+  if (!meta.ok) {
+    throw new Error(`Could not fetch PR #${prNumber}: ${meta.status} ${await meta.text()}`);
+  }
+  const { node_id } = (await meta.json()) as { node_id: string };
+
+  const res = await fetch('https://api.github.com/graphql', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      query: 'mutation($id: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $id }) { pullRequest { isDraft } } }',
+      variables: { id: node_id },
+    }),
+  });
+  const data = (await res.json()) as { errors?: Array<{ message: string }> };
+  if (!res.ok || data.errors?.length) {
+    throw new Error(
+      `Mark-ready failed: ${data.errors?.map((e) => e.message).join('; ') ?? res.statusText}`,
+    );
+  }
+}
+
+/** Close a PR without merging. */
+export async function closePullRequest(repo: string, prNumber: number): Promise<void> {
+  const token = getToken();
+  const res = await fetch(`https://api.github.com/repos/${repo}/pulls/${prNumber}`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ state: 'closed' }),
+  });
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`Close PR failed (${res.status}): ${await res.text()}`);
+  }
+}
