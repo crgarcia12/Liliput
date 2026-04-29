@@ -899,9 +899,13 @@ async function validateDevPreview(
   // Step 4: Decide healthy
   const podsOk =
     pods.length > 0 && pods.every((p) => p.phase === 'Running' && p.ready);
-  // Hard-fail on 5xx / unreachable. 0 means the fetch itself errored.
+  // Hard-fail on 4xx/5xx / unreachable. 0 means the fetch itself errored.
+  // 404 at the dev-preview root means the app doesn't serve its own base path
+  // (typical for missing BASE_PATH wiring), which is "broken" from the user's
+  // perspective even though the pod is alive — treat it as unhealthy and
+  // hand it to the fixer.
   const httpReachable = httpError === null && httpStatus > 0;
-  const httpOk = httpReachable && httpStatus < 500;
+  const httpOk = httpReachable && httpStatus < 400;
   const healthy = podsOk && httpOk;
 
   let summary: string;
@@ -918,8 +922,10 @@ async function validateDevPreview(
           : `Pods unstable`;
   } else if (httpError) {
     summary = `HTTP probe of ${devUrl} failed: ${httpError.slice(0, 120)}`;
-  } else {
+  } else if (httpStatus >= 500) {
     summary = `HTTP ${httpStatus} from ${devUrl} (5xx — upstream broken)`;
+  } else {
+    summary = `HTTP ${httpStatus} from ${devUrl} (4xx — app likely doesn't serve its base path)`;
   }
 
   const diagnostics = [
