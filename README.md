@@ -178,6 +178,150 @@ The Liliput backend runs as a single pod on AKS. Multiple Liliputians can be in 
 
 ---
 
+## Inside the container
+
+Liliput on AKS is **three deployments + one PVC** under the `liliput` namespace, fronted by a single LoadBalancer:
+
+```mermaid
+graph LR
+    User((User<br/>browser))
+
+    subgraph AKS["AKS namespace: liliput"]
+        direction TB
+
+        subgraph GW["liliput-gateway pod"]
+            NGINX[nginx<br/>:80]
+        end
+
+        subgraph WEB["liliput-web pod"]
+            NEXT[Next.js<br/>:3000]
+        end
+
+        subgraph APIPOD["liliput-api pod (the brain)"]
+            direction TB
+            NODE[node dist/api/src/index.js<br/>:8080]
+            AZ[azure-cli + git<br/>installed in image]
+            NODE -.- AZ
+        end
+
+        PVC[("PVC liliput-data<br/>4 Gi managed-csi<br/>RWO Azure Disk")]
+        SA[ServiceAccount liliput-agent<br/>federated to UAMI<br/>workload identity]
+    end
+
+    ACR[(Azure Container<br/>Registry<br/>crgarliliputacr)]
+    AKSAPI[Kubernetes API<br/>cluster admin scope]
+
+    User -->|http :80| NGINX
+    NGINX -->|/api, /socket.io| NODE
+    NGINX -->|/| NEXT
+    APIPOD -.mounts.-> PVC
+    APIPOD -.uses.-> SA
+    SA -->|az acr build, push| ACR
+    SA -->|kubectl apply for previews| AKSAPI
+```
+
+The gateway and web pods are stateless and trivial. **All the interesting state lives in the API pod**, which is the only one with the PVC mounted.
+
+### Image — what gets baked in
+
+The API container is a 3-stage Dockerfile that produces a slim runtime image with everything a Liliputian needs to do its job:
+
+```mermaid
+graph TD
+    subgraph BUILD["Build time (multi-stage)"]
+        S1["1️⃣ deps stage<br/>npm ci --omit=dev<br/>→ production node_modules"]
+        S2["2️⃣ build stage<br/>npm ci + tsc<br/>→ dist/"]
+        S3["3️⃣ runner stage<br/>copy node_modules + dist<br/>+ install azure-cli"]
+        S1 --> S3
+        S2 --> S3
+    end
+
+    subgraph IMG["Final image (mcr.microsoft.com/devcontainers/javascript-node:22-bookworm)"]
+        APP["/app<br/>├─ dist/api/src/index.js  ← entrypoint<br/>├─ node_modules/<br/>└─ package.json"]
+        BIN["Binaries pre-installed:<br/>• node 22<br/>• git (from base image)<br/>• az CLI (added in runner stage)"]
+        WS["/workspaces<br/>(empty mount point,<br/>chowned to node:1000)"]
+    end
+
+    S3 --> IMG
+```
+
+**Why these tools?** Each one is something the agent runtime needs to invoke directly:
+
+| Tool | Why it's in the image |
+|---|---|
+| `node` 22 | Runs the API + the Copilot SDK (the SDK is a Node library) |
+| `git` | Cloning target repos, committing/pushing the agent's work |
+| `az` CLI | `az acr build` to build container images for the agent's preview deployments |
+| `kubectl` would be next | Currently invoked via `az aks` — pods authenticate via workload identity |
+
+### Runtime — filesystem layout when the pod is running
+
+When the API pod is running, it looks like this from the inside:
+
+```
+/                                    (read-only base image layers)
+├── app/                              ← WORKDIR, owned by node:1000
+│   ├── dist/api/src/index.js         ← entrypoint (CMD)
+│   ├── node_modules/                 ← prod deps (incl. @github/copilot-sdk, better-sqlite3, …)
+│   └── package.json
+│
+├── data/                             ← PVC mount (4 Gi, RWO Azure Disk, persistent)
+│   ├── liliput.db                    ← SQLite — tasks, sessions, agent_logs, chat
+│   └── workspaces/
+│       ├── task-abc123/              ← per-task: clone of target repo
+│       │   ├── .git/
+│       │   ├── src/...               ← agent edits files here
+│       │   └── ...
+│       ├── task-def456/
+│       └── …                          ← one directory per task; survives pod restart
+│
+├── home/node/.azure/                 ← emptyDir (NOT persisted)
+│   └── …                              ← az CLI token cache, workload-identity stuff
+│
+└── workspaces/                       ← legacy mount point (now /data/workspaces is used)
+```
+
+Two volumes are attached:
+
+- **`/data`** → `liliput-data` PVC (4 Gi managed-csi, ReadWriteOnce). The SQLite DB and every cloned repo live here. **This survives pod restarts** — that's why dashboard state and uncommitted agent work aren't lost when the deployment rolls.
+- **`/home/node/.azure`** → `emptyDir` (lost on pod restart). Only holds the az CLI's token cache; the actual identity comes from workload-identity tokens injected by AKS, so a restart just re-fetches them.
+
+### Process tree inside the API pod
+
+It's deliberately simple — one Node process, with the agent runtime spawning short-lived `git` and `az` children as needed:
+
+```mermaid
+graph TD
+    PID1["PID 1 — node dist/api/src/index.js<br/>• Express :8080<br/>• socket.io<br/>• better-sqlite3 → /data/liliput.db<br/>• Copilot SDK sessions (in-process)<br/>• inFlightAgents registry (in-memory)"]
+
+    PID1 -->|spawns per-task| GIT["git clone / commit / push<br/>cwd = /data/workspaces/task-xxx"]
+    PID1 -->|spawns per-build| AZ["az acr build<br/>az aks get-credentials<br/>az ... apply for previews"]
+    PID1 -->|in-process<br/>(no subprocess)| SDK["@github/copilot-sdk<br/>session.sendAndWait(...)<br/>↳ HTTPS to Copilot API<br/>↳ event stream → UI"]
+
+    style SDK fill:#f0f8ff,stroke:#4169e1
+```
+
+Important consequences:
+
+- The Copilot SDK runs **in-process** with the API. It's not a subprocess and not a sidecar — it's a Node library call. That's why `inFlightAgents` is just a `Map<taskId, session>` in memory, and why a pod restart kills every in-flight Liliputian instantly.
+- `git` and `az` are subprocesses. The agent's `bash` tool calls (`session.sendAndWait` → SDK runs `bash`) are also subprocesses spawned by the SDK in the cloned repo's working directory.
+- The pod requests very little CPU (10m) but is allowed to burst to 1 CPU / 1 Gi RAM during a build. Most of the time it's idle waiting on the Copilot API.
+
+### Identity and what it can do
+
+The pod runs under the `liliput-agent` ServiceAccount, federated to an Azure UAMI via workload identity. That identity:
+
+| Action | How it's authorized |
+|---|---|
+| `az acr build` / push to `crgarliliputacr` | UAMI has `AcrPush` on the registry |
+| `kubectl apply` for preview deployments | ClusterRole `liliput-agent` (manage namespaces / deployments / services / configmaps / secrets / pods) |
+| `git clone` / `git push` / open PRs | `COPILOT_GITHUB_TOKEN` from the `liliput-secrets` Secret |
+| Copilot SDK API calls | Same `COPILOT_GITHUB_TOKEN` (the SDK reads it from env) |
+
+There is intentionally **no separate "agent identity"** — the API pod *is* the agent runtime, so giving the pod the right RBAC is the same as giving each Liliputian the right RBAC.
+
+---
+
 ## License
 
 [ISC](LICENSE)
