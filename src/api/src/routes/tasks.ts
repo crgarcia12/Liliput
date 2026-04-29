@@ -91,6 +91,10 @@ export function createTasksRouter(
       // Record the user (Gulliver) message
       const userMsg = store.addChatMessage(task.id, 'gulliver', message);
       io.to(`task:${task.id}`).emit('chat:message', userMsg);
+      logger.info(
+        { taskId: task.id, status: task.status, msgPreview: message.substring(0, 80) },
+        'Chat message received',
+      );
 
       // Auto-respond based on status
       if (task.status === 'clarifying') {
@@ -129,18 +133,19 @@ export function createTasksRouter(
             io.to(`task:${task.id}`).emit('chat:message', sysMsg);
           });
       } else if (
-        (task.status === 'review' || task.status === 'completed') &&
+        (task.status === 'review' || task.status === 'completed' || task.status === 'failed') &&
         canIterate(task.id)
       ) {
         // Follow-up: iterate on the same workspace + branch + PR.
         // canIterate also matches when the in-memory session was lost (pod
         // restart) but the task has enough persisted metadata for us to
-        // resurrect it inside iterateTask.
-        const ackMsg = store.addChatMessage(
-          task.id,
-          'liliput',
-          '🔁 Iterating on the same branch — running another agent turn…',
-        );
+        // resurrect it inside iterateTask. 'failed' tasks are also iterable
+        // so the user can chat their way out of a broken build.
+        const ackText =
+          task.status === 'failed'
+            ? '🩹 Last run failed — picking it back up on the same branch and trying again with your message…'
+            : '🔁 Iterating on the same branch — running another agent turn…';
+        const ackMsg = store.addChatMessage(task.id, 'liliput', ackText);
         if (ackMsg) io.to(`task:${task.id}`).emit('chat:message', ackMsg);
         iterateTask(io, task.id, message);
       } else if (hasInFlightAgent(task.id) && enqueueChatForAgent(task.id, message)) {
@@ -154,10 +159,16 @@ export function createTasksRouter(
         );
         if (ackMsg) io.to(`task:${task.id}`).emit('chat:message', ackMsg);
       } else {
+        const reason = !task.repository
+          ? `repository is not set on this task`
+          : !task.branch
+          ? `branch is not set yet (the agent hasn't created one)`
+          : `task is in "${task.status}" status which doesn't support chat iteration`;
+        logger.info({ taskId: task.id, status: task.status, reason }, 'Chat received but task is not iterable');
         const sysMsg = store.addChatMessage(
           task.id,
           'liliput',
-          `Noted! The task is currently in "${task.status}" status.`,
+          `⚠️ I can't act on this message right now: ${reason}.`,
         );
         io.to(`task:${task.id}`).emit('chat:message', sysMsg);
       }

@@ -1299,7 +1299,10 @@ export function canIterate(taskId: string): boolean {
   if (liveSessions.has(taskId)) return true;
   const t = store.getTask(taskId);
   if (!t) return false;
-  if (t.status !== 'review' && t.status !== 'completed') return false;
+  // Allow iteration on review/completed (normal follow-up) AND failed (recovery).
+  // 'failed' tasks still have a real branch + workspace, so the user can chat
+  // their way back to a green build instead of starting over from scratch.
+  if (t.status !== 'review' && t.status !== 'completed' && t.status !== 'failed') return false;
   return Boolean(t.repository && t.branch);
 }
 
