@@ -1,7 +1,22 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Agent, AgentRole, AgentStatus } from '@shared/types';
+
+function LastActive({ iso }: { iso: string }) {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => force((x) => x + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const ms = Date.now() - new Date(iso).getTime();
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 5) return <span className="text-green-400">just now</span>;
+  if (s < 60) return <span>{s}s ago</span>;
+  const m = Math.floor(s / 60);
+  if (m < 60) return <span className={s > 120 ? 'text-yellow-400' : ''}>{m}m {s % 60}s ago</span>;
+  return <span className="text-red-400">{Math.floor(m / 60)}h {m % 60}m ago</span>;
+}
 
 interface AgentPanelProps {
   agents: Agent[];
@@ -78,8 +93,14 @@ export default function AgentPanel({ agents }: AgentPanelProps) {
             </div>
 
             {agent.currentAction && (
-              <p className="text-xs text-gray-400 mt-1 truncate">
+              <p className="text-xs text-gray-300 mt-1 truncate" title={agent.currentAction}>
                 {agent.currentAction}
+              </p>
+            )}
+
+            {agent.status === 'working' && (
+              <p className="text-[10px] text-gray-500 mt-1">
+                last activity: <LastActive iso={agent.updatedAt} />
               </p>
             )}
 

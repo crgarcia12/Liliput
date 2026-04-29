@@ -152,21 +152,27 @@ async function drainPendingChatMessages(
       `User sent a new message while you were working. Stop your previous task ` +
       `and address this instead:\n\n${msg}`;
     try {
-      const result = await runAgentTurn(inFlight.agentSession, {
-        taskTitle: inFlight.taskTitle,
-        taskDescription: inFlight.taskDescription,
-        spec: inFlight.spec,
-        followUp,
-        isInitial: false,
-        onLog: (level, m, cmd, out) => logPhase(io, taskId, agentId, level, m, cmd, out),
-        onToolEvent: (event) => {
-          io.to(`task:${taskId}`).emit('agent:tool-event', {
-            taskId,
-            agentId,
-            ...event,
-          });
-        },
-      });
+      const hb = startHeartbeat(io, taskId, agentId);
+      let result;
+      try {
+        result = await runAgentTurn(inFlight.agentSession, {
+          taskTitle: inFlight.taskTitle,
+          taskDescription: inFlight.taskDescription,
+          spec: inFlight.spec,
+          followUp,
+          isInitial: false,
+          onLog: (level, m, cmd, out) => {
+            hb.bump();
+            logPhase(io, taskId, agentId, level, m, cmd, out);
+          },
+          onToolEvent: (event) => {
+            hb.bump();
+            recordToolEvent(io, taskId, agentId, event);
+          },
+        });
+      } finally {
+        hb.stop();
+      }
       const sysMsg = store.addChatMessage(taskId, 'liliput', result.summary);
       if (sysMsg) io.to(`task:${taskId}`).emit('chat:message', sysMsg);
     } catch (err) {
@@ -312,6 +318,108 @@ function chatStatus(io: SocketServer, taskId: string, text: string): void {
   if (msg) io.to(`task:${taskId}`).emit('chat:message', msg);
 }
 
+/**
+ * Single funnel for every SDK tool-event. Replaces the ad-hoc `io.emit(
+ * 'agent:tool-event', …)` pattern. It:
+ *
+ *   1. Updates the agent's `currentAction` so the AgentPanel reflects the
+ *      live tool / message / reasoning summary.
+ *   2. Persists meaningful events to `activity_entries` so they survive
+ *      page reloads (only socket-emitted events were visible before).
+ *   3. Emits the live `agent:tool-event` socket message — same shape the
+ *      frontend already consumes.
+ *
+ * Without this, you had no way to tell from the UI whether an agent was
+ * working on tool call #50 or had been thinking silently for 5 minutes.
+ */
+function recordToolEvent(
+  io: SocketServer,
+  taskId: string,
+  agentId: string,
+  event: { kind: string; tool?: string; summary: string; details?: string; timestamp?: string; callId?: string },
+): void {
+  const ts = event.timestamp ?? new Date().toISOString();
+
+  io.to(`task:${taskId}`).emit('agent:tool-event', {
+    taskId,
+    agentId,
+    ...event,
+    timestamp: ts,
+  });
+
+  // Drive the agent's currentAction so AgentPanel shows what it's doing now.
+  // tool-complete usually clears the action (we set it to a short ✓ snippet).
+  // Skip noisy 'tool-complete' with empty summaries (already filtered in UI but
+  // this also prevents a no-op DB write).
+  const isNoiseyComplete = event.kind === 'tool-complete' && (!event.summary || event.summary === '✓ ');
+  if (!isNoiseyComplete) {
+    const action = truncateAction(event.summary);
+    if (action) {
+      store.updateAgent(taskId, agentId, { currentAction: action });
+      io.to(`task:${taskId}`).emit('agent:status', {
+        taskId,
+        agentId,
+        status: 'working',
+        currentAction: action,
+        timestamp: ts,
+      });
+    }
+  }
+
+  // Persist to activity_entries for the Live Activity panel — but skip the
+  // noisiest events so the feed stays scannable.
+  if (isNoiseyComplete) return;
+  if (event.kind === 'reasoning' && !event.summary) return;
+  store.addActivityEntry(taskId, {
+    kind: 'agent-log',
+    agentId,
+    level: event.kind === 'error' ? 'error' : 'info',
+    message: event.summary,
+    timestamp: ts,
+    ...(event.tool ? { command: event.tool } : {}),
+    // Keep details out of the persisted row to keep payload small; live
+    // socket events still carry full details for the UI panel.
+  });
+}
+
+function truncateAction(s: string): string {
+  if (!s) return '';
+  const oneLine = s.split('\n')[0] ?? '';
+  return oneLine.length > 120 ? oneLine.slice(0, 117) + '…' : oneLine;
+}
+
+/**
+ * Wrap an agent turn with a heartbeat: every `intervalMs` of silence
+ * (no tool / message / reasoning event), emit a "💭 still thinking…" so
+ * the user knows the SDK call is alive even when the model is slow to
+ * react. The heartbeat resets every time `bump()` is called from the
+ * shared event handler.
+ */
+function startHeartbeat(
+  io: SocketServer,
+  taskId: string,
+  agentId: string,
+  intervalMs = 30_000,
+): { bump: () => void; stop: () => void } {
+  let lastEvent = Date.now();
+  const timer = setInterval(() => {
+    const idle = Date.now() - lastEvent;
+    if (idle < intervalMs) return;
+    lastEvent = Date.now();
+    const secs = Math.round(idle / 1000);
+    recordToolEvent(io, taskId, agentId, {
+      kind: 'reasoning',
+      summary: `💭 still thinking… (${secs}s of silence)`,
+    });
+  }, intervalMs);
+  return {
+    bump: () => {
+      lastEvent = Date.now();
+    },
+    stop: () => clearInterval(timer),
+  };
+}
+
 // ─── Fixer-driven scripted ops ────────────────────────────────────────
 //
 // The scripted `acrBuild` and `deployApp` are still the source of truth —
@@ -410,8 +518,7 @@ async function buildWithFixer(ctx: BuildContext): Promise<BuildOutcome> {
             imageRef: `${ACR_NAME}.azurecr.io/${ctx.imageName}:${tag}`,
           },
           onLog: (level, msg, cmd, out) => logPhase(ctx.io, ctx.taskId, fixer, level, msg, cmd, out),
-          onToolEvent: (event) =>
-            ctx.io.to(`task:${ctx.taskId}`).emit('agent:tool-event', { taskId: ctx.taskId, agentId: fixer, ...event }),
+          onToolEvent: (event) => recordToolEvent(ctx.io, ctx.taskId, fixer, event),
         });
       } catch (fixerErr) {
         const m = fixerErr instanceof Error ? fixerErr.message : String(fixerErr);
@@ -552,8 +659,7 @@ async function deployWithFixer(ctx: DeployContext): Promise<DeployOutcome> {
             imageRef,
           },
           onLog: (level, msg, cmd, out) => logPhase(ctx.io, ctx.taskId, fixer, level, msg, cmd, out),
-          onToolEvent: (event) =>
-            ctx.io.to(`task:${ctx.taskId}`).emit('agent:tool-event', { taskId: ctx.taskId, agentId: fixer, ...event }),
+          onToolEvent: (event) => recordToolEvent(ctx.io, ctx.taskId, fixer, event),
         });
       } catch (fixerErr) {
         const m = fixerErr instanceof Error ? fixerErr.message : String(fixerErr);
@@ -682,20 +788,26 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
     spec: task.spec,
   });
   logPhase(io, taskId, coder, 'info', 'Invoking LLM agent loop…');
-  const result = await runAgentTurn(agentSession, {
-    taskTitle: task.title,
-    taskDescription: task.description,
-    spec: task.spec,
-    isInitial: true,
-    onLog: (level, msg, cmd, out) => logPhase(io, taskId, coder, level, msg, cmd, out),
-    onToolEvent: (event) => {
-      io.to(`task:${taskId}`).emit('agent:tool-event', {
-        taskId,
-        agentId: coder,
-        ...event,
-      });
-    },
-  });
+  const hb = startHeartbeat(io, taskId, coder);
+  let result;
+  try {
+    result = await runAgentTurn(agentSession, {
+      taskTitle: task.title,
+      taskDescription: task.description,
+      spec: task.spec,
+      isInitial: true,
+      onLog: (level, msg, cmd, out) => {
+        hb.bump();
+        logPhase(io, taskId, coder, level, msg, cmd, out);
+      },
+      onToolEvent: (event) => {
+        hb.bump();
+        recordToolEvent(io, taskId, coder, event);
+      },
+    });
+  } finally {
+    hb.stop();
+  }
   await drainPendingChatMessages(io, taskId, coder);
 
   const changedFiles = await git.changedFiles(handle);
@@ -1158,21 +1270,27 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
 
   chatStatus(io, taskId, `🛠️  Coder Liliputian is reading your message and editing files — this can take a few minutes…`);
   logPhase(io, taskId, coder, 'info', `Iteration: ${message.substring(0, 200)}`);
-  const result = await runAgentTurn(live.agentSession, {
-    taskTitle: task.title,
-    taskDescription: task.description,
-    spec: task.spec,
-    followUp: message,
-    isInitial: false,
-    onLog: (level, msg, cmd, out) => logPhase(io, taskId, coder, level, msg, cmd, out),
-    onToolEvent: (event) => {
-      io.to(`task:${taskId}`).emit('agent:tool-event', {
-        taskId,
-        agentId: coder,
-        ...event,
-      });
-    },
-  });
+  const hb = startHeartbeat(io, taskId, coder);
+  let result;
+  try {
+    result = await runAgentTurn(live.agentSession, {
+      taskTitle: task.title,
+      taskDescription: task.description,
+      spec: task.spec,
+      followUp: message,
+      isInitial: false,
+      onLog: (level, msg, cmd, out) => {
+        hb.bump();
+        logPhase(io, taskId, coder, level, msg, cmd, out);
+      },
+      onToolEvent: (event) => {
+        hb.bump();
+        recordToolEvent(io, taskId, coder, event);
+      },
+    });
+  } finally {
+    hb.stop();
+  }
   await drainPendingChatMessages(io, taskId, coder);
 
   const changed = await git.changedFiles(live.repoHandle);
