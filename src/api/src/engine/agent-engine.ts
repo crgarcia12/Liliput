@@ -840,12 +840,18 @@ async function validateDevPreview(
   let httpStatus = 0;
   let httpBodySnippet = '';
   let httpError: string | null = null;
+  let httpFinalUrl = '';
+  let httpRedirected = false;
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 10_000);
     try {
-      const r = await fetch(devUrl, { signal: ctrl.signal, redirect: 'manual' });
+      // Follow redirects (default). A 302 to a broken target is NOT healthy —
+      // we want the final response. fetch follows up to 20 redirects by default.
+      const r = await fetch(devUrl, { signal: ctrl.signal, redirect: 'follow' });
       httpStatus = r.status;
+      httpFinalUrl = r.url;
+      httpRedirected = r.redirected;
       const body = await r.text();
       httpBodySnippet = body.slice(0, 500);
     } finally {
@@ -905,12 +911,34 @@ async function validateDevPreview(
   // perspective even though the pod is alive — treat it as unhealthy and
   // hand it to the fixer.
   const httpReachable = httpError === null && httpStatus > 0;
-  const httpOk = httpReachable && httpStatus < 400;
+  // Only 2xx counts as healthy. With redirect:'follow', any 3xx that resolved
+  // to a 2xx is reported as 2xx; any 3xx surfaced here means the redirect
+  // chain ended at a 3xx (rare) or hit max-redirects — treat as unhealthy.
+  // ALSO: if the redirect chain leaves the dev preview's own base path, the
+  // app is misbehaving (e.g. redirecting users to / and getting Liliput's
+  // homepage, which is a 200 but completely wrong). Treat as unhealthy.
+  const devBase = (() => {
+    try {
+      const u = new URL(devUrl);
+      return `${u.origin}${u.pathname.endsWith('/') ? u.pathname : u.pathname + '/'}`;
+    } catch {
+      return devUrl;
+    }
+  })();
+  const finalStaysInBase = httpFinalUrl
+    ? httpFinalUrl.startsWith(devBase) || httpFinalUrl + '/' === devBase
+    : true;
+  const httpOk =
+    httpReachable && httpStatus >= 200 && httpStatus < 300 && finalStaysInBase;
   const healthy = podsOk && httpOk;
+
+  const finalUrlNote = httpRedirected && httpFinalUrl && httpFinalUrl !== devUrl
+    ? ` (redirected → ${httpFinalUrl})`
+    : '';
 
   let summary: string;
   if (healthy) {
-    summary = `Pods Ready, HTTP ${httpStatus} from ${devUrl}`;
+    summary = `Pods Ready, HTTP ${httpStatus} from ${devUrl}${finalUrlNote}`;
   } else if (!podsOk) {
     const bad = pods.filter((p) => p.phase !== 'Running' || !p.ready);
     summary =
@@ -922,15 +950,22 @@ async function validateDevPreview(
           : `Pods unstable`;
   } else if (httpError) {
     summary = `HTTP probe of ${devUrl} failed: ${httpError.slice(0, 120)}`;
+  } else if (!finalStaysInBase) {
+    summary = `HTTP ${httpStatus} from ${devUrl} but redirected OUT of its base path → ${httpFinalUrl} (app is sending users away from its own preview URL — usually missing BASE_PATH wiring on the redirect)`;
   } else if (httpStatus >= 500) {
-    summary = `HTTP ${httpStatus} from ${devUrl} (5xx — upstream broken)`;
+    summary = `HTTP ${httpStatus} from ${devUrl}${finalUrlNote} (5xx — upstream broken)`;
+  } else if (httpStatus >= 400) {
+    summary = `HTTP ${httpStatus} from ${devUrl}${finalUrlNote} (4xx — app likely doesn't serve its base path)`;
+  } else if (httpStatus >= 300) {
+    summary = `HTTP ${httpStatus} from ${devUrl}${finalUrlNote} (3xx — redirect chain didn't resolve to a usable page)`;
   } else {
-    summary = `HTTP ${httpStatus} from ${devUrl} (4xx — app likely doesn't serve its base path)`;
+    summary = `HTTP ${httpStatus} from ${devUrl}${finalUrlNote} (unexpected status)`;
   }
 
   const diagnostics = [
     '=== HTTP probe ===',
     `URL: ${devUrl}`,
+    httpRedirected && httpFinalUrl ? `Final URL after redirects: ${httpFinalUrl}` : '',
     httpError
       ? `Error: ${httpError}`
       : `Status: ${httpStatus}\nBody (first 500 chars):\n${httpBodySnippet || '(empty body)'}`,
