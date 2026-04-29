@@ -257,6 +257,16 @@ function setTaskStatus(
   io.to(`task:${taskId}`).emit('task:status', { taskId, status, ...extra });
 }
 
+/**
+ * Emit a short progress message into the task chat. Used during long-running
+ * iteration phases so the user sees something happening between "🔁 Iterating…"
+ * and the final "✅ Iteration applied!" instead of silence.
+ */
+function chatStatus(io: SocketServer, taskId: string, text: string): void {
+  const msg = store.addChatMessage(taskId, 'liliput', text);
+  if (msg) io.to(`task:${taskId}`).emit('chat:message', msg);
+}
+
 // ─── Fixer-driven scripted ops ────────────────────────────────────────
 //
 // The scripted `acrBuild` and `deployApp` are still the source of truth —
@@ -999,14 +1009,55 @@ export async function discardTask(io: SocketServer, taskId: string): Promise<Tas
 
 /**
  * Disconnects the SDK session for a task and removes the workspace from disk.
- * Safe to call when no live session exists.
+ * Safe to call when no live session exists — in that case it still purges any
+ * orphaned `task-<id>` workspace directory the previous pod left behind.
  */
 async function tearDownLiveSession(taskId: string): Promise<void> {
   const live = liveSessions.get(taskId);
-  if (!live) return;
-  liveSessions.delete(taskId);
-  await disposeAgentSession(live.agentSession);
-  await git.cleanup(live.repoHandle);
+  if (live) {
+    liveSessions.delete(taskId);
+    await disposeAgentSession(live.agentSession);
+    await git.cleanup(live.repoHandle);
+  }
+  // Always try to remove the deterministic workspace path — it may exist on
+  // disk from a previous pod incarnation even when no in-memory session does.
+  await git.removeWorkspaceDir(`task-${taskId}`);
+}
+
+/**
+ * One-shot pass at startup: delete on-disk `task-*` workspaces whose task no
+ * longer needs them (shipped, discarded, failed, or absent from the store).
+ * Frees PVC space that would otherwise leak across pod restarts.
+ */
+export async function purgeOrphanWorkspaces(): Promise<{ removed: number; kept: number }> {
+  const dirs = await git.listWorkspaceDirs();
+  let removed = 0;
+  let kept = 0;
+  for (const dir of dirs) {
+    const m = /^task-([0-9a-fA-F-]{8,})$/.exec(dir);
+    if (!m) {
+      // Unknown layout (e.g. legacy `repo-slug-uuid-resurrect-…` dirs from
+      // pre-fix builds) — always remove.
+      await git.removeWorkspaceDir(dir);
+      removed += 1;
+      logger.info({ dir }, 'Purged unrecognised workspace directory');
+      continue;
+    }
+    const taskId = m[1]!;
+    const task = store.getTask(taskId);
+    const terminal = !task || task.status === 'completed' || task.status === 'discarded' || task.status === 'failed';
+    if (terminal) {
+      await git.removeWorkspaceDir(dir);
+      removed += 1;
+      logger.info({ taskId, status: task?.status ?? 'missing' }, 'Purged orphan workspace');
+    } else {
+      kept += 1;
+    }
+  }
+  if (removed > 0 || kept > 0) {
+    logger.info({ removed, kept }, 'Workspace orphan purge complete');
+  }
+  return { removed, kept };
 }
 
 /**
@@ -1060,6 +1111,7 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
     spec: task.spec,
   });
 
+  chatStatus(io, taskId, `🛠️  Coder Liliputian is reading your message and editing files — this can take a few minutes…`);
   logPhase(io, taskId, coder, 'info', `Iteration: ${message.substring(0, 200)}`);
   const result = await runAgentTurn(live.agentSession, {
     taskTitle: task.title,
@@ -1105,6 +1157,11 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   const builder = spawnPhase(io, taskId, 'builder', 'Builder Liliputian');
   if (!builder) throw new Error('Failed to register builder agent');
 
+  chatStatus(
+    io,
+    taskId,
+    `📦 Coder finished — ${result.toolCallCount} tool call(s), ${changed.length} file(s) changed. Committing & building image…`,
+  );
   logPhase(io, taskId, builder, 'info', 'Committing iteration changes…');
   let iterCommitFixerAgent: string | undefined;
   const sha = await runGitOpWithFixer<string>({
@@ -1190,6 +1247,8 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   completePhase(io, taskId, coder);
   completePhase(io, taskId, builder);
 
+  chatStatus(io, taskId, `🚀 Image \`${buildOutcome.imageRef.split('/').pop()}\` built. Rolling preview deployment…`);
+
   setTaskStatus(io, taskId, 'deploying');
   const deployer = spawnPhase(io, taskId, 'deployer', 'Deployer Liliputian');
   if (!deployer) throw new Error('Failed to register deployer agent');
@@ -1266,7 +1325,7 @@ async function resurrectLiveSession(
     taskId,
     'liliput',
     `🪦→🧟 The previous agent session was lost (likely a pod restart). ` +
-      `Resurrecting it by re-cloning \`${task.repository}@${task.branch}\` — give me a moment…`,
+      `Resurrecting it from \`${task.repository}@${task.branch}\` — give me a moment…`,
   );
   if (ackMsg) io.to(`task:${taskId}`).emit('chat:message', ackMsg);
 
@@ -1274,22 +1333,38 @@ async function resurrectLiveSession(
   if (!phaseAgent) throw new Error('Failed to register resurrector agent');
 
   try {
-    logPhase(
-      io,
-      taskId,
-      phaseAgent,
-      'info',
-      `Re-cloning ${task.repository}@${task.branch}…`,
-      `git clone --branch ${task.branch} ${task.repository}`,
-    );
-    const repoSlug = task.repository.replace(/\//g, '-');
-    const handle = await git.clone({
+    const workdirName = `task-${taskId}`;
+    let handle = await git.tryOpenExisting({
       repo: task.repository,
       ref: task.branch,
-      workdirName: `${repoSlug}-${taskId}-resurrect-${Date.now().toString(36)}`,
+      workdirName,
       onLog: (m) => logPhase(io, taskId, phaseAgent, 'info', m),
     });
-    logPhase(io, taskId, phaseAgent, 'info', `Cloned to ${handle.cwd}`);
+    if (handle) {
+      logPhase(io, taskId, phaseAgent, 'info', `♻️  Reused existing workspace at ${handle.cwd}`);
+      const reuseMsg = store.addChatMessage(
+        taskId,
+        'liliput',
+        `♻️  Reusing existing workspace on disk — no full re-clone needed.`,
+      );
+      if (reuseMsg) io.to(`task:${taskId}`).emit('chat:message', reuseMsg);
+    } else {
+      logPhase(
+        io,
+        taskId,
+        phaseAgent,
+        'info',
+        `Re-cloning ${task.repository}@${task.branch}…`,
+        `git clone --branch ${task.branch} ${task.repository}`,
+      );
+      handle = await git.clone({
+        repo: task.repository,
+        ref: task.branch,
+        workdirName,
+        onLog: (m) => logPhase(io, taskId, phaseAgent, 'info', m),
+      });
+      logPhase(io, taskId, phaseAgent, 'info', `Cloned to ${handle.cwd}`);
+    }
 
     logPhase(io, taskId, phaseAgent, 'info', 'Resolving Dockerfile…');
     const df = await resolveDockerfile(handle.cwd);
@@ -1332,8 +1407,8 @@ async function resurrectLiveSession(
     const okMsg = store.addChatMessage(
       taskId,
       'liliput',
-      `✅ Resurrected. Branch \`${task.branch}\` re-cloned, SDK session recreated. ` +
-        `Note: I don't remember our previous conversation, so feel free to recap if needed. Now applying your message…`,
+      `✅ Resurrected. SDK session recreated on branch \`${task.branch}\`. ` +
+        `Note: I don't remember our previous conversation, so feel free to recap. Now applying your message…`,
     );
     if (okMsg) io.to(`task:${taskId}`).emit('chat:message', okMsg);
 

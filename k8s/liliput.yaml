@@ -20,7 +20,7 @@ spec:
   storageClassName: managed-csi
   resources:
     requests:
-      storage: 4Gi
+      storage: 20Gi
 ---
 # ─── ServiceAccount for the agent (federated to UAMI for ACR push) ───
 apiVersion: v1

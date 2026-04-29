@@ -360,3 +360,75 @@ export async function cleanup(handle: RepoHandle): Promise<void> {
     // ignore
   }
 }
+
+/**
+ * Try to open an existing on-disk clone and refresh it to the latest remote
+ * state. Returns a `RepoHandle` on success, or `null` if the directory either
+ * doesn't exist, isn't a git repo, or can't be refreshed cleanly.
+ *
+ * Used by the resurrect path to reuse a workspace that the previous agent pod
+ * left behind on the PVC, instead of re-cloning gigabytes from GitHub.
+ */
+export async function tryOpenExisting(options: {
+  repo: string;
+  ref: string;
+  workdirName: string;
+  onLog?: RetryLog;
+}): Promise<RepoHandle | null> {
+  const cwd = path.join(WORKSPACE_ROOT, options.workdirName);
+  const log = options.onLog;
+  if (!existsSync(path.join(cwd, '.git'))) return null;
+
+  try {
+    // Refresh remote URL (token may have rotated since the original clone).
+    const token = getToken();
+    await run('git', ['remote', 'set-url', 'origin', authenticatedUrl(options.repo, token)], { cwd });
+
+    log?.(`Reusing existing workspace at ${cwd}`);
+    log?.(`Fetching latest ${options.ref}…`);
+    await runWithRetry(() => run('git', ['fetch', 'origin', options.ref], { cwd }), {
+      onRetry: (n, err, waitMs) => {
+        const summary = err.message.split('\n').slice(-2).join(' ').trim();
+        log?.(`Transient failure on git fetch attempt ${n}: ${summary}. Retrying in ${Math.round(waitMs / 1000)}s.`);
+      },
+    });
+
+    await run('git', ['checkout', options.ref], { cwd });
+    await run('git', ['reset', '--hard', `origin/${options.ref}`], { cwd });
+    // Drop any untracked detritus from the previous run, but keep node_modules
+    // (they're under .gitignore and re-downloading them is exactly the cost
+    // we're trying to avoid).
+    await run('git', ['clean', '-fd', '-e', 'node_modules', '-e', '.next', '-e', 'dist'], { cwd });
+
+    return { cwd, repo: options.repo, branch: options.ref };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log?.(`Failed to reuse existing workspace (${msg.split('\n')[0]}). Falling back to fresh clone.`);
+    return null;
+  }
+}
+
+/**
+ * List task-* workspaces present on disk. Used by the orphan-cleanup pass to
+ * delete clones whose tasks have been shipped/discarded.
+ */
+export async function listWorkspaceDirs(): Promise<string[]> {
+  try {
+    const { readdir } = await import('node:fs/promises');
+    const entries = await readdir(WORKSPACE_ROOT, { withFileTypes: true });
+    return entries.filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch {
+    return [];
+  }
+}
+
+/** Delete a workspace directory by its name (relative to WORKSPACE_ROOT). */
+export async function removeWorkspaceDir(name: string): Promise<void> {
+  if (!name || name.includes('..') || name.includes('/') || name.includes('\\')) return;
+  const target = path.join(WORKSPACE_ROOT, name);
+  try {
+    await rm(target, { recursive: true, force: true });
+  } catch {
+    // ignore
+  }
+}

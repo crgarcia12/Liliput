@@ -4,6 +4,7 @@ import { createApp } from './app.js';
 import { setupWebSocket } from './ws/handler.js';
 import { stopCopilotClient } from './engine/copilot-client.js';
 import { reconcileOrphanedRuns } from './stores/task-store.js';
+import { purgeOrphanWorkspaces } from './engine/agent-engine.js';
 import { logger } from './logger.js';
 
 const PORT = parseInt(process.env['PORT'] ?? '5001', 10);
@@ -25,6 +26,20 @@ if (reconciled.agentsReset > 0 || reconciled.tasksFailed > 0) {
 } else {
   logger.info('🧹 No orphaned runs to reconcile');
 }
+
+// Reclaim PVC space from workspaces whose tasks are no longer active.
+purgeOrphanWorkspaces()
+  .then((res) => {
+    if (res.removed > 0) {
+      logger.warn(res, '🧹 Purged orphan agent workspaces');
+    } else {
+      logger.info(res, '🧹 No orphan workspaces to purge');
+    }
+  })
+  .catch((err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn({ err: msg }, 'Workspace orphan purge failed (non-fatal)');
+  });
 
 server.listen(PORT, () => {
   logger.info({ port: PORT }, '🏝️  Liliput API listening');
