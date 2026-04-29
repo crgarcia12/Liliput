@@ -36,14 +36,50 @@ export default function TaskPage() {
   const [actionPending, setActionPending] = useState<'ship' | 'discard' | 'approve' | null>(null);
   const [showSpec, setShowSpec] = useState(true);
 
+  // Only swap task / chat state when something the user can see has actually
+  // changed. Without this, the 4s poll + activity-event refetch (which fires
+  // on every heartbeat / tool event) constantly replaced these objects with
+  // fresh references — re-rendering the chat list and breaking text selection.
+  // Note: we deliberately ignore activityHistory.length here — the activity
+  // panel hydrates from the live socket stream, not from task refetches, so
+  // including it would re-render every few seconds during active agent work
+  // and kill text selection in the chat above.
+  const applyTaskUpdate = useCallback((next: Task) => {
+    setTask((prev) => {
+      if (
+        prev &&
+        prev.updatedAt === next.updatedAt &&
+        prev.status === next.status &&
+        prev.devUrl === next.devUrl &&
+        prev.commitSha === next.commitSha &&
+        prev.pullRequestUrl === next.pullRequestUrl &&
+        (prev.chatHistory?.length ?? 0) === (next.chatHistory?.length ?? 0)
+      ) {
+        return prev;
+      }
+      return next;
+    });
+    setLocalMessages((prev) => {
+      const nextMsgs = next.chatHistory || [];
+      if (prev.length === nextMsgs.length) {
+        const lastA = prev[prev.length - 1];
+        const lastB = nextMsgs[nextMsgs.length - 1];
+        if ((lastA?.id ?? null) === (lastB?.id ?? null)) {
+          return prev;
+        }
+      }
+      return nextMsgs;
+    });
+  }, []);
+
+
   useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
         const t = await getTask(taskId);
         if (!cancelled) {
-          setTask(t);
-          setLocalMessages(t.chatHistory || []);
+          applyTaskUpdate(t);
           setLoading(false);
         }
       } catch {
@@ -57,7 +93,7 @@ export default function TaskPage() {
     return () => {
       cancelled = true;
     };
-  }, [taskId, getTask]);
+  }, [taskId, getTask, applyTaskUpdate]);
 
   useEffect(() => {
     if (connected && taskId) {
@@ -73,15 +109,10 @@ export default function TaskPage() {
   useEffect(() => {
     if (!taskId) return;
     const interval = setInterval(() => {
-      getTask(taskId)
-        .then((t) => {
-          setTask(t);
-          setLocalMessages(t.chatHistory || []);
-        })
-        .catch(() => {});
+      getTask(taskId).then(applyTaskUpdate).catch(() => {});
     }, 4000);
     return () => clearInterval(interval);
-  }, [taskId, getTask]);
+  }, [taskId, getTask, applyTaskUpdate]);
 
   // Refetch immediately when activity arrives for this task (socket events
   // signal something changed; pull fresh task + chat history).
@@ -89,14 +120,9 @@ export default function TaskPage() {
     if (!taskId) return;
     const last = activity[activity.length - 1];
     if (last && last.taskId === taskId) {
-      getTask(taskId)
-        .then((t) => {
-          setTask(t);
-          setLocalMessages(t.chatHistory || []);
-        })
-        .catch(() => {});
+      getTask(taskId).then(applyTaskUpdate).catch(() => {});
     }
-  }, [activity, taskId, getTask]);
+  }, [activity, taskId, getTask, applyTaskUpdate]);
 
   // Merge persisted chatHistory (localMessages) with live socket messages,
   // de-duplicating by id so a refetch after a chat:message doesn't double up.
