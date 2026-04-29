@@ -1,10 +1,15 @@
-# spec2cloud · Next.js + TypeScript Shell
+# Liliput
 
-**Transform product specifications into production-ready applications on Azure — AI-powered, human-approved, spec-driven.**
+**A meta-app that orchestrates Copilot SDK agents — "Liliputians" — to build, deploy, and iterate on real GitHub repositories from natural-language tasks.**
 
-spec2cloud is a spec-driven development framework where **specifications are the single source of truth**. Tests are generated from specs, implementation makes those tests pass, and the result is deployed to Azure — all orchestrated by an AI agent with **43 specialized skills**. Every step is resumable, auditable, and requires human approval before anything ships.
+You describe what you want (e.g. *"add a dark-mode toggle to the React app"*), Liliput clones the target repo, spawns a chain of Copilot SDK agents (architect → coder → builder → deployer → reviewer), commits the work to a branch, builds a container image with `az acr build`, deploys a preview to AKS, and opens a draft pull request — all visible live in the web UI with streaming tool calls and chat-based iteration.
 
-This is the **Next.js + TypeScript shell** — a pre-configured template with the full tech stack wired up and ready to go.
+| | |
+|---|---|
+| **Live URL** | http://4.165.50.135 |
+| **Deployment** | AKS (`crgar-liliput-aks`) — single pod, SQLite on a 4 Gi PVC |
+| **CI/CD** | GitHub Actions → Azure Container Registry → `kubectl apply` |
+| **Stack** | Express.js + Next.js + socket.io + `@github/copilot-sdk` + SQLite |
 
 ## How the Liliput Agent Works
 
@@ -18,7 +23,7 @@ sequenceDiagram
     participant UI as Web (UI)
     participant API as Express API
     participant Eng as agent-engine
-    participant Loop as agent-loop
+    participant AL as agent-loop
     participant SDK as Copilot SDK
     participant FS as /data/workspaces/task-xxx
     participant Az as Azure (ACR/AKS)
@@ -26,24 +31,24 @@ sequenceDiagram
     UI->>API: POST /api/tasks (title, desc, repo)
     API->>Eng: startBuild(taskId)
     Eng->>FS: git clone repo → cwd
-    Eng->>Loop: createAgentSession(cwd)
-    Loop->>SDK: client.createSession({model,<br/>workingDirectory: cwd,<br/>enableConfigDiscovery: true,<br/>onPermissionRequest: approveAll,<br/>onEvent: handler})
-    SDK-->>Loop: CopilotSession (long-lived)
-    Note over Loop,SDK: Session loads AGENTS.md,<br/>copilot-instructions.md,<br/>.mcp.json, .github/skills/<br/>from the cloned repo
+    Eng->>AL: createAgentSession(cwd)
+    AL->>SDK: client.createSession({model,<br/>workingDirectory: cwd,<br/>enableConfigDiscovery: true,<br/>onPermissionRequest: approveAll,<br/>onEvent: handler})
+    SDK-->>AL: CopilotSession (long-lived)
+    Note over AL,SDK: Session loads AGENTS.md,<br/>copilot-instructions.md,<br/>.mcp.json, .github/skills/<br/>from the cloned repo
 
-    Eng->>Loop: runAgentTurn(session, {prompt, isInitial: true})
-    Loop->>SDK: session.sendAndWait({prompt}, 15min)
+    Eng->>AL: runAgentTurn(session, {prompt, isInitial: true})
+    AL->>SDK: session.sendAndWait({prompt}, 15min)
 
     loop SDK internal agent loop
-        SDK-->>Loop: assistant.reasoning (🧠 streamed)
+        SDK-->>AL: assistant.reasoning (🧠 streamed)
         SDK->>FS: read / grep / glob / write / edit / bash
-        SDK-->>Loop: tool.execution_start (▶ name+args)
-        SDK-->>Loop: tool.execution_complete (✓/✗ + output)
-        Loop-->>UI: socket.io "agent:tool-event"
+        SDK-->>AL: tool.execution_start (▶ name+args)
+        SDK-->>AL: tool.execution_complete (✓/✗ + output)
+        AL-->>UI: socket.io "agent:tool-event"
     end
 
-    SDK-->>Loop: final assistant.message (summary)
-    Loop-->>Eng: {summary, toolCallCount}
+    SDK-->>AL: final assistant.message (summary)
+    AL-->>Eng: {summary, toolCallCount}
     Eng->>FS: git status --porcelain → changed files
     Eng->>FS: git add/commit/push (via runGitOpWithFixer)
     Eng->>Az: az acr build → push image
@@ -125,121 +130,57 @@ sequenceDiagram
 
 ### Key code anchors
 
-| Concept | File:Line |
+| Concept | File |
 |---|---|
-| Session creation (the one SDK call that matters) | `agent-loop.ts:348` — `client.createSession({...})` |
-| Single-turn LLM call | `agent-loop.ts:386` — `session.sendAndWait(...)` |
-| Event → UI fan-out | `agent-loop.ts:206` — `makeEventHandler` |
-| Conversation memory | `agent-loop.ts:355` — same `_session` reused across `runAgentTurn` calls |
-| Multi-phase pipeline (architect/coder/builder/deployer/reviewer) | `agent-engine.ts` — all phases share **one** `agentSession` |
-| Mid-flight preempt | `agent-loop.ts` — `abortAgentTurn` → `session.abort()` |
+| Session creation (the one SDK call that matters) | `src/api/src/engine/agent-loop.ts` — `client.createSession({...})` |
+| Single-turn LLM call | `src/api/src/engine/agent-loop.ts` — `session.sendAndWait(...)` |
+| Event → UI fan-out | `src/api/src/engine/agent-loop.ts` — `makeEventHandler` |
+| Multi-phase pipeline (architect/coder/builder/deployer/reviewer) | `src/api/src/engine/agent-engine.ts` — all phases share **one** `agentSession` |
+| Mid-flight preempt | `src/api/src/engine/agent-loop.ts` — `abortAgentTurn` → `session.abort()` |
+| Git failure recovery (LLM-driven) | `src/api/src/engine/git-fixer.ts` |
+| Build/deploy failure recovery (LLM-driven) | `src/api/src/engine/ops-fixer.ts` |
 
 **Mental model:** the actual "agent intelligence" — deciding which files to read, what bash to run, when to write — is **100% inside `session.sendAndWait`**. Liliput just feeds it prompts and listens to its event stream.
 
-## Why spec2cloud?
+## Repository Layout
 
-- **Specifications are the source of truth** — not code, not comments, not wikis
-- **Tests before code** — every feature has tests before implementation begins
-- **Human approval at every gate** — nothing ships without your sign-off
-- **Resumable from any point** — state persisted in git, pick up where you left off
-- **Works for new and existing apps** — greenfield builds new, brownfield modernizes existing
-- **Live research** — agents query Microsoft Learn, Context7, and DeepWiki before writing a single line
-
-## Two Paths, One Pipeline
-
-**Greenfield** — Start with a product idea → PRD → FRD → UI prototypes → Tests → Contracts → Implementation → Deployed on Azure.
-
-**Brownfield** — Start with existing code → Extract specs → Testability gate → Green baseline or behavioral docs → Assess → Plan → Same delivery pipeline.
-
-Both converge on the same **Phase 2 delivery**: Tests → Contracts → Implementation → Deploy.
-
-## How It Works
-
-<p align="center">
-  <img src="docs/spec2cloud-flow.gif" alt="spec2cloud animated flow — Ralph Loop, phase pipeline, and increment delivery" width="100%">
-</p>
-
-> **[▶ Interactive version](docs/spec2cloud-flow.html)** — open in your browser for playback controls and speed adjustment.
-
-Human approval gates pause the pipeline at every critical transition — nothing ships without your sign-off.
-
-1. **Write a PRD** — plain-language product requirements in `specs/prd.md`
-2. **Agents refine** — PRD → FRDs, reviewed through product + technical lenses
-3. **Prototype** — interactive HTML wireframes you browse and approve in your browser
-4. **Test-first** — Gherkin scenarios + Playwright e2e + Vitest unit tests, all failing (red baseline)
-5. **Contracts** — API specs, shared TypeScript types, and infra requirements generated from specs
-6. **Implement** — agents write code to make tests green (API slice → Web slice → Integration)
-7. **Ship** — `azd up` deploys to Azure Container Apps; smoke tests verify production
-
-## Quick Start
-
-```bash
-# Create your repo from this template
-gh repo create my-app --template EmeaAppGbb/shell-typescript
-cd my-app && npm install
-cd src/web && npm install && cd ../..
-cd src/api && npm install && cd ../..
-
-# Run locally (Aspire recommended)
-npm run dev:aspire        # API + Web + Docs with service discovery
-
-# Write your PRD and let agents take over
-code specs/prd.md
-
-# Deploy to Azure
-azd auth login && azd up
+```
+src/api/          Express.js backend — task store, agent engine, SDK orchestration
+src/web/          Next.js frontend — task dashboard, live activity, chat
+src/shared/       TypeScript types shared between API and Web
+k8s/              Kubernetes manifests (Deployment, Service, Ingress, PVC)
+infra/            Bicep templates for the AKS cluster + ACR
+.github/skills/   Agent skills (agentskills.io standard) — loaded by the SDK
+AGENTS.md         Orchestrator instructions for skill-aware agents
 ```
 
-## This Shell's Tech Stack
+## Local Development
 
-| Layer | Technology |
-|-------|-----------|
-| Frontend | Next.js · TypeScript · App Router · Tailwind CSS |
-| Backend | Express.js · TypeScript · Node.js |
-| Testing | Playwright (e2e) · Cucumber.js (BDD) · Vitest + Supertest (unit) |
-| Docs | MkDocs Material — auto-generated from wireframes + Gherkin + screenshots |
-| Local orchestration | .NET Aspire (service discovery & dashboard) |
-| Deployment | Azure Container Apps via Azure Developer CLI (`azd`) |
-| AI research | Microsoft Learn · Context7 · DeepWiki · Azure Best Practices MCP |
+Liliput needs a Copilot subscription with API access (the SDK uses your `gh` CLI auth) and Docker for the dev container.
 
-## Key Commands
+```bash
+# Backend
+cd src/api && npm install && npm run dev   # http://localhost:5001
 
-| Command | What it does |
-|---------|-------------|
-| `npm run dev:aspire` | Run all services with Aspire |
-| `npm run dev:all` | API + Web + Docs concurrently |
-| `npm run test:all` | Unit + BDD + e2e tests |
-| `npm run build:all` | Production build (API + Web) |
-| `npm run docs:full` | Capture screenshots + generate docs |
-| `azd up` | Provision + deploy to Azure |
+# Frontend
+cd src/web && npm install && npm run dev   # http://localhost:3000
+```
 
-## Learn More
+The frontend talks to the backend via socket.io for live activity. SQLite lives at `/data/liliput.db` in the container; locally it falls back to `./liliput.db`.
 
-| Start Here | Then Explore | Go Deeper |
-|-----------|-------------|-----------|
-| [Quick Start](docs/quickstart.md) | [Greenfield Guide](docs/greenfield.md) | [Skills Catalog](docs/skills.md) |
-| [Core Concepts](docs/concepts.md) | [Brownfield Guide](docs/brownfield.md) | [State & Gates](docs/state-and-gates.md) |
-| [Microhack](docs/microhack.md) | [Examples](docs/examples/) | [Architecture](docs/architecture.md) |
+## Deployment
 
-## Extending
+```bash
+# Build + push image (manual)
+az acr build -r crgarliliputacr -t liliput-api:latest -f src/api/Dockerfile src/api
 
-- **Skills** (`.github/skills/`) — 43 specialized agent procedures following the [agentskills.io](https://agentskills.io) standard
-- **Orchestrator** (`AGENTS.md`) — the central loop; modify phases, gates, or add new ones
-- **Other shells** — swap Next.js/Express for any framework; see [available shells](docs/shells.md)
-- **Community skills** — discover and publish skills at [skills.sh](https://skills.sh/)
+# Apply manifests
+kubectl apply -f k8s/
 
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. Please read our [Code of Conduct](CODE_OF_CONDUCT.md).
-
-## Security
-
-To report vulnerabilities, see [SECURITY.md](SECURITY.md).
+# CI/CD
+git push origin main   # triggers .github/workflows/deploy-liliput.yml
+```
 
 ## License
 
 [ISC](LICENSE)
-
----
-
-**From idea to production — spec-driven, AI-powered, human-approved.**

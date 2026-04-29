@@ -1,6 +1,4 @@
-# Contributing to spec2cloud
-
-Thank you for your interest in contributing! This document provides guidelines for contributing to the spec2cloud shell template.
+# Contributing to Liliput
 
 ## Getting Started
 
@@ -18,16 +16,15 @@ Thank you for your interest in contributing! This document provides guidelines f
 ### Running locally
 
 ```bash
-npm run dev:aspire        # Recommended: all services via Aspire
-npm run dev:all           # Alternative: API + Web + Docs concurrently
+npm run dev:all           # API + Web concurrently
 ```
 
 ### Running tests
 
 ```bash
 npm run test:api          # Unit tests (API)
-npm run test:cucumber     # BDD tests (requires Aspire)
-npm run test:e2e          # End-to-end tests (requires Aspire)
+npm run test:cucumber     # BDD tests
+npm run test:e2e          # End-to-end tests
 npm run test:all          # All tests
 ```
 
@@ -68,11 +65,7 @@ npm run build:all         # Production build (API + Web)
 
 ## Skills
 
-Agent skills live in `.github/skills/` and follow the [agentskills.io](https://agentskills.io) specification. If you're contributing a new skill:
-
-1. Use the `skill-creator` skill as a guide
-2. Include a `SKILL.md` with proper YAML frontmatter
-3. Add tests or verification steps
+Agent skills live in `.github/skills/` and follow the [agentskills.io](https://agentskills.io) specification. They are loaded automatically by the Copilot SDK when an agent session is created against the cloned target repo.
 
 ## License
 
