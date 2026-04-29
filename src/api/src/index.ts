@@ -4,7 +4,7 @@ import { createApp } from './app.js';
 import { setupWebSocket } from './ws/handler.js';
 import { stopCopilotClient } from './engine/copilot-client.js';
 import { reconcileOrphanedRuns } from './stores/task-store.js';
-import { purgeOrphanWorkspaces } from './engine/agent-engine.js';
+import { purgeOrphanWorkspaces, restoreDevRoutesFromStore } from './engine/agent-engine.js';
 import { logger } from './logger.js';
 
 const PORT = parseInt(process.env['PORT'] ?? '5001', 10);
@@ -39,6 +39,23 @@ purgeOrphanWorkspaces()
   .catch((err: unknown) => {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn({ err: msg }, 'Workspace orphan purge failed (non-fatal)');
+  });
+
+// Rebuild the gateway route table from previously-deployed tasks. Without
+// this, the next deploy after a restart would overwrite nginx with only its
+// own route — all older /dev/<owner>/<repo>/<branch> URLs would 404 even
+// though their pods are still running.
+restoreDevRoutesFromStore()
+  .then((res) => {
+    if (res.restored > 0) {
+      logger.info(res, '🌐 Restored gateway routes for live dev environments');
+    } else {
+      logger.info('🌐 No dev-env gateway routes to restore');
+    }
+  })
+  .catch((err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn({ err: msg }, 'Dev-route restore failed (non-fatal)');
   });
 
 server.listen(PORT, () => {

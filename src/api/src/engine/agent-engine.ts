@@ -190,6 +190,60 @@ function activeRoutes(): DevRoute[] {
   }));
 }
 
+/**
+ * Rehydrate the in-memory devEnvs map from persisted tasks, then push the
+ * combined route table to nginx.
+ *
+ * Without this, after a liliput-api restart `devEnvs` is empty. The next
+ * deploy calls `syncRoutes(activeRoutes())` and overwrites the gateway with
+ * only its own route — wiping every previously-deployed task's preview URL
+ * (cluster pods stay alive, but the public `/dev/<owner>/<repo>/<branch>`
+ * URL starts returning 404).
+ *
+ * Called once at server startup. Idempotent.
+ */
+export async function restoreDevRoutesFromStore(): Promise<{ restored: number }> {
+  let restored = 0;
+  for (const task of store.getTasks()) {
+    if (!task.devNamespace || !task.devUrl) continue;
+    // devUrl was constructed as `${PUBLIC_BASE_URL}${pathPrefix}/` — strip
+    // both ends back to the bare prefix.
+    let pathPrefix = task.devUrl;
+    if (pathPrefix.startsWith(PUBLIC_BASE_URL)) {
+      pathPrefix = pathPrefix.slice(PUBLIC_BASE_URL.length);
+    } else {
+      // Fallback: drop scheme+host so we still get the path portion.
+      try {
+        pathPrefix = new URL(task.devUrl).pathname;
+      } catch {
+        continue;
+      }
+    }
+    pathPrefix = pathPrefix.replace(/\/+$/, '');
+    if (!pathPrefix.startsWith('/dev/')) continue;
+    const appName = 'app';
+    devEnvs.set(task.id, {
+      taskId: task.id,
+      pathPrefix,
+      upstreamHost: `${appName}.${task.devNamespace}.svc.cluster.local`,
+      upstreamPort: 80,
+      namespace: task.devNamespace,
+    });
+    restored++;
+  }
+  if (restored > 0) {
+    try {
+      await syncRoutes(activeRoutes());
+    } catch (err) {
+      logger.warn(
+        { err: err instanceof Error ? err.message : String(err), restored },
+        'restoreDevRoutesFromStore: syncRoutes failed',
+      );
+    }
+  }
+  return { restored };
+}
+
 function spawnPhase(
   io: SocketServer,
   taskId: string,
