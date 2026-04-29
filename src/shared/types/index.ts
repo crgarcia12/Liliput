@@ -34,8 +34,32 @@ export interface Task {
   errorMessage?: string;      // Populated when status='failed'
   agents: Agent[];
   chatHistory: ChatMessage[];
+  activityHistory?: ActivityEntry[];
   createdAt: string;
   updatedAt: string;
+}
+
+/** A single event in the persistent activity feed for a task. Surfaced in the
+ *  Live Activity panel so the user can see what happened even after a page
+ *  reload or pod restart. Mirrors the live socket events one-to-one. */
+export interface ActivityEntry {
+  id: string;
+  taskId: string;
+  timestamp: string;
+  kind:
+    | 'agent-spawned'
+    | 'agent-status'
+    | 'agent-log'
+    | 'agent-completed'
+    | 'agent-failed'
+    | 'task-status'
+    | 'task-spec';
+  agentId?: string;
+  agentName?: string;
+  level?: 'info' | 'warn' | 'error';
+  message: string;
+  command?: string;
+  output?: string;
 }
 
 // ─── Agent (Liliputian Worker) ────────────────────────────────

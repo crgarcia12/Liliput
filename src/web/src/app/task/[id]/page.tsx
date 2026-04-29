@@ -66,33 +66,81 @@ export default function TaskPage() {
     }
   }, [connected, taskId, joinTask, leaveTask]);
 
-  // Cheap polling fallback so the user always sees fresh state
+  // Cheap polling fallback so the user always sees fresh state — including
+  // chat history. Without this, any chat:message emitted before the page was
+  // open (or while the socket was reconnecting) would be invisible to the user
+  // even though the backend has it persisted in task.chatHistory.
   useEffect(() => {
     if (!taskId) return;
     const interval = setInterval(() => {
-      getTask(taskId).then(setTask).catch(() => {});
+      getTask(taskId)
+        .then((t) => {
+          setTask(t);
+          setLocalMessages(t.chatHistory || []);
+        })
+        .catch(() => {});
     }, 4000);
     return () => clearInterval(interval);
   }, [taskId, getTask]);
 
-  // Refetch immediately when activity arrives for this task
+  // Refetch immediately when activity arrives for this task (socket events
+  // signal something changed; pull fresh task + chat history).
   useEffect(() => {
     if (!taskId) return;
     const last = activity[activity.length - 1];
     if (last && last.taskId === taskId) {
-      getTask(taskId).then(setTask).catch(() => {});
+      getTask(taskId)
+        .then((t) => {
+          setTask(t);
+          setLocalMessages(t.chatHistory || []);
+        })
+        .catch(() => {});
     }
   }, [activity, taskId, getTask]);
 
-  const allMessages = useMemo(
-    () => [...localMessages, ...socketMessages.filter((m) => m.taskId === taskId)],
-    [localMessages, socketMessages, taskId],
-  );
+  // Merge persisted chatHistory (localMessages) with live socket messages,
+  // de-duplicating by id so a refetch after a chat:message doesn't double up.
+  const allMessages = useMemo(() => {
+    const seen = new Set<string>();
+    const out: ChatMessage[] = [];
+    for (const m of localMessages) {
+      if (!seen.has(m.id)) {
+        seen.add(m.id);
+        out.push(m);
+      }
+    }
+    for (const m of socketMessages) {
+      if (m.taskId !== taskId) continue;
+      if (!seen.has(m.id)) {
+        seen.add(m.id);
+        out.push(m);
+      }
+    }
+    return out;
+  }, [localMessages, socketMessages, taskId]);
 
-  const taskActivity = useMemo(
-    () => activity.filter((a) => a.taskId === taskId),
-    [activity, taskId],
-  );
+  // Merge persisted task.activityHistory with live socket activity, dedupe by id.
+  // Without this, anything emitted before the page was open would be invisible.
+  const taskActivity = useMemo(() => {
+    const seen = new Set<string>();
+    const out: typeof activity = [];
+    const persisted = task?.activityHistory ?? [];
+    for (const e of persisted) {
+      if (e.taskId !== taskId) continue;
+      if (!seen.has(e.id)) {
+        seen.add(e.id);
+        out.push(e);
+      }
+    }
+    for (const e of activity) {
+      if (e.taskId !== taskId) continue;
+      if (!seen.has(e.id)) {
+        seen.add(e.id);
+        out.push(e);
+      }
+    }
+    return out;
+  }, [task?.activityHistory, activity, taskId]);
 
   const agents = useMemo(() => {
     const agentMap = new Map<string, Agent>();

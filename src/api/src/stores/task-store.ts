@@ -19,6 +19,7 @@ import type {
   ChatMessage,
   ChatRole,
   CommitMode,
+  ActivityEntry,
 } from '../../../shared/types/index.js';
 import { getDb } from './db.js';
 
@@ -60,6 +61,13 @@ interface ChatRow {
   data: string;
 }
 
+interface ActivityRow {
+  id: string;
+  task_id: string;
+  ts: string;
+  data: string;
+}
+
 /** Hydrate an Agent including its logs. */
 function hydrateAgent(row: AgentRow, logs: AgentLogEntry[]): Agent {
   const base = JSON.parse(row.data) as Omit<Agent, 'logs'>;
@@ -69,7 +77,7 @@ function hydrateAgent(row: AgentRow, logs: AgentLogEntry[]): Agent {
 /** Hydrate a Task including its agents (+logs) and chat history. */
 function hydrateTask(row: TaskRow): Task {
   const db = getDb();
-  const base = JSON.parse(row.data) as Omit<Task, 'agents' | 'chatHistory'>;
+  const base = JSON.parse(row.data) as Omit<Task, 'agents' | 'chatHistory' | 'activityHistory'>;
 
   const agentRows = db
     .prepare('SELECT * FROM agents WHERE task_id = ? ORDER BY position ASC')
@@ -107,7 +115,19 @@ function hydrateTask(row: TaskRow): Task {
     .all(row.id) as ChatRow[];
   const chatHistory: ChatMessage[] = chatRows.map((r) => JSON.parse(r.data) as ChatMessage);
 
-  return { ...base, agents, chatHistory } as Task;
+  // Last 200 activity entries (oldest → newest). Capped to keep payload small.
+  const activityRows = db
+    .prepare(
+      `SELECT * FROM (
+         SELECT * FROM activity_entries WHERE task_id = ? ORDER BY ts DESC, id DESC LIMIT 200
+       ) ORDER BY ts ASC, id ASC`,
+    )
+    .all(row.id) as ActivityRow[];
+  const activityHistory: ActivityEntry[] = activityRows.map(
+    (r) => JSON.parse(r.data) as ActivityEntry,
+  );
+
+  return { ...base, agents, chatHistory, activityHistory } as Task;
 }
 
 // ─── Tasks ───────────────────────────────────────────────────
@@ -191,8 +211,10 @@ export function updateTask(
   if (!row) return undefined;
 
   const ts = now();
-  const baseObj = JSON.parse(row.data) as Omit<Task, 'agents' | 'chatHistory'>;
-  const merged = { ...baseObj, ...updates, updatedAt: ts };
+  const baseObj = JSON.parse(row.data) as Omit<Task, 'agents' | 'chatHistory' | 'activityHistory'>;
+  const { activityHistory: _ah, agents: _ag, chatHistory: _ch, ...rest } = updates as Partial<Task>;
+  void _ah; void _ag; void _ch;
+  const merged = { ...baseObj, ...rest, updatedAt: ts };
 
   db.prepare(
     `UPDATE tasks
@@ -366,6 +388,42 @@ export function getChatHistory(taskId: string): ChatMessage[] {
   return rows.map((r) => JSON.parse(r.data) as ChatMessage);
 }
 
+// ─── Activity feed (Live Activity panel) ─────────────────────
+
+/** Append an entry to the persistent activity feed. Mirrors the live socket
+ *  events (agent:log, agent:status, etc.) so the UI can render them after a
+ *  reload or pod restart. Keep payloads small — no raw tool output. */
+export function addActivityEntry(
+  taskId: string,
+  entry: Omit<ActivityEntry, 'id' | 'taskId' | 'timestamp'> & { timestamp?: string },
+): ActivityEntry | undefined {
+  const db = getDb();
+  const exists = db.prepare('SELECT 1 AS x FROM tasks WHERE id = ?').get(taskId) as
+    | { x: number }
+    | undefined;
+  if (!exists) return undefined;
+
+  const ts = entry.timestamp ?? now();
+  const full: ActivityEntry = {
+    id: uuid(),
+    taskId,
+    timestamp: ts,
+    kind: entry.kind,
+    message: entry.message,
+    ...(entry.agentId ? { agentId: entry.agentId } : {}),
+    ...(entry.agentName ? { agentName: entry.agentName } : {}),
+    ...(entry.level ? { level: entry.level } : {}),
+    ...(entry.command ? { command: entry.command } : {}),
+    ...(entry.output ? { output: entry.output } : {}),
+  };
+
+  db.prepare(
+    `INSERT INTO activity_entries (id, task_id, ts, data) VALUES (?, ?, ?, ?)`,
+  ).run(full.id, taskId, ts, JSON.stringify(full));
+
+  return full;
+}
+
 // ─── Reset (for testing) ────────────────────────────────────
 
 export function resetStore(): void {
@@ -377,6 +435,7 @@ export function resetStore(): void {
     DELETE FROM agent_logs;
     DELETE FROM agents;
     DELETE FROM chat_messages;
+    DELETE FROM activity_entries;
     DELETE FROM tasks;
   `);
 }

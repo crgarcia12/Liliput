@@ -69,6 +69,15 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_chat_task ON chat_messages(task_id, ts);
+
+CREATE TABLE IF NOT EXISTS activity_entries (
+  id        TEXT PRIMARY KEY,
+  task_id   TEXT NOT NULL,
+  ts        TEXT NOT NULL,
+  data      TEXT NOT NULL,
+  FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_activity_task ON activity_entries(task_id, ts);
 `;
 
 export function getDb(): Database.Database {
@@ -90,6 +99,7 @@ export function resetDb(): void {
     DELETE FROM agent_logs;
     DELETE FROM agents;
     DELETE FROM chat_messages;
+    DELETE FROM activity_entries;
     DELETE FROM tasks;
   `);
 }

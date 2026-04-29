@@ -192,18 +192,31 @@ function spawnPhase(
 ): string | undefined {
   const agent = store.addAgent(taskId, name, role);
   if (!agent) return undefined;
+  const ts = new Date().toISOString();
   io.to(`task:${taskId}`).emit('agent:spawned', {
     taskId,
     agentId: agent.id,
     name,
     role,
-    timestamp: new Date().toISOString(),
+    timestamp: ts,
+  });
+  store.addActivityEntry(taskId, {
+    kind: 'agent-spawned',
+    agentId: agent.id,
+    agentName: name,
+    message: `${name} (${role}) spawned`,
+    timestamp: ts,
   });
   store.updateAgent(taskId, agent.id, { status: 'working' });
   io.to(`task:${taskId}`).emit('agent:status', {
     taskId,
     agentId: agent.id,
     status: 'working',
+  });
+  store.addActivityEntry(taskId, {
+    kind: 'agent-status',
+    agentId: agent.id,
+    message: `→ working`,
   });
   return agent.id;
 }
@@ -217,14 +230,25 @@ function logPhase(
   command?: string,
   output?: string,
 ): void {
+  const ts = new Date().toISOString();
   store.addAgentLog(taskId, agentId, level, message, command, output);
   io.to(`task:${taskId}`).emit('agent:log', {
     taskId,
     agentId,
+    level,
     message,
     command,
     output,
-    timestamp: new Date().toISOString(),
+    timestamp: ts,
+  });
+  store.addActivityEntry(taskId, {
+    kind: 'agent-log',
+    agentId,
+    level,
+    message,
+    timestamp: ts,
+    ...(command ? { command } : {}),
+    // Skip output to keep DB rows small; full output stays in agent_logs.
   });
 }
 
@@ -235,6 +259,11 @@ function completePhase(io: SocketServer, taskId: string, agentId: string): void 
     currentAction: undefined,
   });
   io.to(`task:${taskId}`).emit('agent:completed', { taskId, agentId });
+  store.addActivityEntry(taskId, {
+    kind: 'agent-completed',
+    agentId,
+    message: '✓ completed',
+  });
 }
 
 function failPhase(
@@ -245,6 +274,12 @@ function failPhase(
 ): void {
   store.updateAgent(taskId, agentId, { status: 'failed' });
   io.to(`task:${taskId}`).emit('agent:failed', { taskId, agentId, error });
+  store.addActivityEntry(taskId, {
+    kind: 'agent-failed',
+    agentId,
+    level: 'error',
+    message: `✗ failed: ${error}`,
+  });
 }
 
 function setTaskStatus(
@@ -255,6 +290,16 @@ function setTaskStatus(
 ): void {
   store.updateTask(taskId, { status, ...extra });
   io.to(`task:${taskId}`).emit('task:status', { taskId, status, ...extra });
+  const errorMessage = (extra as { errorMessage?: string }).errorMessage;
+  const devUrl = (extra as { devUrl?: string }).devUrl;
+  store.addActivityEntry(taskId, {
+    kind: 'task-status',
+    level: status === 'failed' ? 'error' : 'info',
+    message:
+      `Task → ${status}` +
+      (errorMessage ? `: ${errorMessage}` : '') +
+      (devUrl ? ` (${devUrl})` : ''),
+  });
 }
 
 /**

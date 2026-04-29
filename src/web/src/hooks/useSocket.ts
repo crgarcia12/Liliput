@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
-import type { AgentEvent, ChatMessage } from '@shared/types';
+import type { AgentEvent, ChatMessage, ActivityEntry } from '@shared/types';
 
 // In production, Socket.io connects through the nginx reverse proxy on the same origin.
 // In development, connect directly to the API server.
@@ -10,25 +10,7 @@ const API_URL = typeof window !== 'undefined' && window.location.hostname !== 'l
   ? ''
   : 'http://localhost:5001';
 
-export interface ActivityEntry {
-  id: string;
-  taskId: string;
-  timestamp: string;
-  kind:
-    | 'agent-spawned'
-    | 'agent-status'
-    | 'agent-log'
-    | 'agent-completed'
-    | 'agent-failed'
-    | 'task-status'
-    | 'task-spec';
-  agentId?: string;
-  agentName?: string;
-  level?: 'info' | 'warn' | 'error';
-  message: string;
-  command?: string;
-  output?: string;
-}
+export type { ActivityEntry };
 
 interface UseSocketReturn {
   connected: boolean;
