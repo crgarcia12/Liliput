@@ -994,6 +994,10 @@ async function validateAndHealLoop(ctx: ValidateContext): Promise<ValidateOutcom
     'info',
     `🩺 Starting post-deploy health loop (cap ${MAX_VALIDATE_ATTEMPTS} attempts).`,
   );
+  logger.info(
+    { taskId, devUrl: ctx.devUrl, namespace: ctx.namespace },
+    'validate-and-heal loop starting',
+  );
 
   // Initial settle delay — lets the app finish boot before the first probe.
   if (VALIDATE_INITIAL_SETTLE_MS > 0) {
@@ -1008,21 +1012,71 @@ async function validateAndHealLoop(ctx: ValidateContext): Promise<ValidateOutcom
   }
 
   for (let attempt = 1; attempt <= MAX_VALIDATE_ATTEMPTS; attempt++) {
-    // Chat preempt: if the user typed something while we were healing, bail
-    // out cleanly. The chat handler will run its own iteration which itself
-    // ends with another validateAndHealLoop call — so the user's intent
-    // takes precedence and we still end up validating afterwards.
+    // Chat preempt: the user just typed something while we were healing.
+    // The validator is the LAST consumer of pendingChatMessages within this
+    // iteration — if we don't handle them here, clearInFlightAgent will wipe
+    // them on iteration end and the user's intent is permanently lost.
+    // So: drain into a coder turn, redeploy any changes, then keep probing.
     const inFlight = inFlightAgents.get(taskId);
     if (inFlight && inFlight.pendingChatMessages.length > 0) {
+      const count = inFlight.pendingChatMessages.length;
       logPhase(
         io,
         taskId,
         tester,
         'info',
-        `⏸️  Pausing validation — handling new chat message(s) first.`,
+        `💬 ${count} new chat message(s) arrived during validation — handing them to the coder…`,
       );
-      completePhase(io, taskId, tester);
-      return { imageRef, sha, healthy: false, attemptsUsed: attempt - 1 };
+      const chatCoder = spawnPhase(
+        io,
+        taskId,
+        'coder',
+        `Coder Liliputian (chat #${attempt})`,
+      );
+      if (chatCoder) {
+        try {
+          await drainPendingChatMessages(io, taskId, chatCoder);
+        } catch (drainErr) {
+          const m = drainErr instanceof Error ? drainErr.message : String(drainErr);
+          logPhase(io, taskId, chatCoder, 'warn', `drainPendingChatMessages threw: ${m}`);
+        }
+        let chatChanged: string[] = [];
+        try {
+          chatChanged = await git.changedFiles(ctx.handle);
+        } catch {
+          /* best effort */
+        }
+        if (chatChanged.length > 0) {
+          logPhase(
+            io,
+            taskId,
+            chatCoder,
+            'info',
+            `Coder produced ${chatChanged.length} file change(s) from chat — redeploying…`,
+            undefined,
+            chatChanged.join('\n'),
+          );
+          try {
+            const r = await commitBuildAndRedeploy({
+              io,
+              taskId,
+              fixerAgentId: chatCoder,
+              ctx,
+              imageRef,
+              commitMsg: `feat(agent): apply user chat (validate attempt ${attempt})`,
+              gitOpDescribe: 'chat-drain',
+            });
+            sha = r.sha;
+            imageRef = r.imageRef;
+          } catch (e) {
+            const m = e instanceof Error ? e.message : String(e);
+            logPhase(io, taskId, chatCoder, 'warn', `Chat-drain redeploy failed: ${m}`);
+          }
+        }
+        completePhase(io, taskId, chatCoder);
+      }
+      // Loop continues — re-probe the (potentially new) deployment.
+      continue;
     }
 
     logPhase(
@@ -1032,6 +1086,10 @@ async function validateAndHealLoop(ctx: ValidateContext): Promise<ValidateOutcom
       'info',
       `🩺 Probe ${attempt}/${MAX_VALIDATE_ATTEMPTS} — checking ${ctx.devUrl} + pod health…`,
     );
+    logger.info(
+      { taskId, attempt, max: MAX_VALIDATE_ATTEMPTS, devUrl: ctx.devUrl },
+      'validate probe starting',
+    );
 
     let result: ValidateResult;
     try {
@@ -1039,12 +1097,14 @@ async function validateAndHealLoop(ctx: ValidateContext): Promise<ValidateOutcom
     } catch (probeErr) {
       const m = probeErr instanceof Error ? probeErr.message : String(probeErr);
       logPhase(io, taskId, tester, 'warn', `Probe itself errored: ${m}. Retrying in 10s.`);
+      logger.warn({ taskId, attempt, err: m }, 'validate probe threw');
       await sleep(10_000);
       continue;
     }
 
     if (result.healthy) {
       logPhase(io, taskId, tester, 'info', `✅ Healthy: ${result.summary}`);
+      logger.info({ taskId, attempt, http: result.httpStatus }, 'validate probe healthy');
       completePhase(io, taskId, tester);
       const okMsg = store.addChatMessage(
         taskId,
@@ -1063,6 +1123,10 @@ async function validateAndHealLoop(ctx: ValidateContext): Promise<ValidateOutcom
       `🔴 Unhealthy: ${result.summary}`,
       undefined,
       result.diagnostics,
+    );
+    logger.warn(
+      { taskId, attempt, http: result.httpStatus, summary: result.summary },
+      'validate probe unhealthy',
     );
 
     if (attempt >= MAX_VALIDATE_ATTEMPTS) {
@@ -1163,105 +1227,21 @@ async function validateAndHealLoop(ctx: ValidateContext): Promise<ValidateOutcom
       changed.join('\n'),
     );
 
-    let newSha: string;
     try {
-      newSha = await runGitOpWithFixer<string>({
-        agentSession: ctx.agentSession,
-        op: () =>
-          git.commitAll(ctx.handle, `fix(agent): runtime healing (validate attempt ${attempt})`),
-        describe: 'git commit (validate-fix)',
-        cwd: ctx.handle.cwd,
-        branch: ctx.handle.branch,
-        repo: ctx.handle.repo,
-        recoveryCheck: async () => {
-          if (await git.isWorkingTreeClean(ctx.handle)) {
-            const head = await git.headSha(ctx.handle);
-            return { recovered: true, result: head };
-          }
-          return { recovered: false };
-        },
-        onLog: (level, msg, cmd, out) => logPhase(io, taskId, fixer, level, msg, cmd, out),
-      });
-      await runGitOpWithFixer<void>({
-        agentSession: ctx.agentSession,
-        op: () => git.push(ctx.handle),
-        describe: `git push origin ${ctx.handle.branch} (validate-fix)`,
-        cwd: ctx.handle.cwd,
-        branch: ctx.handle.branch,
-        repo: ctx.handle.repo,
-        recoveryCheck: async () => {
-          if (await git.isBranchUpToDateWithRemote(ctx.handle)) {
-            return { recovered: true, result: undefined as void };
-          }
-          return { recovered: false };
-        },
-        onLog: (level, msg, cmd, out) => logPhase(io, taskId, fixer, level, msg, cmd, out),
-      });
-    } catch (gitErr) {
-      const m = gitErr instanceof Error ? gitErr.message : String(gitErr);
-      failPhase(io, taskId, fixer, `Could not commit/push validate-fix: ${m}`);
-      completePhase(io, taskId, tester);
-      return { imageRef, sha, healthy: false, attemptsUsed: attempt };
-    }
-    sha = newSha;
-    store.updateTask(taskId, { commitSha: sha });
-
-    // Rebuild image with the new SHA → tag.
-    const tag = sha.substring(0, 12);
-    logPhase(io, taskId, fixer, 'info', `Rebuilding ${ctx.imageName}:${tag}…`);
-    try {
-      const rebuilt = await acrBuild({
-        cwd: ctx.handle.cwd,
-        imageName: ctx.imageName,
-        tag,
-        dockerfile: ctx.dockerfile,
-      });
-      imageRef = rebuilt.imageRef;
-      store.updateTask(taskId, { imageRef });
-      logPhase(io, taskId, fixer, 'info', `Rebuilt: ${imageRef}`);
-    } catch (buildErr) {
-      const m = buildErr instanceof Error ? buildErr.message : String(buildErr);
-      logPhase(
+      const r = await commitBuildAndRedeploy({
         io,
         taskId,
-        fixer,
-        'warn',
-        `Rebuild during validate-fix failed: ${m}. Will re-probe and let next attempt's fixer try again.`,
-      );
-      completePhase(io, taskId, fixer);
-      continue;
-    }
-
-    // Redeploy the new image.
-    try {
-      logPhase(io, taskId, fixer, 'info', `Rolling out ${imageRef}…`);
-      await deployApp({
-        namespace: ctx.namespace,
-        appName: 'app',
-        image: imageRef,
-        port: ctx.port,
-        env: { PORT: String(ctx.port) },
-        pathPrefix: ctx.pathPrefix,
+        fixerAgentId: fixer,
+        ctx,
+        imageRef,
+        commitMsg: `fix(agent): runtime healing (validate attempt ${attempt})`,
+        gitOpDescribe: `validate-fix #${attempt}`,
       });
-      const ready = await waitDeploymentReady(ctx.namespace, 'app', 180_000);
-      if (!ready) {
-        logPhase(
-          io,
-          taskId,
-          fixer,
-          'warn',
-          'Pod did not become Ready within 3 minutes after validate-fix; re-probing anyway.',
-        );
-      }
-    } catch (deployErr) {
-      const m = deployErr instanceof Error ? deployErr.message : String(deployErr);
-      logPhase(
-        io,
-        taskId,
-        fixer,
-        'warn',
-        `Redeploy during validate-fix failed: ${m}. Will re-probe.`,
-      );
+      sha = r.sha;
+      imageRef = r.imageRef;
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      logPhase(io, taskId, fixer, 'warn', `Validate-fix redeploy failed: ${m}. Re-probing anyway.`);
     }
     completePhase(io, taskId, fixer);
   }
@@ -1269,6 +1249,90 @@ async function validateAndHealLoop(ctx: ValidateContext): Promise<ValidateOutcom
   // unreachable
   completePhase(io, taskId, tester);
   return { imageRef, sha, healthy: false, attemptsUsed: MAX_VALIDATE_ATTEMPTS };
+}
+
+/**
+ * Commit working-tree changes, push, rebuild the image, and redeploy.
+ * Used by both the fixer-changed-files path and the chat-drain path inside
+ * validateAndHealLoop. Updates the task store with the new sha + imageRef.
+ * Throws if commit/push fails fatally (caller logs + decides to continue probing).
+ */
+async function commitBuildAndRedeploy(opts: {
+  io: SocketServer;
+  taskId: string;
+  fixerAgentId: string;
+  ctx: ValidateContext;
+  imageRef: string;
+  commitMsg: string;
+  gitOpDescribe: string;
+}): Promise<{ sha: string; imageRef: string }> {
+  const { io, taskId, fixerAgentId, ctx, commitMsg, gitOpDescribe } = opts;
+  let imageRef = opts.imageRef;
+
+  const newSha = await runGitOpWithFixer<string>({
+    agentSession: ctx.agentSession,
+    op: () => git.commitAll(ctx.handle, commitMsg),
+    describe: `git commit (${gitOpDescribe})`,
+    cwd: ctx.handle.cwd,
+    branch: ctx.handle.branch,
+    repo: ctx.handle.repo,
+    recoveryCheck: async () => {
+      if (await git.isWorkingTreeClean(ctx.handle)) {
+        const head = await git.headSha(ctx.handle);
+        return { recovered: true, result: head };
+      }
+      return { recovered: false };
+    },
+    onLog: (level, msg, cmd, out) => logPhase(io, taskId, fixerAgentId, level, msg, cmd, out),
+  });
+  await runGitOpWithFixer<void>({
+    agentSession: ctx.agentSession,
+    op: () => git.push(ctx.handle),
+    describe: `git push origin ${ctx.handle.branch} (${gitOpDescribe})`,
+    cwd: ctx.handle.cwd,
+    branch: ctx.handle.branch,
+    repo: ctx.handle.repo,
+    recoveryCheck: async () => {
+      if (await git.isBranchUpToDateWithRemote(ctx.handle)) {
+        return { recovered: true, result: undefined as void };
+      }
+      return { recovered: false };
+    },
+    onLog: (level, msg, cmd, out) => logPhase(io, taskId, fixerAgentId, level, msg, cmd, out),
+  });
+  store.updateTask(taskId, { commitSha: newSha });
+
+  const tag = newSha.substring(0, 12);
+  logPhase(io, taskId, fixerAgentId, 'info', `Rebuilding ${ctx.imageName}:${tag}…`);
+  const rebuilt = await acrBuild({
+    cwd: ctx.handle.cwd,
+    imageName: ctx.imageName,
+    tag,
+    dockerfile: ctx.dockerfile,
+  });
+  imageRef = rebuilt.imageRef;
+  store.updateTask(taskId, { imageRef });
+  logPhase(io, taskId, fixerAgentId, 'info', `Rebuilt: ${imageRef}; rolling out…`);
+
+  await deployApp({
+    namespace: ctx.namespace,
+    appName: 'app',
+    image: imageRef,
+    port: ctx.port,
+    env: { PORT: String(ctx.port) },
+    pathPrefix: ctx.pathPrefix,
+  });
+  const ready = await waitDeploymentReady(ctx.namespace, 'app', 180_000);
+  if (!ready) {
+    logPhase(
+      io,
+      taskId,
+      fixerAgentId,
+      'warn',
+      'Pod did not become Ready within 3 minutes; re-probing anyway.',
+    );
+  }
+  return { sha: newSha, imageRef };
 }
 
 export function startBuild(io: SocketServer, taskId: string): void {
