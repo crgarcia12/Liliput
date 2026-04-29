@@ -296,7 +296,7 @@ graph TD
 
     PID1 -->|spawns per-task| GIT["git clone / commit / push<br/>cwd = /data/workspaces/task-xxx"]
     PID1 -->|spawns per-build| AZ["az acr build<br/>az aks get-credentials<br/>az ... apply for previews"]
-    PID1 -->|in-process<br/>(no subprocess)| SDK["@github/copilot-sdk<br/>session.sendAndWait(...)<br/>↳ HTTPS to Copilot API<br/>↳ event stream → UI"]
+    PID1 -->|in-process<br/>no subprocess| SDK["@github/copilot-sdk<br/>session.sendAndWait<br/>↳ HTTPS to Copilot API<br/>↳ event stream → UI"]
 
     style SDK fill:#f0f8ff,stroke:#4169e1
 ```
