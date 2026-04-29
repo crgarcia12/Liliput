@@ -3,6 +3,7 @@ import { Server as SocketServer } from 'socket.io';
 import { createApp } from './app.js';
 import { setupWebSocket } from './ws/handler.js';
 import { stopCopilotClient } from './engine/copilot-client.js';
+import { reconcileOrphanedRuns } from './stores/task-store.js';
 import { logger } from './logger.js';
 
 const PORT = parseInt(process.env['PORT'] ?? '5001', 10);
@@ -16,6 +17,14 @@ const app = createApp(io);
 server.on('request', app);
 
 setupWebSocket(io);
+
+// Sweep orphaned in-flight state from any previous container.
+const reconciled = reconcileOrphanedRuns();
+if (reconciled.agentsReset > 0 || reconciled.tasksFailed > 0) {
+  logger.warn(reconciled, '🧹 Reconciled orphaned runs from previous container');
+} else {
+  logger.info('🧹 No orphaned runs to reconcile');
+}
 
 server.listen(PORT, () => {
   logger.info({ port: PORT }, '🏝️  Liliput API listening');

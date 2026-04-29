@@ -380,3 +380,74 @@ export function resetStore(): void {
     DELETE FROM tasks;
   `);
 }
+
+// ─── Boot-time reconciliation ────────────────────────────────
+
+/**
+ * Sweep stale in-flight state left behind by a previous container.
+ *
+ * SQLite persists across pod restarts, but the in-memory engine does not —
+ * so any agent stuck in `working` and any task stuck in an active phase
+ * after we boot is, by definition, orphaned. Mark them `failed` so the UI
+ * stops claiming work is happening when nothing is.
+ *
+ * Safe statuses are preserved:
+ *   - tasks: `review` (awaiting user), `completed`, `discarded`, `failed`
+ *   - agents: anything other than `working`
+ */
+export function reconcileOrphanedRuns(): {
+  agentsReset: number;
+  tasksFailed: number;
+} {
+  const db = getDb();
+  const ts = now();
+  const note = 'Container restarted while this was in flight; marked failed by boot-time reconciler.';
+
+  let agentsReset = 0;
+  let tasksFailed = 0;
+
+  const txn = db.transaction(() => {
+    // 1. Agents stuck in `working`
+    const agentRows = db
+      .prepare('SELECT id, task_id, data FROM agents')
+      .all() as Pick<AgentRow, 'id' | 'task_id' | 'data'>[];
+
+    const updateAgentStmt = db.prepare('UPDATE agents SET data = ? WHERE id = ?');
+    const insertLogStmt = db.prepare(
+      `INSERT INTO agent_logs (agent_id, ts, level, message, command, output)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+
+    for (const row of agentRows) {
+      const agent = JSON.parse(row.data) as Omit<Agent, 'logs'>;
+      if (agent.status === 'working') {
+        const updated = { ...agent, status: 'failed' as const, updatedAt: ts };
+        updateAgentStmt.run(JSON.stringify(updated), row.id);
+        insertLogStmt.run(row.id, ts, 'warn', note, null, null);
+        agentsReset++;
+      }
+    }
+
+    // 2. Tasks stuck in an active phase
+    const ACTIVE_STATUSES = ['clarifying', 'specifying', 'building', 'deploying', 'shipping'];
+    const taskRows = db
+      .prepare(
+        `SELECT id, data FROM tasks WHERE status IN (${ACTIVE_STATUSES.map(() => '?').join(',')})`,
+      )
+      .all(...ACTIVE_STATUSES) as { id: string; data: string }[];
+
+    const updateTaskStmt = db.prepare(
+      'UPDATE tasks SET status = ?, data = ?, updated_at = ? WHERE id = ?',
+    );
+
+    for (const row of taskRows) {
+      const task = JSON.parse(row.data) as Task;
+      const updated = { ...task, status: 'failed' as const, updatedAt: ts };
+      updateTaskStmt.run('failed', JSON.stringify(updated), ts, row.id);
+      tasksFailed++;
+    }
+  });
+
+  txn();
+  return { agentsReset, tasksFailed };
+}
