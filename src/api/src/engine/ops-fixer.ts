@@ -5,10 +5,12 @@
  *   1. A scripted op (e.g. `acrBuild`, `deployApp`) just failed with an error.
  *   2. We send a focused follow-up to the existing Copilot SDK session
  *      describing the failure and asking the agent to inspect the workspace
- *      and edit files (Dockerfile, app code, etc.) to make the next attempt
- *      succeed.
- *   3. The fixer must NOT run git/az/kubectl itself — Liliput owns those
- *      operations and will retry the scripted op once the fixer returns.
+ *      and either edit files (Dockerfile, app code, …) OR run the recovery
+ *      action itself (`az acr build`, `kubectl apply`, …) — whichever is the
+ *      right fix. The agent has full bash / git / az / kubectl access.
+ *   3. After the fixer returns, Liliput re-runs the scripted op. If the agent
+ *      already completed the operation itself, the recovery-check pattern in
+ *      the caller short-circuits to success cleanly.
  *
  * After the fixer turn, the caller:
  *   - inspects `git status` (changed files),
@@ -70,7 +72,7 @@ function buildPrompt(opts: OpsFixerOptions): string {
           `## Phase: container image BUILD failed (attempt ${attempt})`,
           '',
           `Liliput tried to run \`az acr build\` to produce \`${context.imageRef ?? '(unknown)'}\` from \`${context.dockerfile}\` and it failed.`,
-          'Your job: inspect the workspace and edit files (Dockerfile, app source, package manifests, …) so the NEXT scripted build attempt succeeds.',
+          'Your job: inspect the workspace, then EITHER edit files (Dockerfile, app source, manifests, …) so the next scripted build succeeds, OR run `az acr build` / similar yourself to push the image directly. Both are fine — Liliput will detect the recovered state and continue.',
           '',
           'Likely causes to investigate:',
           '  - missing/incorrect base image',
@@ -84,7 +86,7 @@ function buildPrompt(opts: OpsFixerOptions): string {
           `## Phase: kubernetes DEPLOY failed (attempt ${attempt})`,
           '',
           `Liliput tried to deploy \`${context.imageRef ?? '(unknown)'}\` to namespace \`${context.namespace ?? '(unknown)'}\` and the pod did not become Ready.`,
-          'Your job: inspect the workspace and edit files (Dockerfile, app source, startup config, …) so the NEXT scripted deploy attempt succeeds.',
+          'Your job: inspect the workspace and the live cluster, then EITHER edit files (Dockerfile, app source, k8s manifests, …) so the next scripted deploy succeeds, OR run `kubectl` / `az` commands yourself to fix it directly. Both are fine — Liliput will detect the recovered state and continue.',
           '',
           'Likely causes to investigate:',
           `  - app does not bind to 0.0.0.0:${context.port} (binds to localhost only?)`,
@@ -95,14 +97,20 @@ function buildPrompt(opts: OpsFixerOptions): string {
         ].join('\n');
 
   const guardrails = [
-    '## Strict guardrails',
+    '## You have full power — use it',
     '',
-    '  - DO NOT run `git`, `az`, `kubectl`, `docker`, or any deploy command. Liliput will retry the scripted op once you finish.',
-    '  - DO NOT edit any file under `infra/`, `k8s/`, or anything matching `**/nginx*` or `**/gateway*` — Liliput owns the cluster gateway.',
-    '  - DO NOT remove existing functionality. Make the smallest change that fixes the failure.',
-    '  - Read files first (read tool), then edit. Show your reasoning briefly.',
-    '  - Stay inside the current working directory (the cloned target repo).',
-    '  - When you finish, reply with a 1-2 sentence summary of what you changed and why.',
+    '  - You have access to: bash, git, az, kubectl, docker, curl, gh, plus all read/write/edit tools.',
+    '  - You may edit any file in the repo, including infra/, k8s/, Dockerfile, .github/ — if that is genuinely the right fix.',
+    '  - You may run remote commands yourself: `az acr build …`, `kubectl apply …`, `kubectl rollout …`, etc.',
+    '    If you successfully build/deploy yourself, that is great — Liliput will detect the recovered state and continue.',
+    '  - You may also commit and push yourself if useful (e.g. to trigger a downstream workflow). Liliput is idempotent here.',
+    '',
+    '## Soft guidance',
+    '',
+    '  - Make the smallest change that fixes the failure. Do not remove existing functionality unrelated to the bug.',
+    '  - Stay inside the cloned target repo for file edits. Stay on the current git branch.',
+    '  - Read files before editing. Show your reasoning briefly.',
+    '  - When you finish, reply with a 1-2 sentence summary of what you did and why.',
   ].join('\n');
 
   return [
