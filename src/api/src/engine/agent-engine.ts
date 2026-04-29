@@ -1444,6 +1444,11 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
     throw new Error('Agent produced no file changes');
   }
 
+  // Coder is done — mark it completed BEFORE the builder spawns so the UI
+  // doesn't show two agents running side-by-side. The builder's work is
+  // strictly sequential after this point.
+  completePhase(io, taskId, coder);
+
   // Builder
   const builder = spawnPhase(io, taskId, 'builder', 'Builder Liliputian');
   if (!builder) throw new Error('Failed to register builder agent');
@@ -1950,6 +1955,11 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
     return;
   }
 
+  // Coder is done — mark it completed BEFORE spawning the builder so the UI
+  // doesn't show two agents running side-by-side during the (sequential)
+  // build phase.
+  completePhase(io, taskId, coder);
+
   // Commit + push delta.
   const builder = spawnPhase(io, taskId, 'builder', 'Builder Liliputian');
   if (!builder) throw new Error('Failed to register builder agent');
@@ -2041,7 +2051,6 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
     initialSha: sha,
   });
   store.updateTask(taskId, { imageRef: buildOutcome.imageRef, commitSha: buildOutcome.sha });
-  completePhase(io, taskId, coder);
   completePhase(io, taskId, builder);
 
   chatStatus(io, taskId, `🚀 Image \`${buildOutcome.imageRef.split('/').pop()}\` built. Rolling preview deployment…`);
