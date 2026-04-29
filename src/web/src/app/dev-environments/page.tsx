@@ -6,6 +6,17 @@ import { useTasks } from '../../hooks/useTasks';
 import { useSocket } from '../../hooks/useSocket';
 import type { Task, TaskStatus } from '@shared/types';
 
+interface PodInfo {
+  name: string;
+  phase: string;
+  ready: boolean;
+  restarts: number;
+  containers: string[];
+  startedAt: string | null;
+  reason: string | null;
+  message: string | null;
+}
+
 const STATUS_STYLES: Record<TaskStatus, { label: string; cls: string }> = {
   clarifying:  { label: 'Clarifying',  cls: 'bg-blue-500/15 text-blue-300 border-blue-500/30' },
   specifying:  { label: 'Specifying',  cls: 'bg-blue-500/15 text-blue-300 border-blue-500/30' },
@@ -133,6 +144,57 @@ export default function DevEnvironmentsPage() {
 
 function DevEnvCard({ task }: { task: Task }) {
   const style = STATUS_STYLES[task.status];
+  const [open, setOpen] = useState(false);
+  const [pods, setPods] = useState<PodInfo[] | null>(null);
+  const [podsErr, setPodsErr] = useState<string | null>(null);
+  const [selectedPod, setSelectedPod] = useState<string | null>(null);
+  const [logs, setLogs] = useState<string>('');
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [logsErr, setLogsErr] = useState<string | null>(null);
+  const [previous, setPrevious] = useState(false);
+
+  const loadPods = useCallback(async () => {
+    if (!task.devNamespace) return;
+    try {
+      setPodsErr(null);
+      const r = await fetch(`/api/tasks/${task.id}/dev-pods`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      const list: PodInfo[] = data.pods ?? [];
+      setPods(list);
+      if (list.length > 0 && !selectedPod) setSelectedPod(list[0]!.name);
+    } catch (e) {
+      setPodsErr(e instanceof Error ? e.message : String(e));
+    }
+  }, [task.id, task.devNamespace, selectedPod]);
+
+  const loadLogs = useCallback(async (pod: string, prev: boolean) => {
+    setLogsLoading(true);
+    setLogsErr(null);
+    try {
+      const params = new URLSearchParams({ pod, tail: '500' });
+      if (prev) params.set('previous', '1');
+      const r = await fetch(`/api/tasks/${task.id}/dev-logs?${params}`);
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.details ?? err.error ?? `HTTP ${r.status}`);
+      }
+      const data = await r.json();
+      setLogs(data.logs ?? '(no output)');
+    } catch (e) {
+      setLogsErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLogsLoading(false);
+    }
+  }, [task.id]);
+
+  useEffect(() => {
+    if (open && task.devNamespace) void loadPods();
+  }, [open, task.devNamespace, loadPods]);
+
+  useEffect(() => {
+    if (open && selectedPod) void loadLogs(selectedPod, previous);
+  }, [open, selectedPod, previous, loadLogs]);
 
   return (
     <div className="bg-[#0d0d14] border border-[#1a1a2e] rounded-lg p-4 hover:border-cyan-500/40 transition-colors">
@@ -218,7 +280,99 @@ function DevEnvCard({ task }: { task: Task }) {
         >
           💬 Chat
         </Link>
+        {task.devNamespace && (
+          <button
+            onClick={() => setOpen((v) => !v)}
+            className="px-2 py-1 bg-yellow-600/20 hover:bg-yellow-600/40 border border-yellow-500/40 rounded text-yellow-200"
+          >
+            {open ? '▼ Hide pods/logs' : '▶ Pods & logs'}
+          </button>
+        )}
       </div>
+
+      {open && task.devNamespace && (
+        <div className="mt-3 border-t border-[#1a1a2e] pt-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] text-gray-400">Pods in {task.devNamespace}</span>
+            <button
+              onClick={() => void loadPods()}
+              className="text-[10px] text-cyan-400 hover:text-cyan-200"
+            >
+              ↻ refresh
+            </button>
+          </div>
+          {podsErr && (
+            <div className="text-[11px] text-red-400">Failed: {podsErr}</div>
+          )}
+          {pods === null ? (
+            <div className="text-[11px] text-gray-500">Loading pods…</div>
+          ) : pods.length === 0 ? (
+            <div className="text-[11px] text-gray-500">No pods in namespace.</div>
+          ) : (
+            <div className="space-y-1">
+              {pods.map((p) => {
+                const phaseColor =
+                  p.phase === 'Running' && p.ready ? 'text-green-400'
+                  : p.phase === 'Pending' || (p.phase === 'Running' && !p.ready) ? 'text-yellow-400'
+                  : p.phase === 'Failed' || p.reason ? 'text-red-400'
+                  : 'text-gray-400';
+                return (
+                  <button
+                    key={p.name}
+                    onClick={() => setSelectedPod(p.name)}
+                    className={`w-full text-left px-2 py-1 rounded border text-[11px] ${
+                      selectedPod === p.name
+                        ? 'border-cyan-500/60 bg-cyan-500/10'
+                        : 'border-[#1a1a2e] hover:border-gray-600'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <code className="text-gray-300 truncate">{p.name}</code>
+                      <span className={`shrink-0 ${phaseColor}`}>
+                        {p.phase}{p.ready ? ' • ready' : ''}{p.restarts > 0 ? ` • ${p.restarts} restart${p.restarts === 1 ? '' : 's'}` : ''}
+                      </span>
+                    </div>
+                    {p.reason && (
+                      <div className="text-red-300 text-[10px] mt-0.5 truncate" title={p.message ?? p.reason}>
+                        {p.reason}{p.message ? `: ${p.message}` : ''}
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {selectedPod && (
+            <div className="mt-2 space-y-1">
+              <div className="flex items-center gap-3 text-[11px]">
+                <span className="text-gray-400">Logs: <code className="text-cyan-300">{selectedPod}</code></span>
+                <label className="flex items-center gap-1 text-gray-500">
+                  <input
+                    type="checkbox"
+                    checked={previous}
+                    onChange={(e) => setPrevious(e.target.checked)}
+                    className="accent-cyan-500"
+                  />
+                  previous container
+                </label>
+                <button
+                  onClick={() => void loadLogs(selectedPod, previous)}
+                  className="text-cyan-400 hover:text-cyan-200"
+                >
+                  ↻ refresh
+                </button>
+              </div>
+              {logsErr && (
+                <div className="text-[11px] text-red-400">Failed: {logsErr}</div>
+              )}
+              <pre className="bg-black/60 border border-[#1a1a2e] rounded p-2 text-[10px] text-gray-300 overflow-auto max-h-80 whitespace-pre-wrap">
+                {logsLoading ? 'Loading logs…' : (logs || '(empty)')}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

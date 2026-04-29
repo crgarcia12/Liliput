@@ -235,6 +235,65 @@ export interface ExecResult {
   exitCode: number;
 }
 
+export interface DevPodInfo {
+  name: string;
+  phase: string;
+  ready: boolean;
+  restarts: number;
+  containers: string[];
+  startedAt: string | null;
+  reason: string | null;
+  message: string | null;
+}
+
+/** List all pods in a namespace with status info for the dev-environments UI. */
+export async function listDevPods(namespace: string): Promise<DevPodInfo[]> {
+  const core = coreApi();
+  try {
+    const list = await core.listNamespacedPod({ namespace });
+    return list.items.map((p) => {
+      const cs = p.status?.containerStatuses ?? [];
+      const restarts = cs.reduce((sum, c) => sum + (c.restartCount ?? 0), 0);
+      const ready = cs.length > 0 && cs.every((c) => c.ready);
+      const waiting = cs.find((c) => c.state?.waiting);
+      const terminated = cs.find((c) => c.state?.terminated);
+      return {
+        name: p.metadata?.name ?? '',
+        phase: p.status?.phase ?? 'Unknown',
+        ready,
+        restarts,
+        containers: (p.spec?.containers ?? []).map((c) => c.name),
+        startedAt: p.status?.startTime ? new Date(p.status.startTime).toISOString() : null,
+        reason: waiting?.state?.waiting?.reason ?? terminated?.state?.terminated?.reason ?? null,
+        message: waiting?.state?.waiting?.message ?? terminated?.state?.terminated?.message ?? null,
+      };
+    });
+  } catch (err) {
+    if (isNotFound(err)) return [];
+    throw err;
+  }
+}
+
+/** Read logs from a pod (optionally a specific container, optionally previous instance). */
+export async function getPodLogs(
+  namespace: string,
+  podName: string,
+  opts: { container?: string; tailLines?: number; previous?: boolean } = {},
+): Promise<string> {
+  const core = coreApi();
+  const tailLines = opts.tailLines ?? 500;
+  const params: {
+    name: string;
+    namespace: string;
+    container?: string;
+    tailLines: number;
+    previous: boolean;
+  } = { name: podName, namespace, tailLines, previous: opts.previous ?? false };
+  if (opts.container) params.container = opts.container;
+  const log = await core.readNamespacedPodLog(params);
+  return typeof log === 'string' ? log : String(log ?? '');
+}
+
 /** Exec into a single pod by label selector. Returns combined output. */
 export async function execInPod(
   namespace: string,
