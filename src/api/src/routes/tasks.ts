@@ -4,7 +4,7 @@ import type { Server as SocketServer } from 'socket.io';
 import type { CreateTaskRequest, ChatRequest } from '../../../shared/types/index.js';
 import * as store from '../stores/task-store.js';
 import { generateSpec as defaultGenerateSpec, type SpecGenerator } from '../engine/spec-generator.js';
-import { startBuild, shipTask, discardTask, iterateTask, hasLiveSession } from '../engine/agent-engine.js';
+import { startBuild, shipTask, discardTask, iterateTask, hasLiveSession, enqueueChatForAgent, hasInFlightAgent } from '../engine/agent-engine.js';
 import { logger } from '../logger.js';
 
 export function createTasksRouter(
@@ -140,6 +140,16 @@ export function createTasksRouter(
         );
         if (ackMsg) io.to(`task:${task.id}`).emit('chat:message', ackMsg);
         iterateTask(io, task.id, message);
+      } else if (hasInFlightAgent(task.id) && enqueueChatForAgent(task.id, message)) {
+        // Mid-flight preemption: an agent turn is currently running. Queue the
+        // message and abort the in-flight turn so the agent stops and addresses
+        // the new instruction on the next turn (same SDK session, full memory).
+        const ackMsg = store.addChatMessage(
+          task.id,
+          'liliput',
+          '🛑 Interrupting the agent — it will handle your message on its next turn.',
+        );
+        if (ackMsg) io.to(`task:${task.id}`).emit('chat:message', ackMsg);
       } else {
         const sysMsg = store.addChatMessage(
           task.id,

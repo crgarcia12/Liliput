@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react';
  * It's hard-coded so the running bundle reflects the source at build time — the version
  * shown in the footer = the version that's actually running.
  */
-export const FRONTEND_VERSION = '0.0.6';
+export const FRONTEND_VERSION = '0.0.7';
 
 /**
  * Footer pinned at the bottom-right of the viewport showing

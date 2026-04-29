@@ -399,6 +399,26 @@ export async function runAgentTurn(
   };
 }
 
+/**
+ * Cancels the in-flight `sendAndWait` for this session. The session itself
+ * remains valid — the next `runAgentTurn` call can continue the conversation
+ * (the SDK preserves message history across abort).
+ *
+ * Used to preempt a running agent turn when the user sends a new chat message
+ * mid-flight, so the agent can stop what it's doing and address the new
+ * instruction.
+ */
+export async function abortAgentTurn(handle: AgentSession): Promise<void> {
+  try {
+    await handle._session.abort();
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'SDK session abort failed',
+    );
+  }
+}
+
 /** Disconnects the session, releasing in-memory handlers. Workspace files survive. */
 export async function disposeAgentSession(handle: AgentSession): Promise<void> {
   try {

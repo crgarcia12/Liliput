@@ -25,6 +25,7 @@ import {
   createAgentSession,
   runAgentTurn,
   disposeAgentSession,
+  abortAgentTurn,
   type AgentSession,
 } from './agent-loop.js';
 import { resolveDockerfile } from './dockerfile-detector.js';
@@ -75,6 +76,105 @@ interface LiveSession {
   port: number;
 }
 const liveSessions = new Map<string, LiveSession>();
+
+/**
+ * Per-task state for an *in-flight* agent pipeline (i.e., between
+ * createAgentSession and the final liveSessions stash, or during iterateTask).
+ *
+ * Lets the chat handler preempt a running LLM turn: when a user sends a chat
+ * message while the agent is mid-turn, we push it into `pendingChatMessages`
+ * and call `abortAgentTurn(agentSession)` so the SDK's sendAndWait returns
+ * promptly. Then `drainPendingChatMessages` runs follow-up turns on the same
+ * session (preserving conversation memory) so the agent addresses the user's
+ * new instruction before the pipeline continues.
+ */
+interface InFlightAgent {
+  agentSession: AgentSession;
+  pendingChatMessages: string[];
+  taskTitle: string;
+  taskDescription: string;
+  spec?: string;
+}
+const inFlightAgents = new Map<string, InFlightAgent>();
+
+function registerInFlightAgent(taskId: string, entry: InFlightAgent): void {
+  inFlightAgents.set(taskId, entry);
+}
+
+function clearInFlightAgent(taskId: string): void {
+  inFlightAgents.delete(taskId);
+}
+
+/**
+ * Called by the chat route when a user sends a message while an agent turn is
+ * in flight. Queues the message and aborts the current turn so the agent
+ * stops and addresses it on the next turn.
+ *
+ * Returns true if an in-flight agent was found and the message was queued.
+ * Returns false if no agent is currently running (caller should fall back to
+ * the post-review iterateTask path).
+ */
+export function enqueueChatForAgent(taskId: string, message: string): boolean {
+  const inFlight = inFlightAgents.get(taskId);
+  if (!inFlight) return false;
+  inFlight.pendingChatMessages.push(message);
+  void abortAgentTurn(inFlight.agentSession);
+  return true;
+}
+
+/** True if an agent turn is currently in flight for this task. */
+export function hasInFlightAgent(taskId: string): boolean {
+  return inFlightAgents.has(taskId);
+}
+
+/**
+ * Drains queued chat messages by running follow-up turns on the same session.
+ * Called after each main agent turn so user interruptions are addressed before
+ * the pipeline proceeds to the next phase.
+ */
+async function drainPendingChatMessages(
+  io: SocketServer,
+  taskId: string,
+  agentId: string,
+): Promise<void> {
+  const inFlight = inFlightAgents.get(taskId);
+  if (!inFlight) return;
+  while (inFlight.pendingChatMessages.length > 0) {
+    const msg = inFlight.pendingChatMessages.shift()!;
+    logPhase(
+      io,
+      taskId,
+      agentId,
+      'info',
+      `🛑 User interrupted — handling: ${msg.substring(0, 80)}`,
+    );
+    const followUp =
+      `User sent a new message while you were working. Stop your previous task ` +
+      `and address this instead:\n\n${msg}`;
+    try {
+      const result = await runAgentTurn(inFlight.agentSession, {
+        taskTitle: inFlight.taskTitle,
+        taskDescription: inFlight.taskDescription,
+        spec: inFlight.spec,
+        followUp,
+        isInitial: false,
+        onLog: (level, m, cmd, out) => logPhase(io, taskId, agentId, level, m, cmd, out),
+        onToolEvent: (event) => {
+          io.to(`task:${taskId}`).emit('agent:tool-event', {
+            taskId,
+            agentId,
+            ...event,
+          });
+        },
+      });
+      const sysMsg = store.addChatMessage(taskId, 'liliput', result.summary);
+      if (sysMsg) io.to(`task:${taskId}`).emit('chat:message', sysMsg);
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      logPhase(io, taskId, agentId, 'warn', `Follow-up turn failed: ${m}`);
+    }
+  }
+}
 
 function activeRoutes(): DevRoute[] {
   return Array.from(devEnvs.values()).map((e) => ({
@@ -475,6 +575,8 @@ export function startBuild(io: SocketServer, taskId: string): void {
       setTaskStatus(io, taskId, 'failed', { errorMessage: message });
       const sysMsg = store.addChatMessage(taskId, 'system', `❌ Agent pipeline failed: ${message}`);
       if (sysMsg) io.to(`task:${taskId}`).emit('chat:message', sysMsg);
+    } finally {
+      clearInFlightAgent(taskId);
     }
   })();
 }
@@ -517,6 +619,13 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
 
   logPhase(io, taskId, coder, 'info', 'Spawning Copilot SDK session…');
   const agentSession = await createAgentSession(handle.cwd);
+  registerInFlightAgent(taskId, {
+    agentSession,
+    pendingChatMessages: [],
+    taskTitle: task.title,
+    taskDescription: task.description,
+    spec: task.spec,
+  });
   logPhase(io, taskId, coder, 'info', 'Invoking LLM agent loop…');
   const result = await runAgentTurn(agentSession, {
     taskTitle: task.title,
@@ -532,6 +641,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
       });
     },
   });
+  await drainPendingChatMessages(io, taskId, coder);
 
   const changedFiles = await git.changedFiles(handle);
   logPhase(
@@ -547,6 +657,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
 
   if (changedFiles.length === 0) {
     failPhase(io, taskId, coder, 'Agent produced no file changes — nothing to build.');
+    clearInFlightAgent(taskId);
     await disposeAgentSession(agentSession);
     throw new Error('Agent produced no file changes');
   }
@@ -916,6 +1027,8 @@ export function iterateTask(io: SocketServer, taskId: string, message: string): 
       setTaskStatus(io, taskId, 'failed', { errorMessage: m });
       const sysMsg = store.addChatMessage(taskId, 'system', `❌ Iteration failed: ${m}`);
       if (sysMsg) io.to(`task:${taskId}`).emit('chat:message', sysMsg);
+    } finally {
+      clearInFlightAgent(taskId);
     }
   })();
 }
@@ -936,6 +1049,14 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   const coder = spawnPhase(io, taskId, 'coder', 'Coder Liliputian');
   if (!coder) throw new Error('Failed to register coder agent');
 
+  registerInFlightAgent(taskId, {
+    agentSession: live.agentSession,
+    pendingChatMessages: [],
+    taskTitle: task.title,
+    taskDescription: task.description,
+    spec: task.spec,
+  });
+
   logPhase(io, taskId, coder, 'info', `Iteration: ${message.substring(0, 200)}`);
   const result = await runAgentTurn(live.agentSession, {
     taskTitle: task.title,
@@ -952,6 +1073,7 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
       });
     },
   });
+  await drainPendingChatMessages(io, taskId, coder);
 
   const changed = await git.changedFiles(live.repoHandle);
   logPhase(
