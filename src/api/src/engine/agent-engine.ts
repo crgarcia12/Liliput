@@ -1037,11 +1037,14 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   const task = store.getTask(taskId);
   if (!task) throw new Error('Task not found');
 
-  const live = liveSessions.get(taskId);
+  let live = liveSessions.get(taskId);
   if (!live) {
-    throw new Error(
-      'This task has no live agent session — start a new task to iterate further.',
-    );
+    if (!task.repository || !task.branch) {
+      throw new Error(
+        'Cannot resurrect session — task is missing repository or branch metadata.',
+      );
+    }
+    live = await resurrectLiveSession(io, taskId, task);
   }
 
   setTaskStatus(io, taskId, 'building');
@@ -1226,6 +1229,119 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
 /** Returns true if a follow-up chat message would trigger an iteration. */
 export function hasLiveSession(taskId: string): boolean {
   return liveSessions.has(taskId);
+}
+
+/**
+ * Returns true if a chat message can trigger iteration on this task — either
+ * because a live session is in memory, or because the task has enough persisted
+ * metadata (repo + branch + reviewable status) for us to resurrect one.
+ */
+export function canIterate(taskId: string): boolean {
+  if (liveSessions.has(taskId)) return true;
+  const t = store.getTask(taskId);
+  if (!t) return false;
+  if (t.status !== 'review' && t.status !== 'completed') return false;
+  return Boolean(t.repository && t.branch);
+}
+
+/**
+ * Resurrect a live session for a task whose in-memory session was lost
+ * (typically due to a pod restart). Re-clones the persisted branch into a
+ * fresh workspace, recreates the Copilot SDK session in that workspace, and
+ * re-populates the `liveSessions` registry so iteration can proceed.
+ *
+ * The user sees the resurrection happen in the chat + activity log via the
+ * 'researcher' phase agent (Resurrector Liliputian).
+ */
+async function resurrectLiveSession(
+  io: SocketServer,
+  taskId: string,
+  task: Task,
+): Promise<LiveSession> {
+  if (!task.repository || !task.branch) {
+    throw new Error('Task is missing repository or branch — nothing to resurrect.');
+  }
+
+  const ackMsg = store.addChatMessage(
+    taskId,
+    'liliput',
+    `🪦→🧟 The previous agent session was lost (likely a pod restart). ` +
+      `Resurrecting it by re-cloning \`${task.repository}@${task.branch}\` — give me a moment…`,
+  );
+  if (ackMsg) io.to(`task:${taskId}`).emit('chat:message', ackMsg);
+
+  const phaseAgent = spawnPhase(io, taskId, 'researcher', 'Resurrector Liliputian');
+  if (!phaseAgent) throw new Error('Failed to register resurrector agent');
+
+  try {
+    logPhase(
+      io,
+      taskId,
+      phaseAgent,
+      'info',
+      `Re-cloning ${task.repository}@${task.branch}…`,
+      `git clone --branch ${task.branch} ${task.repository}`,
+    );
+    const repoSlug = task.repository.replace(/\//g, '-');
+    const handle = await git.clone({
+      repo: task.repository,
+      ref: task.branch,
+      workdirName: `${repoSlug}-${taskId}-resurrect-${Date.now().toString(36)}`,
+      onLog: (m) => logPhase(io, taskId, phaseAgent, 'info', m),
+    });
+    logPhase(io, taskId, phaseAgent, 'info', `Cloned to ${handle.cwd}`);
+
+    logPhase(io, taskId, phaseAgent, 'info', 'Resolving Dockerfile…');
+    const df = await resolveDockerfile(handle.cwd);
+    logPhase(io, taskId, phaseAgent, 'info', df.notes);
+
+    logPhase(io, taskId, phaseAgent, 'info', 'Re-creating Copilot SDK session…');
+    const agentSession = await createAgentSession(handle.cwd);
+
+    const [owner, name] = task.repository.split('/');
+    if (!owner || !name) throw new Error(`Invalid repo slug: ${task.repository}`);
+    const safeBranch = sanitiseK8sName(task.branch);
+    const pathPrefix = `/dev/${sanitiseK8sName(owner)}/${sanitiseK8sName(name)}/${safeBranch}`;
+    const imageName = `liliput-app-${sanitiseK8sName(task.repository.replace('/', '-'))}`;
+    const namespace =
+      task.devNamespace ??
+      `dev-${sanitiseK8sName(owner)}-${sanitiseK8sName(name)}-liliput-${taskId.substring(0, 8)}`;
+
+    const live: LiveSession = {
+      agentSession,
+      repoHandle: handle,
+      repo: task.repository,
+      branch: task.branch,
+      imageName,
+      pathPrefix,
+      namespace,
+      dockerfile: df.dockerfile,
+      port: df.port,
+    };
+    liveSessions.set(taskId, live);
+
+    logPhase(
+      io,
+      taskId,
+      phaseAgent,
+      'info',
+      `✅ Session resurrected. Memory is empty (no prior turns) but workspace + branch + PR are intact.`,
+    );
+    completePhase(io, taskId, phaseAgent);
+
+    const okMsg = store.addChatMessage(
+      taskId,
+      'liliput',
+      `✅ Resurrected. Branch \`${task.branch}\` re-cloned, SDK session recreated. ` +
+        `Note: I don't remember our previous conversation, so feel free to recap if needed. Now applying your message…`,
+    );
+    if (okMsg) io.to(`task:${taskId}`).emit('chat:message', okMsg);
+
+    return live;
+  } catch (err) {
+    failPhase(io, taskId, phaseAgent, err instanceof Error ? err.message : String(err));
+    throw err;
+  }
 }
 
 function truncate(s: string, n: number): string {

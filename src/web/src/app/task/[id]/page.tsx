@@ -233,13 +233,23 @@ export default function TaskPage() {
               rel="noopener noreferrer"
               className="text-xs px-2 py-0.5 rounded bg-purple-900/30 border border-purple-700/50 text-purple-300 hover:bg-purple-900/50"
             >
-              🔀 PR
+              🔀 Pull request{task.pullRequestNumber ? ` #${task.pullRequestNumber}` : ''}
             </a>
           )}
         </div>
         <div className="flex items-center gap-3 shrink-0">
           {task?.status === 'review' && (
             <>
+              {task.pullRequestUrl && (
+                <a
+                  href={task.pullRequestUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs px-3 py-1 rounded bg-purple-700 hover:bg-purple-600 text-white"
+                >
+                  🔀 View PR{task.pullRequestNumber ? ` #${task.pullRequestNumber}` : ''} ↗
+                </a>
+              )}
               <button
                 onClick={async () => {
                   if (!task) return;

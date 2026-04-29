@@ -4,7 +4,7 @@ import type { Server as SocketServer } from 'socket.io';
 import type { CreateTaskRequest, ChatRequest } from '../../../shared/types/index.js';
 import * as store from '../stores/task-store.js';
 import { generateSpec as defaultGenerateSpec, type SpecGenerator } from '../engine/spec-generator.js';
-import { startBuild, shipTask, discardTask, iterateTask, hasLiveSession, enqueueChatForAgent, hasInFlightAgent } from '../engine/agent-engine.js';
+import { startBuild, shipTask, discardTask, iterateTask, canIterate, enqueueChatForAgent, hasInFlightAgent } from '../engine/agent-engine.js';
 import { logger } from '../logger.js';
 
 export function createTasksRouter(
@@ -130,9 +130,12 @@ export function createTasksRouter(
           });
       } else if (
         (task.status === 'review' || task.status === 'completed') &&
-        hasLiveSession(task.id)
+        canIterate(task.id)
       ) {
         // Follow-up: iterate on the same workspace + branch + PR.
+        // canIterate also matches when the in-memory session was lost (pod
+        // restart) but the task has enough persisted metadata for us to
+        // resurrect it inside iterateTask.
         const ackMsg = store.addChatMessage(
           task.id,
           'liliput',

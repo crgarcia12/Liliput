@@ -130,6 +130,9 @@ export default function Home() {
           <a href="/requests" className="text-gray-400 hover:text-cyan-300">
             📋 Requests
           </a>
+          <a href="/dev-environments" className="text-gray-400 hover:text-cyan-300">
+            ☁️ Dev envs
+          </a>
           <span className={connected ? 'text-green-400' : 'text-red-400'}>
             {connected ? '● Connected' : '○ Disconnected'}
           </span>
