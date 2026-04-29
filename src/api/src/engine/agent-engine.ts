@@ -39,6 +39,9 @@ import {
   devEnvName,
   sanitiseK8sName,
   deleteNamespace,
+  listDevPods,
+  getPodLogs,
+  type DevPodInfo,
 } from './k8s-deployer.js';
 import { syncRoutes, type DevRoute } from './nginx-patcher.js';
 import { openPullRequest, markPullRequestReady, closePullRequest } from './github-pr.js';
@@ -49,6 +52,14 @@ const DEFAULT_REPO = process.env['LILIPUT_DEFAULT_TARGET_REPO'];
 /** How many times to invoke the ops-fixer agent for build/deploy failures. */
 const MAX_BUILD_FIX_ATTEMPTS = parseInt(process.env['MAX_BUILD_FIX_ATTEMPTS'] ?? '2', 10);
 const MAX_DEPLOY_FIX_ATTEMPTS = parseInt(process.env['MAX_DEPLOY_FIX_ATTEMPTS'] ?? '2', 10);
+/**
+ * Cap for the post-deploy validate+heal loop. The user said "forever" — this
+ * is a safety net against runaway token spend if the agent is genuinely stuck
+ * with no useful fix. Override via env. Set very high (default 30).
+ */
+const MAX_VALIDATE_ATTEMPTS = parseInt(process.env['MAX_VALIDATE_ATTEMPTS'] ?? '30', 10);
+/** How long to wait between probes for the very first validation (lets app boot). */
+const VALIDATE_INITIAL_SETTLE_MS = parseInt(process.env['VALIDATE_INITIAL_SETTLE_MS'] ?? '8000', 10);
 
 interface DevEnvRecord {
   taskId: string;
@@ -780,6 +791,486 @@ async function deployWithFixer(ctx: DeployContext): Promise<DeployOutcome> {
   throw lastErr instanceof Error ? lastErr : new Error('Deploy failed');
 }
 
+// ─── Post-deploy validate-and-heal loop ───────────────────────────────
+//
+// After a successful deploy, the pod may be Ready but the app might still be
+// broken in ways that only show up at runtime — wrong port, wrong base path,
+// app crashes a few seconds in, etc. This loop probes the live preview, asks
+// the LLM ops-fixer to repair anything it finds, rebuilds + redeploys, and
+// loops until healthy. The user said "forever"; we cap at MAX_VALIDATE_ATTEMPTS
+// (default 30) to bound token spend and bail-out if the fixer makes no
+// progress between attempts.
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+interface ValidateResult {
+  healthy: boolean;
+  /** One-line summary suitable for chat / activity log. */
+  summary: string;
+  /** Multi-line diagnostic body (HTTP probe + pods + last log lines) for the fixer prompt. */
+  diagnostics: string;
+  /** Probe details for the UI. */
+  httpStatus: number;
+  podSummary: string;
+}
+
+/**
+ * Probe a live dev preview for runtime health.
+ *
+ * Strategy:
+ *   1. HTTP-GET the public preview URL with a 10s timeout. Anything 5xx /
+ *      timeout / ECONNREFUSED / unreachable = unhealthy.
+ *   2. List pods in the namespace; flag any that are not Running+Ready, or
+ *      that have restarted in the last 60s.
+ *   3. Pull the last 200 log lines from the primary pod (and the previous
+ *      instance if the current one has restarted), so the fixer prompt has
+ *      real evidence to reason from.
+ *
+ * The decision logic is intentionally lenient on 4xx (the app is responding,
+ * just nothing at /). 5xx is a hard failure — that's what we hit with the
+ * vite-on-8080 case where the Service resolves but the upstream is dead.
+ */
+async function validateDevPreview(
+  devUrl: string,
+  namespace: string,
+): Promise<ValidateResult> {
+  // Step 1: HTTP probe
+  let httpStatus = 0;
+  let httpBodySnippet = '';
+  let httpError: string | null = null;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 10_000);
+    try {
+      const r = await fetch(devUrl, { signal: ctrl.signal, redirect: 'manual' });
+      httpStatus = r.status;
+      const body = await r.text();
+      httpBodySnippet = body.slice(0, 500);
+    } finally {
+      clearTimeout(t);
+    }
+  } catch (e) {
+    httpError = e instanceof Error ? e.message : String(e);
+  }
+
+  // Step 2: Pod info
+  let pods: DevPodInfo[] = [];
+  try {
+    pods = await listDevPods(namespace);
+  } catch (e) {
+    pods = [];
+    httpError = httpError ?? `listDevPods failed: ${e instanceof Error ? e.message : String(e)}`;
+  }
+
+  const podSummary = pods.length === 0
+    ? '(no pods in namespace)'
+    : pods
+        .map(
+          (p) =>
+            `${p.name}: phase=${p.phase} ready=${p.ready} restarts=${p.restarts}` +
+            (p.reason ? ` reason=${p.reason}` : '') +
+            (p.message ? ` msg=${p.message.slice(0, 120)}` : ''),
+        )
+        .join('\n');
+
+  // Step 3: Logs from the primary pod
+  const primary = pods.find((p) => p.phase === 'Running') ?? pods[0];
+  let logsTail = '(no pod available)';
+  let prevLogsTail = '';
+  if (primary) {
+    try {
+      const log = await getPodLogs(namespace, primary.name, { tailLines: 200 });
+      logsTail = log.length > 4000 ? '…' + log.slice(-4000) : log;
+    } catch (e) {
+      logsTail = `(could not read logs: ${e instanceof Error ? e.message : String(e)})`;
+    }
+    if (primary.restarts > 0) {
+      try {
+        const prev = await getPodLogs(namespace, primary.name, { tailLines: 100, previous: true });
+        prevLogsTail = prev.length > 2000 ? '…' + prev.slice(-2000) : prev;
+      } catch {
+        // best effort — previous logs may not exist if the kubelet rotated them
+      }
+    }
+  }
+
+  // Step 4: Decide healthy
+  const podsOk =
+    pods.length > 0 && pods.every((p) => p.phase === 'Running' && p.ready);
+  // Hard-fail on 5xx / unreachable. 0 means the fetch itself errored.
+  const httpReachable = httpError === null && httpStatus > 0;
+  const httpOk = httpReachable && httpStatus < 500;
+  const healthy = podsOk && httpOk;
+
+  let summary: string;
+  if (healthy) {
+    summary = `Pods Ready, HTTP ${httpStatus} from ${devUrl}`;
+  } else if (!podsOk) {
+    const bad = pods.filter((p) => p.phase !== 'Running' || !p.ready);
+    summary =
+      bad.length > 0
+        ? `Pod ${bad[0]!.name} is ${bad[0]!.phase}${bad[0]!.ready ? '' : '/notReady'}` +
+          (bad[0]!.reason ? ` (${bad[0]!.reason})` : '')
+        : pods.length === 0
+          ? `No pods in namespace ${namespace}`
+          : `Pods unstable`;
+  } else if (httpError) {
+    summary = `HTTP probe of ${devUrl} failed: ${httpError.slice(0, 120)}`;
+  } else {
+    summary = `HTTP ${httpStatus} from ${devUrl} (5xx — upstream broken)`;
+  }
+
+  const diagnostics = [
+    '=== HTTP probe ===',
+    `URL: ${devUrl}`,
+    httpError
+      ? `Error: ${httpError}`
+      : `Status: ${httpStatus}\nBody (first 500 chars):\n${httpBodySnippet || '(empty body)'}`,
+    '',
+    `=== Pods in ${namespace} ===`,
+    podSummary,
+    '',
+    primary ? `=== Logs (${primary.name}, last 200 lines) ===` : '=== Logs ===',
+    logsTail,
+    prevLogsTail
+      ? `\n=== Previous instance logs (${primary?.name}, last 100 lines) ===\n${prevLogsTail}`
+      : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  return { healthy, summary, diagnostics, httpStatus, podSummary };
+}
+
+interface ValidateContext {
+  io: SocketServer;
+  taskId: string;
+  agentSession: AgentSession;
+  handle: git.RepoHandle;
+  imageName: string;
+  dockerfile: string;
+  port: number;
+  namespace: string;
+  pathPrefix: string;
+  devUrl: string;
+  initialImageRef: string;
+  initialSha: string;
+}
+
+interface ValidateOutcome {
+  imageRef: string;
+  sha: string;
+  healthy: boolean;
+  attemptsUsed: number;
+}
+
+/**
+ * Loop: probe live preview → if unhealthy, ask ops-fixer to repair → commit +
+ * push + rebuild + redeploy → re-probe. Continues until healthy or until the
+ * cap is reached, or until a chat preempt arrives (in which case we bail out
+ * cleanly so the chat handler can take over with fresh user intent).
+ *
+ * Idempotent w.r.t. failures — if any sub-step throws, we surface the error
+ * to the validator agent's activity log and bail out of the loop without
+ * crashing the caller. The caller's higher-level state (status='review',
+ * devUrl set, PR opened) is unaffected by validate-loop failures.
+ */
+async function validateAndHealLoop(ctx: ValidateContext): Promise<ValidateOutcome> {
+  const { io, taskId } = ctx;
+  let imageRef = ctx.initialImageRef;
+  let sha = ctx.initialSha;
+
+  const tester = spawnPhase(io, taskId, 'tester', 'Validator Liliputian');
+  if (!tester) {
+    return { imageRef, sha, healthy: false, attemptsUsed: 0 };
+  }
+
+  logPhase(
+    io,
+    taskId,
+    tester,
+    'info',
+    `🩺 Starting post-deploy health loop (cap ${MAX_VALIDATE_ATTEMPTS} attempts).`,
+  );
+
+  // Initial settle delay — lets the app finish boot before the first probe.
+  if (VALIDATE_INITIAL_SETTLE_MS > 0) {
+    logPhase(
+      io,
+      taskId,
+      tester,
+      'info',
+      `Letting the app settle for ${Math.round(VALIDATE_INITIAL_SETTLE_MS / 1000)}s before first probe…`,
+    );
+    await sleep(VALIDATE_INITIAL_SETTLE_MS);
+  }
+
+  for (let attempt = 1; attempt <= MAX_VALIDATE_ATTEMPTS; attempt++) {
+    // Chat preempt: if the user typed something while we were healing, bail
+    // out cleanly. The chat handler will run its own iteration which itself
+    // ends with another validateAndHealLoop call — so the user's intent
+    // takes precedence and we still end up validating afterwards.
+    const inFlight = inFlightAgents.get(taskId);
+    if (inFlight && inFlight.pendingChatMessages.length > 0) {
+      logPhase(
+        io,
+        taskId,
+        tester,
+        'info',
+        `⏸️  Pausing validation — handling new chat message(s) first.`,
+      );
+      completePhase(io, taskId, tester);
+      return { imageRef, sha, healthy: false, attemptsUsed: attempt - 1 };
+    }
+
+    logPhase(
+      io,
+      taskId,
+      tester,
+      'info',
+      `🩺 Probe ${attempt}/${MAX_VALIDATE_ATTEMPTS} — checking ${ctx.devUrl} + pod health…`,
+    );
+
+    let result: ValidateResult;
+    try {
+      result = await validateDevPreview(ctx.devUrl, ctx.namespace);
+    } catch (probeErr) {
+      const m = probeErr instanceof Error ? probeErr.message : String(probeErr);
+      logPhase(io, taskId, tester, 'warn', `Probe itself errored: ${m}. Retrying in 10s.`);
+      await sleep(10_000);
+      continue;
+    }
+
+    if (result.healthy) {
+      logPhase(io, taskId, tester, 'info', `✅ Healthy: ${result.summary}`);
+      completePhase(io, taskId, tester);
+      const okMsg = store.addChatMessage(
+        taskId,
+        'liliput',
+        `✅ Dev preview validated and healthy after ${attempt} probe(s).\n\n${result.summary}`,
+      );
+      if (okMsg) io.to(`task:${taskId}`).emit('chat:message', okMsg);
+      return { imageRef, sha, healthy: true, attemptsUsed: attempt };
+    }
+
+    logPhase(
+      io,
+      taskId,
+      tester,
+      'warn',
+      `🔴 Unhealthy: ${result.summary}`,
+      undefined,
+      result.diagnostics,
+    );
+
+    if (attempt >= MAX_VALIDATE_ATTEMPTS) {
+      logPhase(
+        io,
+        taskId,
+        tester,
+        'warn',
+        `Exhausted ${MAX_VALIDATE_ATTEMPTS} validation attempts — stopping the heal loop. Chat to retry.`,
+      );
+      completePhase(io, taskId, tester);
+      const stuckMsg = store.addChatMessage(
+        taskId,
+        'liliput',
+        `⚠️  Auto-heal exhausted (${MAX_VALIDATE_ATTEMPTS} attempts) — last status: ${result.summary}\n\nChat with me to keep iterating.`,
+      );
+      if (stuckMsg) io.to(`task:${taskId}`).emit('chat:message', stuckMsg);
+      return { imageRef, sha, healthy: false, attemptsUsed: attempt };
+    }
+
+    // Ask the LLM ops-fixer to repair the runtime failure.
+    const fixer = spawnPhase(io, taskId, 'fixer', `Fixer Liliputian (validate #${attempt})`);
+    if (!fixer) {
+      completePhase(io, taskId, tester);
+      return { imageRef, sha, healthy: false, attemptsUsed: attempt };
+    }
+
+    const hb = startHeartbeat(io, taskId, fixer);
+    try {
+      try {
+        await runOpsFixer({
+          session: ctx.agentSession,
+          phase: 'validate',
+          attempt,
+          errorMessage: result.summary,
+          errorOutput: result.diagnostics,
+          context: {
+            repo: ctx.handle.repo,
+            dockerfile: ctx.dockerfile,
+            port: ctx.port,
+            namespace: ctx.namespace,
+            pathPrefix: ctx.pathPrefix,
+            imageRef,
+          },
+          onLog: (level, msg, cmd, out) => {
+            hb.bump();
+            logPhase(io, taskId, fixer, level, msg, cmd, out);
+          },
+          onToolEvent: (event) => {
+            hb.bump();
+            recordToolEvent(io, taskId, fixer, event);
+          },
+        });
+      } finally {
+        hb.stop();
+      }
+    } catch (fixerErr) {
+      const m = fixerErr instanceof Error ? fixerErr.message : String(fixerErr);
+      failPhase(io, taskId, fixer, `Validate-fixer turn failed: ${m}`);
+      completePhase(io, taskId, tester);
+      return { imageRef, sha, healthy: false, attemptsUsed: attempt };
+    }
+
+    // What did the fixer do? Three cases:
+    //   (a) Edited files → commit, push, rebuild, redeploy, re-probe.
+    //   (b) Ran kubectl/az itself (e.g. patched a Deployment) → no file diff
+    //       but the live state may have changed — wait + re-probe directly.
+    //   (c) Made no changes and ran nothing useful → bail out (no point
+    //       looping the same probe → same fixer → same nothing).
+    let changed: string[] = [];
+    try {
+      changed = await git.changedFiles(ctx.handle);
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      logPhase(io, taskId, fixer, 'warn', `Could not list changed files: ${m}`);
+    }
+
+    if (changed.length === 0) {
+      logPhase(
+        io,
+        taskId,
+        fixer,
+        'info',
+        `Fixer made no file changes — re-probing in 10s in case live cluster state was patched directly.`,
+      );
+      completePhase(io, taskId, fixer);
+      await sleep(10_000);
+      continue;
+    }
+
+    logPhase(
+      io,
+      taskId,
+      fixer,
+      'info',
+      `Fixer changed ${changed.length} file(s); committing + rebuilding + redeploying…`,
+      undefined,
+      changed.join('\n'),
+    );
+
+    let newSha: string;
+    try {
+      newSha = await runGitOpWithFixer<string>({
+        agentSession: ctx.agentSession,
+        op: () =>
+          git.commitAll(ctx.handle, `fix(agent): runtime healing (validate attempt ${attempt})`),
+        describe: 'git commit (validate-fix)',
+        cwd: ctx.handle.cwd,
+        branch: ctx.handle.branch,
+        repo: ctx.handle.repo,
+        recoveryCheck: async () => {
+          if (await git.isWorkingTreeClean(ctx.handle)) {
+            const head = await git.headSha(ctx.handle);
+            return { recovered: true, result: head };
+          }
+          return { recovered: false };
+        },
+        onLog: (level, msg, cmd, out) => logPhase(io, taskId, fixer, level, msg, cmd, out),
+      });
+      await runGitOpWithFixer<void>({
+        agentSession: ctx.agentSession,
+        op: () => git.push(ctx.handle),
+        describe: `git push origin ${ctx.handle.branch} (validate-fix)`,
+        cwd: ctx.handle.cwd,
+        branch: ctx.handle.branch,
+        repo: ctx.handle.repo,
+        recoveryCheck: async () => {
+          if (await git.isBranchUpToDateWithRemote(ctx.handle)) {
+            return { recovered: true, result: undefined as void };
+          }
+          return { recovered: false };
+        },
+        onLog: (level, msg, cmd, out) => logPhase(io, taskId, fixer, level, msg, cmd, out),
+      });
+    } catch (gitErr) {
+      const m = gitErr instanceof Error ? gitErr.message : String(gitErr);
+      failPhase(io, taskId, fixer, `Could not commit/push validate-fix: ${m}`);
+      completePhase(io, taskId, tester);
+      return { imageRef, sha, healthy: false, attemptsUsed: attempt };
+    }
+    sha = newSha;
+    store.updateTask(taskId, { commitSha: sha });
+
+    // Rebuild image with the new SHA → tag.
+    const tag = sha.substring(0, 12);
+    logPhase(io, taskId, fixer, 'info', `Rebuilding ${ctx.imageName}:${tag}…`);
+    try {
+      const rebuilt = await acrBuild({
+        cwd: ctx.handle.cwd,
+        imageName: ctx.imageName,
+        tag,
+        dockerfile: ctx.dockerfile,
+      });
+      imageRef = rebuilt.imageRef;
+      store.updateTask(taskId, { imageRef });
+      logPhase(io, taskId, fixer, 'info', `Rebuilt: ${imageRef}`);
+    } catch (buildErr) {
+      const m = buildErr instanceof Error ? buildErr.message : String(buildErr);
+      logPhase(
+        io,
+        taskId,
+        fixer,
+        'warn',
+        `Rebuild during validate-fix failed: ${m}. Will re-probe and let next attempt's fixer try again.`,
+      );
+      completePhase(io, taskId, fixer);
+      continue;
+    }
+
+    // Redeploy the new image.
+    try {
+      logPhase(io, taskId, fixer, 'info', `Rolling out ${imageRef}…`);
+      await deployApp({
+        namespace: ctx.namespace,
+        appName: 'app',
+        image: imageRef,
+        port: ctx.port,
+        env: { PORT: String(ctx.port) },
+        pathPrefix: ctx.pathPrefix,
+      });
+      const ready = await waitDeploymentReady(ctx.namespace, 'app', 180_000);
+      if (!ready) {
+        logPhase(
+          io,
+          taskId,
+          fixer,
+          'warn',
+          'Pod did not become Ready within 3 minutes after validate-fix; re-probing anyway.',
+        );
+      }
+    } catch (deployErr) {
+      const m = deployErr instanceof Error ? deployErr.message : String(deployErr);
+      logPhase(
+        io,
+        taskId,
+        fixer,
+        'warn',
+        `Redeploy during validate-fix failed: ${m}. Will re-probe.`,
+      );
+    }
+    completePhase(io, taskId, fixer);
+  }
+
+  // unreachable
+  completePhase(io, taskId, tester);
+  return { imageRef, sha, healthy: false, attemptsUsed: MAX_VALIDATE_ATTEMPTS };
+}
+
 export function startBuild(io: SocketServer, taskId: string): void {
   void (async () => {
     try {
@@ -1088,6 +1579,25 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
       }, or **Discard** to close it.`,
   );
   if (liliputMsg) io.to(`task:${taskId}`).emit('chat:message', liliputMsg);
+
+  // Now run the autonomous validate-and-heal loop. Pod was Ready at deploy
+  // time but the app may still 502 (port mismatch, base path issue, etc.) —
+  // probe + repair until healthy or until the cap is reached. User can chat
+  // mid-loop; chat preempts cleanly bail out.
+  await validateAndHealLoop({
+    io,
+    taskId,
+    agentSession,
+    handle,
+    imageName,
+    dockerfile: df.dockerfile,
+    port: df.port,
+    namespace,
+    pathPrefix,
+    devUrl,
+    initialImageRef: deployOutcome.imageRef,
+    initialSha: deployOutcome.sha,
+  });
 }
 
 export async function shipTask(io: SocketServer, taskId: string): Promise<Task> {
@@ -1500,6 +2010,24 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
       `\n${result.summary}\n\n💬 Keep chatting to keep iterating, or **Ship** / **Discard** when ready.`,
   );
   if (liliputMsg) io.to(`task:${taskId}`).emit('chat:message', liliputMsg);
+
+  // Autonomous validate-and-heal loop after iteration. Same idea as the
+  // initial pipeline — probe the live preview, ask ops-fixer to repair,
+  // commit + rebuild + redeploy, repeat until healthy or the cap is hit.
+  await validateAndHealLoop({
+    io,
+    taskId,
+    agentSession: live.agentSession,
+    handle: live.repoHandle,
+    imageName: live.imageName,
+    dockerfile: live.dockerfile,
+    port: live.port,
+    namespace: live.namespace,
+    pathPrefix: live.pathPrefix,
+    devUrl,
+    initialImageRef: deployOutcome.imageRef,
+    initialSha: deployOutcome.sha,
+  });
 }
 
 /** Returns true if a follow-up chat message would trigger an iteration. */

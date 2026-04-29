@@ -25,7 +25,7 @@ const FIXER_TIMEOUT_MS = parseInt(
   10,
 );
 
-export type FixerPhase = 'build' | 'deploy';
+export type FixerPhase = 'build' | 'deploy' | 'validate';
 
 export interface OpsFixerOptions {
   session: AgentSession;
@@ -82,7 +82,8 @@ function buildPrompt(opts: OpsFixerOptions): string {
           `  - the app does not actually listen on port ${context.port}`,
           '  - the Dockerfile references a build stage that does not exist',
         ].join('\n')
-      : [
+      : phase === 'deploy'
+      ? [
           `## Phase: kubernetes DEPLOY failed (attempt ${attempt})`,
           '',
           `Liliput tried to deploy \`${context.imageRef ?? '(unknown)'}\` to namespace \`${context.namespace ?? '(unknown)'}\` and the pod did not become Ready.`,
@@ -94,7 +95,27 @@ function buildPrompt(opts: OpsFixerOptions): string {
           `  - app crashes on startup (missing config, missing env, bad command)`,
           `  - app expects to be served at /, but Liliput serves it under \`${context.pathPrefix ?? '(none)'}\` — set BASE_PATH/NEXT_PUBLIC_BASE_PATH-aware code as needed`,
           '  - container CMD/ENTRYPOINT is wrong',
-        ].join('\n');
+        ].join('\n')
+      : [
+          `## Phase: dev preview is UNHEALTHY (attempt ${attempt})`,
+          '',
+          `The pod is running but the dev preview at \`${context.pathPrefix ?? '(unknown)'}\` is not serving traffic correctly.`,
+          'Your job: diagnose and fix until \`curl\` against the public preview URL returns a real response from the app (not 502/503/connection-refused/empty body). You may edit source files, the Dockerfile, k8s manifests, or run kubectl/az commands directly. Liliput will rebuild + redeploy and re-validate after you finish.',
+          '',
+          'Likely causes to investigate:',
+          `  - app binds to a different port than ${context.port} (Vite default 5173, Next.js 3000, etc.)`,
+          `  - Service targetPort vs containerPort mismatch`,
+          `  - app binds to 127.0.0.1 instead of 0.0.0.0 inside the container`,
+          `  - app expects to be served at /, but Liliput serves it at \`${context.pathPrefix ?? '(none)'}\` — needs BASE_PATH-aware routing`,
+          `  - app crashes a few seconds after start (silent panic, missing env var)`,
+          `  - app needs a database/secret that isn't wired into the deployment`,
+          '',
+          'Useful diagnostics you can run yourself:',
+          context.namespace ? `  - kubectl logs -n ${context.namespace} deploy/app --tail=200` : '',
+          context.namespace ? `  - kubectl describe pod -n ${context.namespace} -l app=app` : '',
+          context.namespace ? `  - kubectl get svc -n ${context.namespace} app -o yaml` : '',
+          `  - curl -sv http://${context.namespace ?? '<ns>'}-app... or the public preview URL`,
+        ].filter(Boolean).join('\n');
 
   const guardrails = [
     '## You have full power — use it',
