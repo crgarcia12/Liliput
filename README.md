@@ -6,6 +6,136 @@ spec2cloud is a spec-driven development framework where **specifications are the
 
 This is the **Next.js + TypeScript shell** — a pre-configured template with the full tech stack wired up and ready to go.
 
+## How the Liliput Agent Works
+
+Each "Liliputian" is a **single Copilot SDK session bound to a cloned target repo**. There is no LangChain, no custom tool runner, no JSON-blob plan parser — the SDK runs the agentic loop, and Liliput is a thin choreography layer (clone → SDK session → git/ACR/kubectl wrapping → preview URL).
+
+### Lifecycle of one task
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant UI as Web (UI)
+    participant API as Express API
+    participant Eng as agent-engine
+    participant Loop as agent-loop
+    participant SDK as Copilot SDK
+    participant FS as /data/workspaces/task-xxx
+    participant Az as Azure (ACR/AKS)
+
+    UI->>API: POST /api/tasks (title, desc, repo)
+    API->>Eng: startBuild(taskId)
+    Eng->>FS: git clone repo → cwd
+    Eng->>Loop: createAgentSession(cwd)
+    Loop->>SDK: client.createSession({model,<br/>workingDirectory: cwd,<br/>enableConfigDiscovery: true,<br/>onPermissionRequest: approveAll,<br/>onEvent: handler})
+    SDK-->>Loop: CopilotSession (long-lived)
+    Note over Loop,SDK: Session loads AGENTS.md,<br/>copilot-instructions.md,<br/>.mcp.json, .github/skills/<br/>from the cloned repo
+
+    Eng->>Loop: runAgentTurn(session, {prompt, isInitial: true})
+    Loop->>SDK: session.sendAndWait({prompt}, 15min)
+
+    loop SDK internal agent loop
+        SDK-->>Loop: assistant.reasoning (🧠 streamed)
+        SDK->>FS: read / grep / glob / write / edit / bash
+        SDK-->>Loop: tool.execution_start (▶ name+args)
+        SDK-->>Loop: tool.execution_complete (✓/✗ + output)
+        Loop-->>UI: socket.io "agent:tool-event"
+    end
+
+    SDK-->>Loop: final assistant.message (summary)
+    Loop-->>Eng: {summary, toolCallCount}
+    Eng->>FS: git status --porcelain → changed files
+    Eng->>FS: git add/commit/push (via runGitOpWithFixer)
+    Eng->>Az: az acr build → push image
+    Eng->>Az: kubectl apply → dev preview
+    Eng->>API: setTaskStatus("review")
+    API-->>UI: socket.io "task:status"
+```
+
+### The four pieces inside the agent
+
+```mermaid
+graph TB
+    subgraph TASK["One task = one Copilot SDK session"]
+        direction TB
+        SESS[CopilotSession<br/>workingDirectory = clone path<br/>model = claude-sonnet-4]
+        MEM[Conversation memory<br/>persists across turns]
+        SESS --- MEM
+    end
+
+    subgraph TURN["runAgentTurn — one user prompt"]
+        P[buildInitialPrompt or<br/>buildFollowUpPrompt]
+        SAW["session.sendAndWait(prompt, 15min)"]
+        P --> SAW
+    end
+
+    subgraph SDKLOOP["Inside SDK (we don't control this)"]
+        LLM[LLM call]
+        TOOLS["Built-in tools:<br/>read, write, edit,<br/>grep, glob, bash"]
+        SKILLS[".github/skills/* loaded<br/>from target repo"]
+        MCP[".mcp.json servers<br/>loaded from target repo"]
+        LLM <--> TOOLS
+        LLM <--> SKILLS
+        LLM <--> MCP
+    end
+
+    subgraph EVENTS["onEvent handler — agent-loop.ts:206"]
+        E1[tool.execution_start ▶]
+        E2[tool.execution_complete ✓/✗]
+        E3[skill.invoked 🧩]
+        E4[subagent.started/completed ↪]
+        E5[assistant.reasoning 🧠]
+        E6[assistant.message 💬]
+    end
+
+    subgraph SINKS["Where events land"]
+        LOGS[(SQLite: agent_logs)]
+        WS[socket.io → UI live activity]
+    end
+
+    TASK --> TURN
+    TURN --> SDKLOOP
+    SDKLOOP -. streams .-> EVENTS
+    EVENTS --> LOGS
+    EVENTS --> WS
+```
+
+### Mid-flight chat preemption
+
+When a user sends a chat message while the agent is mid-turn, Liliput aborts the in-flight SDK call (preserving conversation memory) and runs a follow-up turn with the new instruction:
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant API as Chat route
+    participant Eng as agent-engine
+    participant SDK as session.sendAndWait (in flight)
+
+    Note over SDK: Agent is reading files,<br/>running bash, etc.
+    U->>API: POST /chat "actually, use TypeScript instead"
+    API->>Eng: enqueueChatForAgent(taskId, msg)
+    Eng->>Eng: pendingChatMessages.push(msg)
+    Eng->>SDK: session.abort()
+    SDK-->>Eng: sendAndWait resolves (truncated)
+    Eng->>Eng: drainPendingChatMessages()
+    Eng->>SDK: runAgentTurn(session, {followUp:<br/>"User interrupted: ...stop and address this"})
+    SDK-->>Eng: agent pivots, addresses new instruction
+    Eng-->>U: liliput chat: pivoted summary
+```
+
+### Key code anchors
+
+| Concept | File:Line |
+|---|---|
+| Session creation (the one SDK call that matters) | `agent-loop.ts:348` — `client.createSession({...})` |
+| Single-turn LLM call | `agent-loop.ts:386` — `session.sendAndWait(...)` |
+| Event → UI fan-out | `agent-loop.ts:206` — `makeEventHandler` |
+| Conversation memory | `agent-loop.ts:355` — same `_session` reused across `runAgentTurn` calls |
+| Multi-phase pipeline (architect/coder/builder/deployer/reviewer) | `agent-engine.ts` — all phases share **one** `agentSession` |
+| Mid-flight preempt | `agent-loop.ts` — `abortAgentTurn` → `session.abort()` |
+
+**Mental model:** the actual "agent intelligence" — deciding which files to read, what bash to run, when to write — is **100% inside `session.sendAndWait`**. Liliput just feeds it prompts and listens to its event stream.
+
 ## Why spec2cloud?
 
 - **Specifications are the source of truth** — not code, not comments, not wikis
