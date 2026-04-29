@@ -293,6 +293,52 @@ export async function push(
   );
 }
 
+/** Returns the current HEAD commit SHA. */
+export async function headSha(handle: RepoHandle): Promise<string> {
+  const { stdout } = await run('git', ['rev-parse', 'HEAD'], { cwd: handle.cwd });
+  return stdout.trim();
+}
+
+/** True when the working tree (tracked files) is clean — no staged or unstaged changes. */
+export async function isWorkingTreeClean(handle: RepoHandle): Promise<boolean> {
+  const { stdout } = await run('git', ['status', '--porcelain'], { cwd: handle.cwd });
+  return stdout.trim() === '';
+}
+
+/**
+ * True when the local branch has a remote tracking branch and is up to date
+ * with it (no commits to push). Used as a recovery check after a git-fixer
+ * turn — if the fixer pushed itself, our re-attempt would error with
+ * "Everything up-to-date" so we treat this state as success instead.
+ */
+export async function isBranchUpToDateWithRemote(handle: RepoHandle): Promise<boolean> {
+  // Refresh remote tracking refs so the comparison reflects reality.
+  try {
+    await run('git', ['fetch', '--quiet', 'origin', handle.branch], { cwd: handle.cwd });
+  } catch {
+    // Fetch failure (transient network, etc.) — fall through to local check.
+  }
+  try {
+    const { stdout: local } = await run('git', ['rev-parse', 'HEAD'], { cwd: handle.cwd });
+    const { stdout: remote } = await run(
+      'git',
+      ['rev-parse', `origin/${handle.branch}`],
+      { cwd: handle.cwd },
+    );
+    return local.trim() === remote.trim() && local.trim() !== '';
+  } catch {
+    return false;
+  }
+}
+
+/** Run an arbitrary git command in the workdir. Used by ad-hoc tooling. */
+export async function rawGit(
+  handle: RepoHandle,
+  args: string[],
+): Promise<{ stdout: string; stderr: string }> {
+  return run('git', args, { cwd: handle.cwd });
+}
+
 /** Returns the list of files modified in the working tree relative to HEAD. */
 export async function changedFiles(handle: RepoHandle): Promise<string[]> {
   const { stdout } = await run('git', ['status', '--porcelain'], {
