@@ -50,7 +50,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   FOREIGN KEY (workstream_id) REFERENCES workstreams(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_repository ON tasks(repository);
-CREATE INDEX IF NOT EXISTS idx_tasks_workstream ON tasks(workstream_id);
+-- idx_tasks_workstream is created in the migration block in getDb() after
+-- ensuring the workstream_id column exists on legacy databases.
 CREATE INDEX IF NOT EXISTS idx_tasks_updated_at ON tasks(updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS agents (
@@ -109,9 +110,9 @@ export function getDb(): Database.Database {
       .all() as Array<{ name: string }>;
     if (!cols.some((c) => c.name === 'workstream_id')) {
       _db.exec(`ALTER TABLE tasks ADD COLUMN workstream_id TEXT`);
-      _db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_workstream ON tasks(workstream_id)`);
       logger.info({}, 'Migrated: added workstream_id column to tasks');
     }
+    _db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_workstream ON tasks(workstream_id)`);
   } catch (err) {
     logger.warn({ err }, 'Workstream migration check failed (non-fatal)');
   }
