@@ -322,6 +322,64 @@ There is intentionally **no separate "agent identity"** — the API pod *is* the
 
 ---
 
+## Liliput CLI
+
+A k9s-style terminal UI for Liliput. Browse tasks, watch agent activity in real time, chat with running tasks, ship or discard reviews — all from the terminal.
+
+### Install
+
+**Windows (recommended):**
+1. Download `liliput-windows-amd64.exe` from the latest [release](https://github.com/crgarcia12/Liliput/releases?q=cli-v).
+2. Rename to `liliput.exe` and place it on your PATH (e.g., `C:\Tools\liliput.exe`).
+3. Run `liliput.exe` from any PowerShell or CMD window.
+
+**macOS / Linux:**
+Download the matching binary, `chmod +x`, and move to a directory on your PATH.
+
+**From source (any platform with Go 1.22+):**
+```bash
+cd cli
+go build -o liliput ./cmd/liliput
+```
+
+### Usage
+
+```bash
+# Connect to the default hosted backend
+liliput
+
+# Or point at a different deployment
+liliput --server http://localhost:5001
+# (or set LILIPUT_API_URL=http://localhost:5001)
+```
+
+### Keybindings
+
+| Key | Action |
+|-----|--------|
+| `↑`/`↓` or `j`/`k` | Navigate rows |
+| `Enter` | Open task |
+| `n` | New task |
+| `d` | Delete task |
+| `s` | Ship task (when in review) |
+| `x` | Discard task (when in review) |
+| `/` | Filter |
+| `?` | Help |
+| `q` | Quit / back |
+| `Tab` | Cycle pane focus (in task detail) |
+| `i` | Focus chat input |
+| `Esc` | Leave input / close modal |
+| `o` | Open dev URL in browser |
+| `l` | View dev pod logs |
+
+See [`cli/README.md`](cli/README.md) for development details.
+
+### Releases
+
+Releases are automated. Push a tag matching `cli-v*` (e.g., `cli-v0.1.0`) and GitHub Actions builds + publishes binaries for Windows, Linux, and macOS.
+
+---
+
 ## License
 
 [ISC](LICENSE)
