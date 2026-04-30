@@ -1,5 +1,16 @@
 // Liliput Shared Types — used by both API and Web
 
+// ─── Workstream (groups Tasks for a repo) ─────────────────────
+
+export interface Workstream {
+  id: string;
+  repository: string;          // Owner/repo this workstream belongs to
+  name: string;                // Short label (e.g. "auth", "billing")
+  description?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ─── Task (Feature Request) ───────────────────────────────────
 
 export type TaskStatus =
@@ -20,6 +31,7 @@ export interface Task {
   title: string;
   description: string;
   status: TaskStatus;
+  workstreamId?: string;      // Parent workstream (auto-assigned if missing)
   spec?: string;              // Generated specification markdown
   repository?: string;        // Target GitHub repo (e.g. "owner/repo") — what the agent edits
   baseBranch?: string;        // Branch to fork from (default "main")
@@ -166,6 +178,29 @@ export interface CreateTaskRequest {
   repository?: string;
   baseBranch?: string;
   commitMode?: CommitMode;
+  workstreamId?: string;       // Optional explicit parent; auto-assigned otherwise
+}
+
+export interface CreateWorkstreamRequest {
+  repository: string;
+  name: string;
+  description?: string;
+}
+
+export interface WorkstreamListResponse {
+  workstreams: Workstream[];
+}
+
+/** Summary of what a hard-delete will tear down. Returned by preview endpoints. */
+export interface DeletePreview {
+  scope: 'task' | 'workstream' | 'repo';
+  label: string;                // Human-friendly heading
+  taskCount: number;
+  branches: { repository: string; branch: string }[];
+  pullRequests: { repository: string; number: number; url?: string }[];
+  namespaces: string[];
+  workstreams: { id: string; name: string }[];
+  tasks: { id: string; title: string; status: TaskStatus }[];
 }
 
 export interface ShipTaskRequest {

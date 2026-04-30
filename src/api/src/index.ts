@@ -3,7 +3,7 @@ import { Server as SocketServer } from 'socket.io';
 import { createApp } from './app.js';
 import { setupWebSocket } from './ws/handler.js';
 import { stopCopilotClient } from './engine/copilot-client.js';
-import { reconcileOrphanedRuns } from './stores/task-store.js';
+import { reconcileOrphanedRuns, backfillDefaultWorkstreams } from './stores/task-store.js';
 import { purgeOrphanWorkspaces, restoreDevRoutesFromStore } from './engine/agent-engine.js';
 import { logger } from './logger.js';
 
@@ -25,6 +25,12 @@ if (reconciled.agentsReset > 0 || reconciled.tasksFailed > 0) {
   logger.warn(reconciled, '🧹 Reconciled orphaned runs from previous container');
 } else {
   logger.info('🧹 No orphaned runs to reconcile');
+}
+
+// Backfill the workstream FK for tasks created before workstreams existed.
+const backfill = backfillDefaultWorkstreams();
+if (backfill.tasksAssigned > 0 || backfill.workstreamsCreated > 0) {
+  logger.info(backfill, '🧬 Backfilled default workstreams for legacy tasks');
 }
 
 // Reclaim PVC space from workspaces whose tasks are no longer active.

@@ -45,6 +45,7 @@ import {
 } from './k8s-deployer.js';
 import { syncRoutes, type DevRoute } from './nginx-patcher.js';
 import { openPullRequest, markPullRequestReady, closePullRequest } from './github-pr.js';
+import { pathPrefixFor, writeContractIntoWorkspace } from './liliput-deploy-contract.js';
 
 const ACR_NAME = process.env['ACR_NAME'] ?? '';
 const PUBLIC_BASE_URL = process.env['LILIPUT_PUBLIC_URL'] ?? 'http://4.165.50.135';
@@ -147,6 +148,7 @@ async function drainPendingChatMessages(
   io: SocketServer,
   taskId: string,
   agentId: string,
+  liliputContext?: { pathPrefix: string; port?: number },
 ): Promise<void> {
   const inFlight = inFlightAgents.get(taskId);
   if (!inFlight) return;
@@ -172,6 +174,7 @@ async function drainPendingChatMessages(
           spec: inFlight.spec,
           followUp,
           isInitial: false,
+          ...(liliputContext ? { liliputContext } : {}),
           onLog: (level, m, cmd, out) => {
             hb.bump();
             logPhase(io, taskId, agentId, level, m, cmd, out);
@@ -1076,7 +1079,10 @@ async function validateAndHealLoop(ctx: ValidateContext): Promise<ValidateOutcom
       );
       if (chatCoder) {
         try {
-          await drainPendingChatMessages(io, taskId, chatCoder);
+          await drainPendingChatMessages(io, taskId, chatCoder, {
+            pathPrefix: ctx.pathPrefix,
+            port: ctx.port,
+          });
         } catch (drainErr) {
           const m = drainErr instanceof Error ? drainErr.message : String(drainErr);
           logPhase(io, taskId, chatCoder, 'warn', `drainPendingChatMessages threw: ${m}`);
@@ -1428,6 +1434,12 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   logPhase(io, taskId, coder, 'info', `Creating branch ${branch}`, `git checkout -b ${branch}`);
   await git.createBranch(handle, branch);
 
+  // Drop the Liliput Deploy Contract into the workspace so the agent can
+  // re-read the proxy semantics any time. Excluded from git so it never
+  // gets committed into the target repo.
+  const pathPrefix = pathPrefixFor(repo, branch);
+  await writeContractIntoWorkspace(handle.cwd, { pathPrefix });
+
   logPhase(io, taskId, coder, 'info', 'Spawning Copilot SDK session…');
   const agentSession = await createAgentSession(handle.cwd);
   registerInFlightAgent(taskId, {
@@ -1446,6 +1458,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
       taskDescription: task.description,
       spec: task.spec,
       isInitial: true,
+      liliputContext: { pathPrefix },
       onLog: (level, msg, cmd, out) => {
         hb.bump();
         logPhase(io, taskId, coder, level, msg, cmd, out);
@@ -1458,7 +1471,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   } finally {
     hb.stop();
   }
-  await drainPendingChatMessages(io, taskId, coder);
+  await drainPendingChatMessages(io, taskId, coder, { pathPrefix });
 
   const changedFiles = await git.changedFiles(handle);
   logPhase(
@@ -1586,9 +1599,8 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
 
   const namespace = devEnvName(repo, branch);
   const appName = 'app';
-  const [owner = 'unknown', name = 'repo'] = repo.split('/');
-  const safeBranch = sanitiseK8sName(branch);
-  const pathPrefix = `/dev/${sanitiseK8sName(owner)}/${sanitiseK8sName(name)}/${safeBranch}`;
+  // `pathPrefix` is already in scope from the coder phase above (computed
+  // once via pathPrefixFor(repo, branch) right after clone).
 
   logPhase(io, taskId, deployer, 'info', `Ensuring namespace ${namespace}…`);
   await ensureNamespace({ name: namespace, labels: { 'liliput.dev/task-id': taskId } });
@@ -1791,51 +1803,88 @@ export async function discardTask(io: SocketServer, taskId: string): Promise<Tas
   if (!task) throw new Error('Task not found');
 
   const cleaner = spawnPhase(io, taskId, 'deployer', 'Cleanup Liliputian');
+  await teardownTask(task, {
+    log: (level, message) => {
+      if (cleaner) logPhase(io, taskId, cleaner, level, message);
+    },
+  });
 
-  // Close the draft PR if one exists.
+  if (cleaner) completePhase(io, taskId, cleaner);
+  setTaskStatus(io, taskId, 'discarded', { devUrl: undefined });
+  return store.getTask(taskId)!;
+}
+
+/**
+ * Tear down all external state for a task: close PR, delete remote branch,
+ * delete dev k8s namespace, dispose live SDK session, remove workspace dir,
+ * resync the gateway. Idempotent — every step is best-effort and logs but
+ * doesn't throw on failure (4xx/422 from GitHub typically means already gone).
+ *
+ * Used by both `discardTask` (soft — flip status to discarded, keep history)
+ * and the hard delete routes (purge from DB after teardown).
+ */
+export async function teardownTask(
+  task: Task,
+  opts: { log?: (level: 'info' | 'warn' | 'error', message: string) => void } = {},
+): Promise<void> {
+  const log = opts.log ?? (() => {});
+
+  // Abort any in-flight agent turn so we don't leave the SDK chasing a
+  // workspace we're about to delete from disk.
+  try {
+    const live = liveSessions.get(task.id);
+    if (live) {
+      log('info', 'Aborting in-flight agent turn…');
+      abortAgentTurn(live.agentSession);
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log('warn', `Abort failed (continuing): ${message}`);
+  }
+
+  // Close the PR if one exists.
   if (task.repository && task.pullRequestNumber !== undefined) {
     try {
-      if (cleaner)
-        logPhase(io, taskId, cleaner, 'info', `Closing PR #${task.pullRequestNumber}…`);
+      log('info', `Closing PR #${task.pullRequestNumber}…`);
       await closePullRequest(task.repository, task.pullRequestNumber);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (cleaner) logPhase(io, taskId, cleaner, 'warn', `PR close failed: ${message}`);
+      log('warn', `PR close failed: ${message}`);
     }
   }
 
+  // Delete the dev namespace.
   if (task.devNamespace) {
     try {
-      if (cleaner) logPhase(io, taskId, cleaner, 'info', `Deleting namespace ${task.devNamespace}…`);
+      log('info', `Deleting namespace ${task.devNamespace}…`);
       await deleteNamespace(task.devNamespace);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (cleaner) logPhase(io, taskId, cleaner, 'warn', `Namespace delete failed: ${message}`);
+      log('warn', `Namespace delete failed: ${message}`);
     }
   }
 
-  devEnvs.delete(taskId);
+  // Forget the dev env & resync the gateway.
+  devEnvs.delete(task.id);
   try {
     await syncRoutes(activeRoutes());
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    if (cleaner) logPhase(io, taskId, cleaner, 'warn', `Gateway sync failed: ${message}`);
+    log('warn', `Gateway sync failed: ${message}`);
   }
 
+  // Delete the agent's branch on the remote (never touches main / other branches).
   if (task.repository && task.branch) {
     try {
-      if (cleaner) logPhase(io, taskId, cleaner, 'info', `Deleting remote branch ${task.branch}…`);
+      log('info', `Deleting remote branch ${task.branch}…`);
       await deleteRemoteBranch(task.repository, task.branch);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (cleaner) logPhase(io, taskId, cleaner, 'warn', `Branch delete failed: ${message}`);
+      log('warn', `Branch delete failed: ${message}`);
     }
   }
 
-  if (cleaner) completePhase(io, taskId, cleaner);
-  setTaskStatus(io, taskId, 'discarded', { devUrl: undefined });
-  await tearDownLiveSession(taskId);
-  return store.getTask(taskId)!;
+  await tearDownLiveSession(task.id);
 }
 
 /**
@@ -1953,6 +2002,7 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
       spec: task.spec,
       followUp: message,
       isInitial: false,
+      liliputContext: { pathPrefix: live.pathPrefix, port: live.port },
       onLog: (level, msg, cmd, out) => {
         hb.bump();
         logPhase(io, taskId, coder, level, msg, cmd, out);
@@ -1965,7 +2015,10 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   } finally {
     hb.stop();
   }
-  await drainPendingChatMessages(io, taskId, coder);
+  await drainPendingChatMessages(io, taskId, coder, {
+    pathPrefix: live.pathPrefix,
+    port: live.port,
+  });
 
   const changed = await git.changedFiles(live.repoHandle);
   logPhase(
@@ -2232,13 +2285,17 @@ async function resurrectLiveSession(
     const df = await resolveDockerfile(handle.cwd);
     logPhase(io, taskId, phaseAgent, 'info', df.notes);
 
+    const [owner, name] = task.repository.split('/');
+    if (!owner || !name) throw new Error(`Invalid repo slug: ${task.repository}`);
+    const pathPrefix = pathPrefixFor(task.repository, task.branch);
+
+    // Refresh the workspace contract — same content, but rewriting is
+    // cheap and ensures the file exists if the workspace was reused.
+    await writeContractIntoWorkspace(handle.cwd, { pathPrefix, port: df.port });
+
     logPhase(io, taskId, phaseAgent, 'info', 'Re-creating Copilot SDK session…');
     const agentSession = await createAgentSession(handle.cwd);
 
-    const [owner, name] = task.repository.split('/');
-    if (!owner || !name) throw new Error(`Invalid repo slug: ${task.repository}`);
-    const safeBranch = sanitiseK8sName(task.branch);
-    const pathPrefix = `/dev/${sanitiseK8sName(owner)}/${sanitiseK8sName(name)}/${safeBranch}`;
     const imageName = `liliput-app-${sanitiseK8sName(task.repository.replace('/', '-'))}`;
     const namespace =
       task.devNamespace ??

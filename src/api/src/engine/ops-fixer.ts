@@ -19,6 +19,7 @@
  */
 
 import { runAgentTurn, type AgentSession, type LogFn, type ToolEventFn, type RunAgentResult } from './agent-loop.js';
+import { buildDeployContract } from './liliput-deploy-contract.js';
 
 const FIXER_TIMEOUT_MS = parseInt(
   process.env['AGENT_FIXER_TIMEOUT_MS'] ?? '600000', // 10 min — file-only edits, plenty of time
@@ -137,6 +138,12 @@ function buildPrompt(opts: OpsFixerOptions): string {
   return [
     'You are the Liliput ops-fixer agent. A scripted operation just failed and you must fix the underlying cause in the source repo.',
     '',
+    // Contract is pre-pended for deploy/validate phases — the proxy semantics
+    // are usually the missing piece when these phases break. For build phase
+    // it's still cheap and rarely misleading.
+    context.pathPrefix
+      ? [buildDeployContract({ pathPrefix: context.pathPrefix, port: context.port }), '', '---', ''].join('\n')
+      : '',
     phaseHeader,
     '',
     '## Failure summary',

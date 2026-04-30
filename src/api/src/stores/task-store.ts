@@ -22,6 +22,7 @@ import type {
   ActivityEntry,
 } from '../../../shared/types/index.js';
 import { getDb } from './db.js';
+import * as wsStore from './workstream-store.js';
 
 function now(): string {
   return new Date().toISOString();
@@ -32,6 +33,7 @@ function now(): string {
 interface TaskRow {
   id: string;
   repository: string | null;
+  workstream_id: string | null;
   status: string;
   data: string;
   created_at: string;
@@ -78,6 +80,10 @@ function hydrateAgent(row: AgentRow, logs: AgentLogEntry[]): Agent {
 function hydrateTask(row: TaskRow): Task {
   const db = getDb();
   const base = JSON.parse(row.data) as Omit<Task, 'agents' | 'chatHistory' | 'activityHistory'>;
+  // Column is source of truth for the FK in case the JSON blob predates it.
+  if (row.workstream_id && !base.workstreamId) {
+    base.workstreamId = row.workstream_id;
+  }
 
   const agentRows = db
     .prepare('SELECT * FROM agents WHERE task_id = ? ORDER BY position ASC')
@@ -136,7 +142,7 @@ export function createTask(
   title: string,
   description: string,
   repository?: string,
-  options: { baseBranch?: string; commitMode?: CommitMode } = {},
+  options: { baseBranch?: string; commitMode?: CommitMode; workstreamId?: string } = {},
 ): Task {
   const ts = now();
   const task: Task = {
@@ -147,6 +153,7 @@ export function createTask(
     repository,
     baseBranch: options.baseBranch ?? 'main',
     commitMode: options.commitMode ?? 'pr',
+    ...(options.workstreamId ? { workstreamId: options.workstreamId } : {}),
     agents: [],
     chatHistory: [],
     createdAt: ts,
@@ -160,10 +167,18 @@ export function createTask(
 
   getDb()
     .prepare(
-      `INSERT INTO tasks (id, repository, status, data, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO tasks (id, repository, workstream_id, status, data, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(task.id, task.repository ?? null, task.status, JSON.stringify(rest), ts, ts);
+    .run(
+      task.id,
+      task.repository ?? null,
+      task.workstreamId ?? null,
+      task.status,
+      JSON.stringify(rest),
+      ts,
+      ts,
+    );
 
   return task;
 }
@@ -201,6 +216,7 @@ export function updateTask(
       | 'devNamespace'
       | 'devUrl'
       | 'errorMessage'
+      | 'workstreamId'
     >
   >,
 ): Task | undefined {
@@ -218,17 +234,41 @@ export function updateTask(
 
   db.prepare(
     `UPDATE tasks
-        SET repository = ?, status = ?, data = ?, updated_at = ?
+        SET repository = ?, workstream_id = ?, status = ?, data = ?, updated_at = ?
       WHERE id = ?`,
   ).run(
     (merged.repository ?? null) as string | null,
+    (merged.workstreamId ?? null) as string | null,
     merged.status,
     JSON.stringify(merged),
     ts,
     id,
   );
 
-  return hydrateTask({ ...row, repository: merged.repository ?? null, status: merged.status, data: JSON.stringify(merged), updated_at: ts });
+  return hydrateTask({
+    ...row,
+    repository: merged.repository ?? null,
+    workstream_id: merged.workstreamId ?? null,
+    status: merged.status,
+    data: JSON.stringify(merged),
+    updated_at: ts,
+  });
+}
+
+/** List tasks belonging to a workstream. */
+export function listTasksByWorkstream(workstreamId: string): Task[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM tasks WHERE workstream_id = ? ORDER BY updated_at DESC')
+    .all(workstreamId) as TaskRow[];
+  return rows.map((r) => hydrateTask(r));
+}
+
+/** List tasks for a repo (regardless of workstream). */
+export function listTasksByRepository(repository: string): Task[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM tasks WHERE repository = ? ORDER BY updated_at DESC')
+    .all(repository) as TaskRow[];
+  return rows.map((r) => hydrateTask(r));
 }
 
 export function deleteTask(id: string): boolean {
@@ -437,7 +477,43 @@ export function resetStore(): void {
     DELETE FROM chat_messages;
     DELETE FROM activity_entries;
     DELETE FROM tasks;
+    DELETE FROM workstreams;
   `);
+}
+
+/**
+ * Boot-time backfill: every task with a repository but no parent workstream
+ * gets attached to that repo's default workstream. Idempotent.
+ */
+export function backfillDefaultWorkstreams(): { tasksAssigned: number; workstreamsCreated: number } {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT id, repository FROM tasks WHERE workstream_id IS NULL AND repository IS NOT NULL`,
+    )
+    .all() as { id: string; repository: string }[];
+
+  if (rows.length === 0) return { tasksAssigned: 0, workstreamsCreated: 0 };
+
+  const before = new Set(wsStore.listWorkstreams().map((w) => `${w.repository}::${w.name}`));
+  let assigned = 0;
+  const ts = now();
+
+  const txn = db.transaction(() => {
+    const upd = db.prepare('UPDATE tasks SET workstream_id = ?, updated_at = ? WHERE id = ?');
+    for (const r of rows) {
+      const ws = wsStore.ensureDefaultWorkstream(r.repository);
+      upd.run(ws.id, ts, r.id);
+      assigned++;
+    }
+  });
+  txn();
+
+  const after = new Set(wsStore.listWorkstreams().map((w) => `${w.repository}::${w.name}`));
+  let created = 0;
+  for (const k of after) if (!before.has(k)) created++;
+
+  return { tasksAssigned: assigned, workstreamsCreated: created };
 }
 
 // ─── Boot-time reconciliation ────────────────────────────────

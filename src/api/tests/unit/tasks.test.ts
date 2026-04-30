@@ -4,6 +4,7 @@ import express from 'express';
 import { Server as SocketServer } from 'socket.io';
 import http from 'node:http';
 import { createTasksRouter } from '../../src/routes/tasks.js';
+import { createWorkstreamsRouter } from '../../src/routes/workstreams.js';
 import { resetStore } from '../../src/stores/task-store.js';
 import type { SpecGenerator } from '../../src/engine/spec-generator.js';
 
@@ -26,6 +27,9 @@ function buildApp(opts: { specGenerator?: SpecGenerator } = {}): {
 
   const app = express();
   app.use(express.json());
+  // Workstreams router owns DELETE /api/tasks/:id (hard delete with teardown).
+  // It must be mounted before the tasks router for route precedence.
+  app.use(createWorkstreamsRouter(io));
   app.use(createTasksRouter(io, generator));
   return { app, io, generator };
 }
