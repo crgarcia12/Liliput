@@ -76,3 +76,56 @@ jobs:
             dist/liliput-linux-amd64
             dist/liliput-darwin-amd64
             dist/liliput-darwin-arm64
+
+  update-scoop:
+    name: Update Scoop manifest
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/cli-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download Windows binary
+        uses: actions/download-artifact@v4
+        with:
+          name: liliput-windows-amd64.exe
+          path: .
+
+      - name: Compute SHA256 + version
+        id: meta
+        run: |
+          HASH=$(sha256sum liliput-windows-amd64.exe | awk '{print $1}')
+          # Strip leading "cli-v" -> "0.1.1"
+          VERSION="${GITHUB_REF_NAME#cli-v}"
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Update bucket/liliput.json
+        run: |
+          jq --arg v "${{ steps.meta.outputs.version }}" \
+             --arg h "${{ steps.meta.outputs.hash }}" \
+             --arg tag "${{ steps.meta.outputs.tag }}" \
+             '.version = $v
+              | .architecture["64bit"].hash = $h
+              | .architecture["64bit"].url = "https://github.com/crgarcia12/Liliput/releases/download/" + $tag + "/liliput-windows-amd64.exe#/liliput.exe"' \
+             bucket/liliput.json > bucket/liliput.json.new
+          mv bucket/liliput.json.new bucket/liliput.json
+          cat bucket/liliput.json
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bucket/liliput.json
+          if git diff --cached --quiet; then
+            echo "No manifest changes to commit"
+          else
+            git commit -m "chore(scoop): bump manifest to ${{ steps.meta.outputs.tag }}"
+            git push origin main
+          fi

@@ -328,7 +328,17 @@ A k9s-style terminal UI for Liliput. Browse tasks, watch agent activity in real 
 
 ### Install
 
-**Windows (recommended):**
+**Windows (recommended) — install via [Scoop](https://scoop.sh):**
+
+```powershell
+scoop bucket add liliput https://github.com/crgarcia12/Liliput
+scoop install liliput
+liliput
+```
+
+Upgrades: `scoop update liliput`. The bucket auto-updates on every CLI release.
+
+**Windows (manual):**
 1. Download `liliput-windows-amd64.exe` from the latest [release](https://github.com/crgarcia12/Liliput/releases?q=cli-v).
 2. Rename to `liliput.exe` and place it on your PATH (e.g., `C:\Tools\liliput.exe`).
 3. Run `liliput.exe` from any PowerShell or CMD window.

@@ -1,0 +1,24 @@
+{
+    "version": "0.1.0",
+    "description": "k9s-style terminal UI for the Liliput feature-orchestration backend",
+    "homepage": "https://github.com/crgarcia12/Liliput",
+    "license": "ISC",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/crgarcia12/Liliput/releases/download/cli-v0.1.0/liliput-windows-amd64.exe#/liliput.exe",
+            "hash": "797ea6eb7e96b7f7da4ea36c0262b5e031a7c12baa794db8cee45decea5b0a67"
+        }
+    },
+    "bin": "liliput.exe",
+    "checkver": {
+        "github": "https://github.com/crgarcia12/Liliput",
+        "regex": "cli-v([\\d.]+)"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/crgarcia12/Liliput/releases/download/cli-v$version/liliput-windows-amd64.exe#/liliput.exe"
+            }
+        }
+    }
+}
