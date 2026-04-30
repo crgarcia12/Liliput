@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import type { Server as SocketServer } from 'socket.io';
 import type { CreateTaskRequest, ChatRequest } from '../../../shared/types/index.js';
 import * as store from '../stores/task-store.js';
+import * as wsStore from '../stores/workstream-store.js';
 import { generateSpec as defaultGenerateSpec, type SpecGenerator } from '../engine/spec-generator.js';
 import { listDevPods, getPodLogs } from '../engine/k8s-deployer.js';
 import { startBuild, shipTask, discardTask, iterateTask, canIterate, enqueueChatForAgent, hasInFlightAgent } from '../engine/agent-engine.js';
@@ -17,16 +18,31 @@ export function createTasksRouter(
   // POST /api/tasks — create a new task
   router.post('/api/tasks', (req: Request, res: Response) => {
     try {
-      const { title, description, repository, baseBranch, commitMode } =
+      const { title, description, repository, baseBranch, commitMode, workstreamId } =
         req.body as CreateTaskRequest;
       if (!title || !description) {
         res.status(400).json({ error: 'title and description are required' });
         return;
       }
 
+      // Resolve the parent workstream. Explicit ID wins. Otherwise, fall back
+      // to the default workstream for the repo (auto-created on first use).
+      let resolvedWorkstreamId: string | undefined;
+      if (workstreamId) {
+        const ws = wsStore.getWorkstream(workstreamId);
+        if (!ws) {
+          res.status(400).json({ error: `Workstream not found: ${workstreamId}` });
+          return;
+        }
+        resolvedWorkstreamId = ws.id;
+      } else if (repository) {
+        resolvedWorkstreamId = wsStore.ensureDefaultWorkstream(repository).id;
+      }
+
       const task = store.createTask(title, description, repository, {
         baseBranch,
         commitMode,
+        ...(resolvedWorkstreamId ? { workstreamId: resolvedWorkstreamId } : {}),
       });
 
       // Add system welcome message
@@ -220,24 +236,6 @@ export function createTasksRouter(
       const errMessage = err instanceof Error ? err.message : String(err);
       logger.error({ err: errMessage }, 'Failed to approve spec');
       res.status(500).json({ error: 'Failed to approve spec', details: errMessage });
-    }
-  });
-
-  // DELETE /api/tasks/:id — cancel/delete a task
-  router.delete('/api/tasks/:id', (req: Request, res: Response) => {
-    try {
-      const taskId = req.params['id'] as string;
-      const deleted = store.deleteTask(taskId);
-      if (!deleted) {
-        res.status(404).json({ error: 'Task not found' });
-        return;
-      }
-      logger.info({ taskId }, 'Task deleted');
-      res.status(204).send();
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      logger.error({ err: message }, 'Failed to delete task');
-      res.status(500).json({ error: 'Failed to delete task', details: message });
     }
   });
 

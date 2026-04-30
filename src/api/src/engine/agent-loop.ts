@@ -26,6 +26,7 @@
 import { approveAll } from '@github/copilot-sdk';
 import type { CopilotSession, SessionEvent } from '@github/copilot-sdk';
 import { getCopilotClient } from './copilot-client.js';
+import { buildDeployContract, type DeployContractContext } from './liliput-deploy-contract.js';
 import { logger } from '../logger.js';
 
 const MODEL = process.env['COPILOT_MODEL'] ?? 'claude-sonnet-4';
@@ -103,6 +104,14 @@ export interface RunAgentTurnOptions {
    */
   promptOverride?: string;
   /**
+   * Liliput runtime context (path-prefix, port, devUrl). When provided, the
+   * Liliput Deploy Contract is prepended to the initial prompt so the agent
+   * understands the proxy contract from turn one. Follow-up turns rely on
+   * conversation memory (the contract is already in-context from turn one)
+   * plus the LILIPUT_DEPLOY_CONTRACT.md file dropped at workspace root.
+   */
+  liliputContext?: DeployContractContext;
+  /**
    * Optional per-turn timeout override (milliseconds). Default = TIMEOUT_MS.
    * Useful for ops turns that need longer than 15 minutes for build+fix loops.
    */
@@ -154,7 +163,18 @@ function summariseResult(content: unknown): { summary: string; details?: string 
 }
 
 function buildInitialPrompt(opts: RunAgentTurnOptions): string {
+  const contractBlock = opts.liliputContext
+    ? [
+        buildDeployContract(opts.liliputContext),
+        '',
+        '⚠️  The contract above is also available as `LILIPUT_DEPLOY_CONTRACT.md` at the workspace root — re-read it whenever you touch the Dockerfile, k8s manifests, or any code that affects how the app is served.',
+        '',
+        '---',
+        '',
+      ].join('\n')
+    : '';
   return [
+    contractBlock,
     'You are an autonomous coding agent operating directly on a git checkout.',
     'The current working directory is the repository root and is already on a feature branch.',
     '',
@@ -189,8 +209,20 @@ function buildInitialPrompt(opts: RunAgentTurnOptions): string {
     .join('\n');
 }
 
-function buildFollowUpPrompt(message: string): string {
+function buildFollowUpPrompt(opts: RunAgentTurnOptions): string {
+  const message = opts.followUp ?? '(no instruction)';
+  const contractBlock = opts.liliputContext
+    ? [
+        buildDeployContract(opts.liliputContext),
+        '',
+        '⚠️  The contract above remains in effect. Re-read `LILIPUT_DEPLOY_CONTRACT.md` at the workspace root if you touch infra/Dockerfile/server-routing code.',
+        '',
+        '---',
+        '',
+      ].join('\n')
+    : '';
   return [
+    contractBlock,
     'Follow-up instruction from the user. The previous turn already produced a',
     'commit and a draft PR; new edits will be appended to the same branch.',
     'Continue editing the same workspace. Do not commit or push — Liliput handles git.',
@@ -200,7 +232,7 @@ function buildFollowUpPrompt(message: string): string {
     '## New instruction',
     '',
     message,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 function makeEventHandler(callbacks: TurnCallbacks): (event: SessionEvent) => void {
@@ -377,7 +409,7 @@ export async function runAgentTurn(
     ? opts.promptOverride
     : opts.isInitial
       ? buildInitialPrompt(opts)
-      : buildFollowUpPrompt(opts.followUp ?? '(no instruction)');
+      : buildFollowUpPrompt(opts);
 
   log('info', opts.isInitial ? 'Asking agent to plan and apply edits…' : 'Sending follow-up to agent…');
 

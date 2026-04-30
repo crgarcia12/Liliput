@@ -29,15 +29,28 @@ function resolveDbPath(): string {
 }
 
 const SCHEMA = `
-CREATE TABLE IF NOT EXISTS tasks (
+CREATE TABLE IF NOT EXISTS workstreams (
   id          TEXT PRIMARY KEY,
-  repository  TEXT,
-  status      TEXT NOT NULL,
+  repository  TEXT NOT NULL,
+  name        TEXT NOT NULL,
   data        TEXT NOT NULL,
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_workstreams_repository ON workstreams(repository);
+
+CREATE TABLE IF NOT EXISTS tasks (
+  id            TEXT PRIMARY KEY,
+  repository    TEXT,
+  workstream_id TEXT,
+  status        TEXT NOT NULL,
+  data          TEXT NOT NULL,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,
+  FOREIGN KEY (workstream_id) REFERENCES workstreams(id) ON DELETE SET NULL
+);
 CREATE INDEX IF NOT EXISTS idx_tasks_repository ON tasks(repository);
+CREATE INDEX IF NOT EXISTS idx_tasks_workstream ON tasks(workstream_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_updated_at ON tasks(updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS agents (
@@ -88,6 +101,20 @@ export function getDb(): Database.Database {
   _db.pragma('foreign_keys = ON');
   _db.pragma('synchronous = NORMAL');
   _db.exec(SCHEMA);
+  // Lightweight forward migration: add workstream_id column to tasks if it
+  // doesn't already exist (older databases predate the workstream concept).
+  try {
+    const cols = _db
+      .prepare(`PRAGMA table_info(tasks)`)
+      .all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === 'workstream_id')) {
+      _db.exec(`ALTER TABLE tasks ADD COLUMN workstream_id TEXT`);
+      _db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_workstream ON tasks(workstream_id)`);
+      logger.info({}, 'Migrated: added workstream_id column to tasks');
+    }
+  } catch (err) {
+    logger.warn({ err }, 'Workstream migration check failed (non-fatal)');
+  }
   logger.info({ dbPath }, '🗄️  SQLite store initialised');
   return _db;
 }
@@ -101,6 +128,7 @@ export function resetDb(): void {
     DELETE FROM chat_messages;
     DELETE FROM activity_entries;
     DELETE FROM tasks;
+    DELETE FROM workstreams;
   `);
 }
 
