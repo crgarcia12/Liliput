@@ -107,7 +107,18 @@ export interface RepoContextOptions {
   taskId: string;
   /** Soft timeout for the whole extraction (clone + reads). Default 60s. */
   timeoutMs?: number;
+  /** Optional progress hook — called as the extractor advances through stages. */
+  onProgress?: ProgressHandler;
 }
+
+export type ProgressStage =
+  | 'cloning'
+  | 'reading-files'
+  | 'extracted'
+  | 'clone-failed'
+  | 'timeout';
+
+export type ProgressHandler = (stage: ProgressStage, detail?: string) => void;
 
 export interface RepoContext {
   /** Markdown blob to inject into the LLM prompt. */
@@ -123,9 +134,11 @@ export interface RepoContext {
 export async function extractRepoContext(opts: RepoContextOptions): Promise<RepoContext | null> {
   const workdirName = `spec-${opts.taskId.slice(0, 8)}-${Date.now().toString(36)}`;
   const timeoutMs = opts.timeoutMs ?? 60_000;
+  const progress = opts.onProgress ?? (() => undefined);
   let handle: git.RepoHandle | null = null;
 
   const work = (async () => {
+    progress('cloning', `git clone --depth 1 ${opts.repository}${opts.baseBranch ? ` (branch: ${opts.baseBranch})` : ''}`);
     handle = await git.clone({
       repo: opts.repository,
       ...(opts.baseBranch ? { ref: opts.baseBranch } : {}),
@@ -134,6 +147,7 @@ export async function extractRepoContext(opts: RepoContextOptions): Promise<Repo
     });
 
     const cwd = handle.cwd;
+    progress('reading-files', 'Reading README, manifests, and file tree');
     const [readme, manifests, tree] = await Promise.all([
       tryReadFirst(cwd, README_CANDIDATES, README_LIMIT),
       readManifests(cwd),
@@ -165,6 +179,7 @@ export async function extractRepoContext(opts: RepoContextOptions): Promise<Repo
     }
 
     const prompt = sections.join('\n');
+    progress('extracted', `${prompt.length} chars (README:${readme ? 'yes' : 'no'}, manifests:${manifests.length}, tree:${tree ? 'yes' : 'no'})`);
     return { prompt, bytes: prompt.length };
   })();
 
@@ -174,6 +189,7 @@ export async function extractRepoContext(opts: RepoContextOptions): Promise<Repo
       new Promise<null>((resolve) =>
         setTimeout(() => {
           logger.warn({ taskId: opts.taskId, repo: opts.repository, timeoutMs }, 'Repo context extraction timed out');
+          progress('timeout', `${timeoutMs}ms exceeded`);
           resolve(null);
         }, timeoutMs),
       ),
@@ -182,6 +198,7 @@ export async function extractRepoContext(opts: RepoContextOptions): Promise<Repo
   } catch (err) {
     const m = err instanceof Error ? err.message : String(err);
     logger.warn({ taskId: opts.taskId, repo: opts.repository, err: m }, 'Repo context extraction failed');
+    progress('clone-failed', m);
     return null;
   } finally {
     if (handle) {

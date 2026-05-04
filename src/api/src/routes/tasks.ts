@@ -150,6 +150,20 @@ export function createTasksRouter(
         // repo actually is (README, manifests, tree) instead of guessing
         // from the title — otherwise vague descriptions like "modernize
         // this thing" cause the LLM to invent a project.
+        //
+        // onProgress turns each stage into a chat message so the user
+        // sees what's happening (clone, file read, LLM call) in real time.
+        const stageLabels: Record<string, string> = {
+          'cloning': '📦 Cloning the target repo (depth=1)',
+          'reading-files': '📖 Reading README, manifests, and file tree',
+          'extracted': '✅ Repo context extracted',
+          'clone-failed': '⚠️ Could not clone the repo — drafting from title/description only',
+          'timeout': '⚠️ Repo context extraction timed out — drafting from title/description only',
+          'connecting-llm': '🔌 Connecting to the LLM',
+          'drafting': '✍️ Drafting the specification',
+          'spec-ready': '✅ Specification draft ready',
+          'spec-failed': '⚠️ Spec generation failed — falling back to template',
+        };
         void specGenerator(
           task.title,
           `${task.description}\n\nAdditional context: ${message}`,
@@ -157,6 +171,18 @@ export function createTasksRouter(
             ...(task.repository ? { repository: task.repository } : {}),
             ...(task.baseBranch ? { baseBranch: task.baseBranch } : {}),
             taskId: task.id,
+            onProgress: (stage, detail) => {
+              const label = stageLabels[stage] ?? stage;
+              const text = detail ? `${label} — ${detail}` : label;
+              const msg = store.addChatMessage(task.id, 'liliput', text);
+              io.to(`task:${task.id}`).emit('chat:message', msg);
+              io.to(`task:${task.id}`).emit('task:progress', {
+                taskId: task.id,
+                phase: 'specifying',
+                stage,
+                detail,
+              });
+            },
           },
         )
           .then((spec) => {
