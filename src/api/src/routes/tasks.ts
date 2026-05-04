@@ -231,6 +231,26 @@ export function createTasksRouter(
           '🛑 Interrupting the agent — it will handle your message on its next turn.',
         );
         if (ackMsg) io.to(`task:${task.id}`).emit('chat:message', ackMsg);
+      } else if (
+        task.spec &&
+        !task.branch &&
+        !hasInFlightAgent(task.id) &&
+        (task.status === 'failed' || task.status === 'building' || task.status === 'deploying' || task.status === 'shipping')
+      ) {
+        // Recovery path: the build never produced a branch (e.g. pod died early
+        // in startBuild, or the first agent turn crashed before any commit).
+        // Spec is persisted, so we can re-kick the full pipeline. This rescues
+        // tasks that would otherwise be stranded with "branch is not set yet".
+        const ackMsg = store.addChatMessage(
+          task.id,
+          'liliput',
+          '🔁 No branch was created on the previous run — restarting the build from the approved spec with your message as added context…',
+        );
+        if (ackMsg) io.to(`task:${task.id}`).emit('chat:message', ackMsg);
+        const updatedSpec = `${task.spec}\n\n## Additional user guidance\n${message}\n`;
+        store.updateTask(task.id, { spec: updatedSpec, status: 'building', errorMessage: undefined });
+        io.to(`task:${task.id}`).emit('task:status', { taskId: task.id, status: 'building' });
+        startBuild(io, task.id);
       } else {
         const reason = !task.repository
           ? `repository is not set on this task`
