@@ -138,7 +138,11 @@ describe('POST /api/tasks/:id/chat', () => {
 
     await flushAsync();
     expect(generator).toHaveBeenCalledTimes(1);
-    expect(generator).toHaveBeenCalledWith('My Title', expect.stringContaining('Extra'));
+    expect(generator).toHaveBeenCalledWith(
+      'My Title',
+      expect.stringContaining('Extra'),
+      expect.objectContaining({ taskId: expect.any(String) }),
+    );
   });
 
   it('should report a system error message when spec generation rejects', async () => {

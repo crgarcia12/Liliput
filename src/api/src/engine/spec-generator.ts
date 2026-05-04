@@ -7,14 +7,25 @@ import {
   type AuthStatus,
   getAuthStatus,
 } from './auth-status.js';
+import { extractRepoContext } from './repo-context.js';
 import { logger } from '../logger.js';
 
 const DEFAULT_MODEL = process.env['COPILOT_MODEL'] ?? 'claude-sonnet-4';
 const DEFAULT_TIMEOUT_MS = parseInt(process.env['COPILOT_TIMEOUT_MS'] ?? '120000', 10);
 const PROBE_TIMEOUT_MS = parseInt(process.env['COPILOT_PROBE_TIMEOUT_MS'] ?? '30000', 10);
 
-function buildPrompt(title: string, description: string): string {
-  return [
+export interface SpecGeneratorContext {
+  /** Target GitHub repo (e.g. "owner/repo"). When provided, Liliput clones it
+   *  shallowly and injects README + manifests + file tree into the prompt so
+   *  the LLM grounds its spec in what the repo actually is. */
+  repository?: string;
+  baseBranch?: string;
+  /** Stable id used to derive the temp clone dir. */
+  taskId?: string;
+}
+
+function buildPrompt(title: string, description: string, repoBlob: string | null): string {
+  const sections: string[] = [
     'You are a senior software engineer drafting a concise, implementation-ready specification.',
     'Output ONLY the specification as GitHub-Flavored Markdown — no preamble, no explanation, no code fences around the whole document.',
     '',
@@ -25,12 +36,31 @@ function buildPrompt(title: string, description: string): string {
     '4. `## Acceptance Criteria` — checkbox list (`- [ ]`) covering observable outcomes',
     '5. `## Technical Approach` — ordered steps an engineer would follow',
     '6. `## Out of Scope` — bullets listing what is explicitly NOT included',
+  ];
+
+  if (repoBlob) {
+    sections.push(
+      '',
+      '⚠️  CRITICAL — repo grounding: a section titled "Target repository" follows',
+      'with the README, manifests and file tree of the repo this task targets.',
+      'Read it before drafting. The spec MUST describe changes to THIS repo, not',
+      'a project invented from the title. If the user description is vague',
+      '("modernize this thing"), the README and manifests tell you what "this"',
+      'really is.',
+      '',
+      repoBlob,
+    );
+  }
+
+  sections.push(
     '',
     `Task title: ${title}`,
     '',
     'Task description and conversation context:',
     description,
-  ].join('\n');
+  );
+
+  return sections.join('\n');
 }
 
 function stripCodeFence(content: string): string {
@@ -71,15 +101,48 @@ ${description}
 `;
 }
 
-export type SpecGenerator = (title: string, description: string) => Promise<string>;
+export type SpecGenerator = (
+  title: string,
+  description: string,
+  context?: SpecGeneratorContext,
+) => Promise<string>;
 
 /**
  * Generate a markdown spec for a task using the GitHub Copilot SDK.
  * Falls back to a static template if the LLM call fails or times out.
  * Records auth health on every call.
+ *
+ * When `context.repository` is provided, the target repo is shallow-cloned
+ * and its README + manifests + file tree are injected into the prompt so
+ * the spec is grounded in what the repo actually is rather than what the
+ * LLM guesses from a vague title.
  */
-export async function generateSpec(title: string, description: string): Promise<string> {
-  const prompt = buildPrompt(title, description);
+export async function generateSpec(
+  title: string,
+  description: string,
+  context?: SpecGeneratorContext,
+): Promise<string> {
+  let repoBlob: string | null = null;
+  if (context?.repository && context.taskId) {
+    const ctx = await extractRepoContext({
+      repository: context.repository,
+      ...(context.baseBranch ? { baseBranch: context.baseBranch } : {}),
+      taskId: context.taskId,
+    });
+    if (ctx) {
+      repoBlob = ctx.prompt;
+      logger.info(
+        { repo: context.repository, bytes: ctx.bytes, taskId: context.taskId },
+        'Repo context attached to spec prompt',
+      );
+    } else {
+      logger.warn(
+        { repo: context.repository, taskId: context.taskId },
+        'Repo context unavailable — generating spec without grounding',
+      );
+    }
+  }
+  const prompt = buildPrompt(title, description, repoBlob);
 
   try {
     const client = await getCopilotClient();

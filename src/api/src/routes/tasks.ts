@@ -127,7 +127,19 @@ export function createTasksRouter(
 
         // Generate spec asynchronously; HTTP response returns immediately.
         // The spec arrives over WebSocket via `task:spec` when ready.
-        void specGenerator(task.title, `${task.description}\n\nAdditional context: ${message}`)
+        // Pass repo context so the LLM grounds the spec in what the target
+        // repo actually is (README, manifests, tree) instead of guessing
+        // from the title — otherwise vague descriptions like "modernize
+        // this thing" cause the LLM to invent a project.
+        void specGenerator(
+          task.title,
+          `${task.description}\n\nAdditional context: ${message}`,
+          {
+            ...(task.repository ? { repository: task.repository } : {}),
+            ...(task.baseBranch ? { baseBranch: task.baseBranch } : {}),
+            taskId: task.id,
+          },
+        )
           .then((spec) => {
             store.updateTask(task.id, { spec });
             io.to(`task:${task.id}`).emit('task:spec', { taskId: task.id, spec });
