@@ -201,7 +201,7 @@ export async function clone(options: CloneOptions): Promise<RepoHandle> {
 
   const args = ['clone'];
   const depth = options.depth ?? 1;
-  if (depth > 0) args.push('--depth', String(depth));
+  if (depth > 0) args.push('--depth', String(depth), '--no-tags', '--single-branch');
   if (options.ref) args.push('--branch', options.ref);
   args.push(authenticatedUrl(options.repo, token), cwd);
 
