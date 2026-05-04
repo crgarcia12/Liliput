@@ -3,6 +3,16 @@ import request from 'supertest';
 import express from 'express';
 import { Server as SocketServer } from 'socket.io';
 import http from 'node:http';
+
+// Stub repo verification so tests don't need real GitHub access.
+vi.mock('../../src/engine/github-pr.js', async (importOriginal) => {
+  const original = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...original,
+    verifyRepositoryAccess: vi.fn(async () => ({ ok: true, defaultBranch: 'main' })),
+  };
+});
+
 import { createTasksRouter } from '../../src/routes/tasks.js';
 import { createWorkstreamsRouter } from '../../src/routes/workstreams.js';
 import { resetStore } from '../../src/stores/task-store.js';
@@ -67,6 +77,24 @@ describe('POST /api/tasks', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBeDefined();
+  });
+
+  it('should reject loudly when the repository is not accessible', async () => {
+    const ghPr = await import('../../src/engine/github-pr.js');
+    vi.mocked(ghPr.verifyRepositoryAccess).mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      reason: 'Repository "crgarcia12/typo" not found.',
+    });
+
+    const { app } = buildApp();
+    const res = await request(app)
+      .post('/api/tasks')
+      .send({ title: 'T', description: 'D', repository: 'crgarcia12/typo' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('not found');
+    expect(res.body.field).toBe('repository');
   });
 });
 

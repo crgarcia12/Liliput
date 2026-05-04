@@ -7,6 +7,7 @@ import * as wsStore from '../stores/workstream-store.js';
 import { generateSpec as defaultGenerateSpec, type SpecGenerator } from '../engine/spec-generator.js';
 import { listDevPods, getPodLogs } from '../engine/k8s-deployer.js';
 import { startBuild, shipTask, discardTask, iterateTask, canIterate, enqueueChatForAgent, hasInFlightAgent } from '../engine/agent-engine.js';
+import { verifyRepositoryAccess } from '../engine/github-pr.js';
 import { logger } from '../logger.js';
 
 export function createTasksRouter(
@@ -16,13 +17,31 @@ export function createTasksRouter(
   const router = Router();
 
   // POST /api/tasks — create a new task
-  router.post('/api/tasks', (req: Request, res: Response) => {
+  router.post('/api/tasks', async (req: Request, res: Response) => {
     try {
       const { title, description, repository, baseBranch, commitMode, workstreamId } =
         req.body as CreateTaskRequest;
       if (!title || !description) {
         res.status(400).json({ error: 'title and description are required' });
         return;
+      }
+
+      // Fail loudly on typoed / inaccessible repos. Without this an invalid
+      // repo silently propagates to the coder phase, which logs a confusing
+      // "Repository not found" deep in the agent loop with no UI signal.
+      if (repository) {
+        const verification = await verifyRepositoryAccess(repository);
+        if (!verification.ok) {
+          logger.warn(
+            { repository, status: verification.status, reason: verification.reason },
+            'Rejecting task creation: repository not accessible',
+          );
+          res.status(verification.status === 502 ? 502 : 400).json({
+            error: verification.reason,
+            field: 'repository',
+          });
+          return;
+        }
       }
 
       // Resolve the parent workstream. Explicit ID wins. Otherwise, fall back
