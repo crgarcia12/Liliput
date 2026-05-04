@@ -203,6 +203,10 @@ export async function clone(options: CloneOptions): Promise<RepoHandle> {
   const depth = options.depth ?? 1;
   if (depth > 0) args.push('--depth', String(depth), '--no-tags', '--single-branch');
   if (options.ref) args.push('--branch', options.ref);
+  // Fail the clone if the connection stalls (no progress for 30s at <1 KB/s).
+  // Lets a healthy clone of any size finish, but kills hung TCP connections
+  // so the retry layer can recover instead of waiting forever.
+  args.unshift('-c', 'http.lowSpeedLimit=1000', '-c', 'http.lowSpeedTime=30');
   args.push(authenticatedUrl(options.repo, token), cwd);
 
   await runWithRetry(() => run('git', args), {

@@ -158,7 +158,6 @@ export function createTasksRouter(
           'reading-files': '📖 Reading README, manifests, and file tree',
           'extracted': '✅ Repo context extracted',
           'clone-failed': '⚠️ Could not clone the repo — drafting from title/description only',
-          'timeout': '⚠️ Repo context extraction timed out — drafting from title/description only',
           'connecting-llm': '🔌 Connecting to the LLM',
           'drafting': '✍️ Drafting the specification',
           'spec-ready': '✅ Specification draft ready',
