@@ -105,8 +105,6 @@ export interface RepoContextOptions {
   baseBranch?: string;
   /** Used to derive a unique workspace dir; cleaned up after extraction. */
   taskId: string;
-  /** Soft timeout for the whole extraction (clone + reads). Default 60s. */
-  timeoutMs?: number;
   /** Optional progress hook — called as the extractor advances through stages. */
   onProgress?: ProgressHandler;
 }
@@ -115,8 +113,7 @@ export type ProgressStage =
   | 'cloning'
   | 'reading-files'
   | 'extracted'
-  | 'clone-failed'
-  | 'timeout';
+  | 'clone-failed';
 
 export type ProgressHandler = (stage: ProgressStage, detail?: string) => void;
 
@@ -130,15 +127,20 @@ export interface RepoContext {
 /**
  * Clone + read + format. Best effort: returns null if anything fails badly
  * enough that the spec generator should proceed without repo context.
+ *
+ * No wall-clock timeout — a clone that's actively transferring should be
+ * allowed to finish. Stalled connections are caught by git's
+ * http.lowSpeedLimit/lowSpeedTime config (configured in git-client.ts), which
+ * fails the clone if no bytes flow for ~30s. The retry layer then either
+ * succeeds on a fresh connection or surfaces a real error.
  */
 export async function extractRepoContext(opts: RepoContextOptions): Promise<RepoContext | null> {
   const workdirName = `spec-${opts.taskId.slice(0, 8)}-${Date.now().toString(36)}`;
-  const timeoutMs = opts.timeoutMs ?? 180_000;
   const progress = opts.onProgress ?? (() => undefined);
   const startedAt = Date.now();
   let handle: git.RepoHandle | null = null;
 
-  const work = (async () => {
+  try {
     progress('cloning', `git clone --depth 1 ${opts.repository}${opts.baseBranch ? ` (branch: ${opts.baseBranch})` : ''}`);
     handle = await git.clone({
       repo: opts.repository,
@@ -180,23 +182,9 @@ export async function extractRepoContext(opts: RepoContextOptions): Promise<Repo
     }
 
     const prompt = sections.join('\n');
-    progress('extracted', `${prompt.length} chars (README:${readme ? 'yes' : 'no'}, manifests:${manifests.length}, tree:${tree ? 'yes' : 'no'})`);
+    const elapsed = Date.now() - startedAt;
+    progress('extracted', `${prompt.length} chars in ${Math.round(elapsed / 1000)}s (README:${readme ? 'yes' : 'no'}, manifests:${manifests.length}, tree:${tree ? 'yes' : 'no'})`);
     return { prompt, bytes: prompt.length };
-  })();
-
-  try {
-    const result = await Promise.race([
-      work,
-      new Promise<null>((resolve) =>
-        setTimeout(() => {
-          const elapsed = Date.now() - startedAt;
-          logger.warn({ taskId: opts.taskId, repo: opts.repository, timeoutMs, elapsedMs: elapsed }, 'Repo context extraction timed out');
-          progress('timeout', `${timeoutMs}ms exceeded (clone is unusually slow — falling back)`);
-          resolve(null);
-        }, timeoutMs),
-      ),
-    ]);
-    return result;
   } catch (err) {
     const m = err instanceof Error ? err.message : String(err);
     logger.warn({ taskId: opts.taskId, repo: opts.repository, err: m }, 'Repo context extraction failed');
