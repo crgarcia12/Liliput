@@ -46,6 +46,7 @@ import {
 import { syncRoutes, type DevRoute } from './nginx-patcher.js';
 import { openPullRequest, markPullRequestReady, closePullRequest } from './github-pr.js';
 import { pathPrefixFor, writeContractIntoWorkspace } from './liliput-deploy-contract.js';
+import { writeAcceptanceFeature } from './acceptance-feature-writer.js';
 
 const ACR_NAME = process.env['ACR_NAME'] ?? '';
 const PUBLIC_BASE_URL = process.env['LILIPUT_PUBLIC_URL'] ?? 'http://4.165.50.135';
@@ -1465,6 +1466,38 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   // gets committed into the target repo.
   const pathPrefix = pathPrefixFor(repo, branch);
   await writeContractIntoWorkspace(handle.cwd, { pathPrefix });
+
+  // Drop the spec's Gherkin block as tests/features/acceptance.feature so
+  // the agent has a concrete starting point for the TDD loop. Best-effort —
+  // never blocks workspace setup.
+  try {
+    const r = await writeAcceptanceFeature(handle.cwd, task.spec);
+    if (r.written) {
+      logPhase(
+        io,
+        taskId,
+        coder,
+        'info',
+        '🥒 Wrote tests/features/acceptance.feature from spec Gherkin',
+      );
+    } else if (r.skippedReason && r.skippedReason !== 'no-spec') {
+      logPhase(
+        io,
+        taskId,
+        coder,
+        'info',
+        `(acceptance.feature not written: ${r.skippedReason})`,
+      );
+    }
+  } catch (err) {
+    logPhase(
+      io,
+      taskId,
+      coder,
+      'warn',
+      `Could not write acceptance.feature: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   logPhase(io, taskId, coder, 'info', 'Spawning Copilot SDK session…');
   const agentSession = await createAgentSession(handle.cwd);
