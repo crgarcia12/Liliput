@@ -319,7 +319,18 @@ export function addAgent(taskId: string, name: string, role: AgentRole): Agent |
 export function updateAgent(
   taskId: string,
   agentId: string,
-  updates: Partial<Pick<Agent, 'status' | 'currentAction' | 'progress'>>,
+  updates: Partial<
+    Pick<
+      Agent,
+      | 'status'
+      | 'currentAction'
+      | 'progress'
+      | 'startedAt'
+      | 'toolCallCount'
+      | 'lastUsefulAction'
+      | 'errorMessage'
+    >
+  >,
 ): Agent | undefined {
   const db = getDb();
   const row = db
@@ -556,7 +567,12 @@ export function reconcileOrphanedRuns(): {
     for (const row of agentRows) {
       const agent = JSON.parse(row.data) as Omit<Agent, 'logs'>;
       if (agent.status === 'working') {
-        const updated = { ...agent, status: 'failed' as const, updatedAt: ts };
+        const updated = {
+          ...agent,
+          status: 'failed' as const,
+          updatedAt: ts,
+          errorMessage: 'interrupted by API restart',
+        };
         updateAgentStmt.run(JSON.stringify(updated), row.id);
         insertLogStmt.run(row.id, ts, 'warn', note, null, null);
         agentsReset++;

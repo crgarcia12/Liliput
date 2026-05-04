@@ -20,7 +20,7 @@
 
 import * as k8s from '@kubernetes/client-node';
 
-const NS = 'liliput';
+const NS = process.env.LILIPUT_NAMESPACE ?? 'liliput';
 const CM_NAME = 'nginx-config';
 const NGINX_KEY = 'nginx.conf';
 const BEGIN = '# === LILIPUT-DEV-ENVS-BEGIN ===';

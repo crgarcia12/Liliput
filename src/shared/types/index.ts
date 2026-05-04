@@ -99,6 +99,14 @@ export interface Agent {
   progress: number;           // 0-100
   createdAt: string;
   updatedAt: string;
+  /** Set when the agent transitions to `working` for the current run. Cleared on completion. */
+  startedAt?: string;
+  /** Cumulative count of tool invocations during the current run — used as a liveness signal. */
+  toolCallCount?: number;
+  /** Most recent useful action label — mirrors `currentAction` but is preserved across heartbeat noise. */
+  lastUsefulAction?: string;
+  /** Reason the run ended (e.g. "interrupted by API restart"). */
+  errorMessage?: string;
 }
 
 // ─── Agent Events (WebSocket) ─────────────────────────────────
