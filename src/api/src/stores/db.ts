@@ -92,6 +92,21 @@ CREATE TABLE IF NOT EXISTS activity_entries (
   FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_activity_task ON activity_entries(task_id, ts);
+
+-- Tool wishes: agents emit "TOOL-WISH: <tool> - <reason>" lines in their chat
+-- when they wish a CLI was available in the runtime image. We capture them so
+-- the operator can review and bake popular requests into the next image.
+CREATE TABLE IF NOT EXISTS tool_wishes (
+  id        TEXT PRIMARY KEY,
+  task_id   TEXT NOT NULL,
+  agent_id  TEXT,
+  ts        TEXT NOT NULL,
+  tool      TEXT NOT NULL,
+  reason    TEXT,
+  FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_tool_wishes_tool ON tool_wishes(tool);
+CREATE INDEX IF NOT EXISTS idx_tool_wishes_ts ON tool_wishes(ts);
 `;
 
 export function getDb(): Database.Database {

@@ -246,6 +246,12 @@ export default function RequestsPage() {
             ☁️ Dev envs
           </Link>
           <Link
+            href="/tool-wishes"
+            className="text-gray-400 hover:text-cyan-300 text-xs"
+          >
+            🛠 Tool wishes
+          </Link>
+          <Link
             href="/"
             className="px-3 py-1 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-xs font-semibold"
           >
