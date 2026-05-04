@@ -8,7 +8,12 @@ const router = Router();
 export const BACKEND_VERSION = '0.0.21';
 
 router.get('/api/health', (_req: Request, res: Response) => {
-  res.json({ status: 'ok', service: 'liliput-api', version: BACKEND_VERSION });
+  res.json({
+    status: 'ok',
+    service: 'liliput-api',
+    version: BACKEND_VERSION,
+    env: process.env.LILIPUT_ENV || 'LOCAL',
+  });
 });
 
 export default router;
