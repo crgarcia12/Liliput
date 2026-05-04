@@ -44,6 +44,86 @@ interface GitHubPrResponse {
   state: string;
 }
 
+export type RepoVerification =
+  | { ok: true; defaultBranch: string }
+  | { ok: false; status: number; reason: string };
+
+/**
+ * Verify the configured token can access "owner/repo" via the GitHub REST API.
+ * Used at task creation to fail loudly on typoed / inaccessible repos rather
+ * than letting the error surface mid-pipeline as a confusing clone failure.
+ *
+ * Never throws. On network/timeout failures it returns ok=false with a
+ * descriptive reason so callers can decide whether to allow or block.
+ */
+export async function verifyRepositoryAccess(
+  ownerRepo: string,
+  timeoutMs = 8000,
+): Promise<RepoVerification> {
+  // Normalize "https://github.com/owner/repo(.git)?" → "owner/repo".
+  const normalized = ownerRepo
+    .trim()
+    .replace(/^https?:\/\/github\.com\//i, '')
+    .replace(/\.git$/i, '')
+    .replace(/\/+$/, '');
+  if (!/^[^/\s]+\/[^/\s]+$/.test(normalized)) {
+    return { ok: false, status: 400, reason: 'repository must be "owner/repo" (or a github.com URL)' };
+  }
+  let token: string;
+  try {
+    token = getToken();
+  } catch {
+    return { ok: false, status: 401, reason: 'No GitHub token configured on the server.' };
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`https://api.github.com/repos/${normalized}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+      signal: controller.signal,
+    });
+    if (res.status === 404) {
+      return {
+        ok: false,
+        status: 404,
+        reason: `Repository "${normalized}" not found or not accessible with the configured token. Check the spelling and that the token has access.`,
+      };
+    }
+    if (res.status === 401 || res.status === 403) {
+      return {
+        ok: false,
+        status: res.status,
+        reason: `GitHub denied access to "${normalized}" (HTTP ${res.status}). The token may be missing scopes or expired.`,
+      };
+    }
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return {
+        ok: false,
+        status: res.status,
+        reason: `GitHub returned HTTP ${res.status} for "${normalized}": ${text.slice(0, 200)}`,
+      };
+    }
+    const json = (await res.json()) as { default_branch?: string };
+    return { ok: true, defaultBranch: json.default_branch ?? 'main' };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      ok: false,
+      status: 502,
+      reason: `Could not reach GitHub to verify "${normalized}": ${message}`,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function openPullRequest(
   options: OpenPullRequestOptions,
 ): Promise<PullRequest> {
