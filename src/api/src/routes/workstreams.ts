@@ -44,21 +44,34 @@ function buildPreviewForTasks(
   };
 }
 
-async function purgeTask(io: SocketServer, task: Task): Promise<void> {
-  try {
-    await teardownTask(task, {
-      log: (level, message) =>
-        logger[level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info'](
-          { taskId: task.id },
-          `purge: ${message}`,
-        ),
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    logger.warn({ taskId: task.id, err: message }, 'teardown raised, proceeding to DB delete');
-  }
+/**
+ * Drop the DB row immediately and notify the UI. External state (PR, branch,
+ * namespace, SDK session, workspace) is torn down in the background — those
+ * calls can each take seconds and would otherwise stall the HTTP response
+ * past the browser's fetch timeout, surfacing as a `TypeError: Failed to
+ * fetch` even though the work eventually succeeds.
+ */
+function purgeTask(io: SocketServer, task: Task): void {
   taskStore.deleteTask(task.id);
   io.emit('task:deleted', { taskId: task.id });
+  logger.info({ taskId: task.id }, 'Task row removed; scheduling background teardown');
+
+  // Fire-and-forget. Errors are logged, never thrown.
+  void (async () => {
+    try {
+      await teardownTask(task, {
+        log: (level, message) =>
+          logger[level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info'](
+            { taskId: task.id },
+            `purge: ${message}`,
+          ),
+      });
+      logger.info({ taskId: task.id }, 'Background teardown complete');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn({ taskId: task.id, err: message }, 'Background teardown raised');
+    }
+  })();
 }
 
 export function createWorkstreamsRouter(io: SocketServer): Router {
@@ -131,15 +144,14 @@ export function createWorkstreamsRouter(io: SocketServer): Router {
 
   // ─── Hard delete endpoints ────────────────────────────────
 
-  router.delete('/api/tasks/:id', async (req: Request, res: Response) => {
+  router.delete('/api/tasks/:id', (req: Request, res: Response) => {
     try {
       const task = taskStore.getTask(req.params['id'] as string);
       if (!task) {
         res.status(404).json({ error: 'Task not found' });
         return;
       }
-      await purgeTask(io, task);
-      logger.info({ taskId: task.id }, 'Task purged');
+      purgeTask(io, task);
       res.status(204).send();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -148,7 +160,7 @@ export function createWorkstreamsRouter(io: SocketServer): Router {
     }
   });
 
-  router.delete('/api/workstreams/:id', async (req: Request, res: Response) => {
+  router.delete('/api/workstreams/:id', (req: Request, res: Response) => {
     try {
       const id = req.params['id'] as string;
       const ws = wsStore.getWorkstream(id);
@@ -158,7 +170,7 @@ export function createWorkstreamsRouter(io: SocketServer): Router {
       }
       const tasks = taskStore.listTasksByWorkstream(id);
       for (const t of tasks) {
-        await purgeTask(io, t);
+        purgeTask(io, t);
       }
       wsStore.deleteWorkstream(id);
       io.emit('workstream:deleted', { workstreamId: id });
@@ -171,12 +183,12 @@ export function createWorkstreamsRouter(io: SocketServer): Router {
     }
   });
 
-  router.delete('/api/repo-groups/:repo', async (req: Request, res: Response) => {
+  router.delete('/api/repo-groups/:repo', (req: Request, res: Response) => {
     try {
       const repo = decodeURIComponent(req.params['repo'] as string);
       const tasks = taskStore.listTasksByRepository(repo);
       for (const t of tasks) {
-        await purgeTask(io, t);
+        purgeTask(io, t);
       }
       const ids = wsStore.listWorkstreamIdsForRepo(repo);
       for (const id of ids) wsStore.deleteWorkstream(id);
