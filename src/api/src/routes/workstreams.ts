@@ -45,18 +45,26 @@ function buildPreviewForTasks(
 }
 
 /**
- * Drop the DB row immediately and notify the UI. External state (PR, branch,
- * namespace, SDK session, workspace) is torn down in the background — those
- * calls can each take seconds and would otherwise stall the HTTP response
- * past the browser's fetch timeout, surfacing as a `TypeError: Failed to
- * fetch` even though the work eventually succeeds.
+ * Mark a task as `deleting`, notify the UI immediately, and run external
+ * teardown in the background. Idempotent and resumable:
+ *
+ *  - If the row is already `deleting`, just (re-)schedule another teardown
+ *    pass — every step (`closePullRequest`, `deleteNamespace`,
+ *    `deleteRemoteBranch`, workspace `rm`) tolerates "already gone".
+ *  - On teardown success, the row is hard-deleted.
+ *  - On teardown failure, the row stays `deleting` and the periodic
+ *    `runDeletingSweeper` will retry. Pod restarts are safe — the persisted
+ *    `deleting` rows act as the resume queue.
  */
 function purgeTask(io: SocketServer, task: Task): void {
-  taskStore.deleteTask(task.id);
-  io.emit('task:deleted', { taskId: task.id });
-  logger.info({ taskId: task.id }, 'Task row removed; scheduling background teardown');
+  if (task.status !== 'deleting') {
+    taskStore.updateTask(task.id, { status: 'deleting' });
+    io.emit('task:deleted', { taskId: task.id });
+    logger.info({ taskId: task.id }, 'Task marked deleting; scheduling background teardown');
+  } else {
+    logger.info({ taskId: task.id }, 'Task already deleting; re-scheduling background teardown');
+  }
 
-  // Fire-and-forget. Errors are logged, never thrown.
   void (async () => {
     try {
       await teardownTask(task, {
@@ -66,12 +74,42 @@ function purgeTask(io: SocketServer, task: Task): void {
             `purge: ${message}`,
           ),
       });
-      logger.info({ taskId: task.id }, 'Background teardown complete');
+      taskStore.deleteTask(task.id);
+      logger.info({ taskId: task.id }, 'Background teardown complete; row removed');
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      logger.warn({ taskId: task.id, err: message }, 'Background teardown raised');
+      logger.warn(
+        { taskId: task.id, err: message },
+        'Background teardown raised; row left in deleting state for sweeper retry',
+      );
     }
   })();
+}
+
+/**
+ * Periodic resumer: re-runs background teardown for every task stuck in
+ * `deleting`. Runs once on startup and on a fixed interval. Idempotent — if
+ * teardown already finished, the row is already gone and this is a no-op.
+ */
+export function runDeletingSweeper(io: SocketServer): void {
+  const tick = () => {
+    let stuck: Task[];
+    try {
+      stuck = taskStore.listDeletingTasks();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn({ err: msg }, 'Deleting-sweeper: list failed');
+      return;
+    }
+    if (stuck.length === 0) return;
+    logger.info({ count: stuck.length }, '🧹 Deleting-sweeper: retrying teardown');
+    for (const t of stuck) {
+      purgeTask(io, t);
+    }
+  };
+  // Kick once on startup, then every 5 min.
+  tick();
+  setInterval(tick, 5 * 60 * 1000).unref();
 }
 
 export function createWorkstreamsRouter(io: SocketServer): Router {
@@ -111,7 +149,7 @@ export function createWorkstreamsRouter(io: SocketServer): Router {
 
   router.get('/api/tasks/:id/delete-preview', (req: Request, res: Response) => {
     const task = taskStore.getTask(req.params['id'] as string);
-    if (!task) {
+    if (!task || task.status === 'deleting') {
       res.status(404).json({ error: 'Task not found' });
       return;
     }
@@ -148,7 +186,9 @@ export function createWorkstreamsRouter(io: SocketServer): Router {
     try {
       const task = taskStore.getTask(req.params['id'] as string);
       if (!task) {
-        res.status(404).json({ error: 'Task not found' });
+        // Row already gone — DELETE is idempotent. Return 204 so retrying
+        // a delete after a partial failure or pod restart is a no-op.
+        res.status(204).send();
         return;
       }
       purgeTask(io, task);
@@ -164,17 +204,20 @@ export function createWorkstreamsRouter(io: SocketServer): Router {
     try {
       const id = req.params['id'] as string;
       const ws = wsStore.getWorkstream(id);
-      if (!ws) {
-        res.status(404).json({ error: 'Workstream not found' });
-        return;
-      }
+      // Iterate over ALL tasks for this workstream including ones already
+      // mid-teardown — purgeTask is idempotent and will just re-schedule.
       const tasks = taskStore.listTasksByWorkstream(id);
       for (const t of tasks) {
         purgeTask(io, t);
       }
-      wsStore.deleteWorkstream(id);
-      io.emit('workstream:deleted', { workstreamId: id });
-      logger.info({ workstreamId: id, taskCount: tasks.length }, 'Workstream purged');
+      if (ws) {
+        wsStore.deleteWorkstream(id);
+        io.emit('workstream:deleted', { workstreamId: id });
+      }
+      logger.info(
+        { workstreamId: id, taskCount: tasks.length, wsExisted: !!ws },
+        'Workstream purge requested',
+      );
       res.status(204).send();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -195,7 +238,7 @@ export function createWorkstreamsRouter(io: SocketServer): Router {
       io.emit('repo-group:deleted', { repository: repo });
       logger.info(
         { repository: repo, taskCount: tasks.length, workstreamCount: ids.length },
-        'Repo group purged',
+        'Repo group purge requested',
       );
       res.status(204).send();
     } catch (err: unknown) {

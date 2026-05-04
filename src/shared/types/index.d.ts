@@ -1,4 +1,4 @@
-export type TaskStatus = 'clarifying' | 'specifying' | 'building' | 'deploying' | 'completed' | 'failed';
+export type TaskStatus = 'clarifying' | 'specifying' | 'building' | 'deploying' | 'review' | 'shipping' | 'completed' | 'discarded' | 'failed' | 'deleting';
 export interface Task {
     id: string;
     title: string;

@@ -97,7 +97,7 @@ export function createTasksRouter(
   router.get('/api/tasks/:id', (req: Request, res: Response) => {
     try {
       const task = store.getTask(req.params['id'] as string);
-      if (!task) {
+      if (!task || task.status === 'deleting') {
         res.status(404).json({ error: 'Task not found' });
         return;
       }
@@ -113,7 +113,7 @@ export function createTasksRouter(
   router.post('/api/tasks/:id/chat', (req: Request, res: Response) => {
     try {
       const task = store.getTask(req.params['id'] as string);
-      if (!task) {
+      if (!task || task.status === 'deleting') {
         res.status(404).json({ error: 'Task not found' });
         return;
       }
@@ -260,7 +260,7 @@ export function createTasksRouter(
   router.post('/api/tasks/:id/approve-spec', (req: Request, res: Response) => {
     try {
       const task = store.getTask(req.params['id'] as string);
-      if (!task) {
+      if (!task || task.status === 'deleting') {
         res.status(404).json({ error: 'Task not found' });
         return;
       }
@@ -326,7 +326,7 @@ export function createTasksRouter(
   router.get('/api/tasks/:id/dev-pods', async (req: Request, res: Response) => {
     try {
       const task = store.getTask(req.params['id'] as string);
-      if (!task) {
+      if (!task || task.status === 'deleting') {
         res.status(404).json({ error: 'Task not found' });
         return;
       }
@@ -348,7 +348,7 @@ export function createTasksRouter(
   router.get('/api/tasks/:id/dev-logs', async (req: Request, res: Response) => {
     try {
       const task = store.getTask(req.params['id'] as string);
-      if (!task) {
+      if (!task || task.status === 'deleting') {
         res.status(404).json({ error: 'Task not found' });
         return;
       }

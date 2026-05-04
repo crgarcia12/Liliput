@@ -193,7 +193,7 @@ export function getTask(id: string): Task | undefined {
 
 export function getTasks(): Task[] {
   const rows = getDb()
-    .prepare('SELECT * FROM tasks ORDER BY updated_at DESC')
+    .prepare("SELECT * FROM tasks WHERE status != 'deleting' ORDER BY updated_at DESC")
     .all() as TaskRow[];
   return rows.map((r) => hydrateTask(r));
 }
@@ -258,7 +258,9 @@ export function updateTask(
 /** List tasks belonging to a workstream. */
 export function listTasksByWorkstream(workstreamId: string): Task[] {
   const rows = getDb()
-    .prepare('SELECT * FROM tasks WHERE workstream_id = ? ORDER BY updated_at DESC')
+    .prepare(
+      "SELECT * FROM tasks WHERE workstream_id = ? AND status != 'deleting' ORDER BY updated_at DESC",
+    )
     .all(workstreamId) as TaskRow[];
   return rows.map((r) => hydrateTask(r));
 }
@@ -266,8 +268,19 @@ export function listTasksByWorkstream(workstreamId: string): Task[] {
 /** List tasks for a repo (regardless of workstream). */
 export function listTasksByRepository(repository: string): Task[] {
   const rows = getDb()
-    .prepare('SELECT * FROM tasks WHERE repository = ? ORDER BY updated_at DESC')
+    .prepare(
+      "SELECT * FROM tasks WHERE repository = ? AND status != 'deleting' ORDER BY updated_at DESC",
+    )
     .all(repository) as TaskRow[];
+  return rows.map((r) => hydrateTask(r));
+}
+
+/** List tasks that are mid-teardown (status='deleting'). Used by the
+ *  resumable-teardown sweeper to retry external cleanup after a pod restart. */
+export function listDeletingTasks(): Task[] {
+  const rows = getDb()
+    .prepare("SELECT * FROM tasks WHERE status = 'deleting' ORDER BY updated_at ASC")
+    .all() as TaskRow[];
   return rows.map((r) => hydrateTask(r));
 }
 

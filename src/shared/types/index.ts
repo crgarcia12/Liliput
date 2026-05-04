@@ -22,7 +22,8 @@ export type TaskStatus =
   | 'shipping'      // PR being opened or direct push in flight
   | 'completed'
   | 'discarded'
-  | 'failed';
+  | 'failed'
+  | 'deleting';     // Hidden from UI; external state being torn down (sweeper retries)
 
 export type CommitMode = 'pr' | 'direct';
 
