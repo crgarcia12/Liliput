@@ -16,6 +16,7 @@ export const FRONTEND_VERSION = '0.0.21';
  */
 export default function VersionFooter() {
   const [backend, setBackend] = useState<string>('…');
+  const [env, setEnv] = useState<string>('');
 
   useEffect(() => {
     let cancelled = false;
@@ -23,8 +24,11 @@ export default function VersionFooter() {
       try {
         const res = await fetch('/api/health', { cache: 'no-store' });
         if (!res.ok) throw new Error(String(res.status));
-        const body = (await res.json()) as { version?: string };
-        if (!cancelled) setBackend(body.version ?? '?');
+        const body = (await res.json()) as { version?: string; env?: string };
+        if (!cancelled) {
+          setBackend(body.version ?? '?');
+          setEnv(body.env ?? '');
+        }
       } catch {
         if (!cancelled) setBackend('offline');
       }
@@ -37,11 +41,18 @@ export default function VersionFooter() {
     };
   }, []);
 
+  const envColor =
+    env === 'DEV' ? 'text-yellow-300' :
+    env === 'TEST' ? 'text-green-300' :
+    env === 'PROD' ? 'text-red-300' :
+    'text-gray-400';
+
   return (
     <div
       className="pointer-events-none fixed bottom-1 left-0 right-0 z-50 select-none text-center font-mono text-[10px] text-gray-500"
-      title="Frontend / Backend versions — bump in code to verify a deploy"
+      title="Environment / Frontend / Backend versions"
     >
+      {env && <span className={`${envColor} font-bold mr-2`}>[{env}]</span>}
       FE {FRONTEND_VERSION} | BE {backend}
     </div>
   );
