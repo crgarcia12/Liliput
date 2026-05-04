@@ -127,6 +127,9 @@ export default function Home() {
           </h1>
         </div>
         <div className="flex items-center gap-4 text-xs">
+          <a href="/now" className="text-gray-400 hover:text-cyan-300">
+            ⏱ Now
+          </a>
           <a href="/requests" className="text-gray-400 hover:text-cyan-300">
             📋 Requests
           </a>
