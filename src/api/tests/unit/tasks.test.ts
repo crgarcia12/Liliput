@@ -257,9 +257,9 @@ describe('DELETE /api/tasks/:id', () => {
     expect(getRes.status).toBe(404);
   });
 
-  it('should return 404 for nonexistent task', async () => {
+  it('should return 204 for nonexistent task (idempotent delete)', async () => {
     const { app } = buildApp();
     const res = await request(app).delete('/api/tasks/nonexistent');
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(204);
   });
 });

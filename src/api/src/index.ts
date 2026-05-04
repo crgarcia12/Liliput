@@ -5,6 +5,7 @@ import { setupWebSocket } from './ws/handler.js';
 import { stopCopilotClient } from './engine/copilot-client.js';
 import { reconcileOrphanedRuns, backfillDefaultWorkstreams } from './stores/task-store.js';
 import { purgeOrphanWorkspaces, restoreDevRoutesFromStore } from './engine/agent-engine.js';
+import { runDeletingSweeper } from './routes/workstreams.js';
 import { logger } from './logger.js';
 
 const PORT = parseInt(process.env['PORT'] ?? '5001', 10);
@@ -63,6 +64,12 @@ restoreDevRoutesFromStore()
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn({ err: msg }, 'Dev-route restore failed (non-fatal)');
   });
+
+// Resume any teardowns that didn't finish before the previous pod died.
+// Tasks with status='deleting' get retried; idempotent — every step
+// (close PR, delete namespace, delete branch, rm workspace) tolerates
+// "already gone".
+runDeletingSweeper(io);
 
 server.listen(PORT, () => {
   logger.info({ port: PORT }, '🏝️  Liliput API listening');
