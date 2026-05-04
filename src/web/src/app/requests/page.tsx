@@ -24,6 +24,7 @@ const STATUS_STYLES: Record<TaskStatus, { label: string; cls: string }> = {
   completed: { label: 'Completed', cls: 'bg-green-500/15 text-green-300 border-green-500/30' },
   discarded: { label: 'Discarded', cls: 'bg-gray-500/15 text-gray-400 border-gray-500/30' },
   failed: { label: 'Failed', cls: 'bg-red-500/15 text-red-300 border-red-500/30' },
+  deleting: { label: 'Deleting', cls: 'bg-gray-500/15 text-gray-400 border-gray-500/30' },
 };
 
 const ROLE_ICON: Record<string, string> = {
