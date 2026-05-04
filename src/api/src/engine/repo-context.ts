@@ -133,8 +133,9 @@ export interface RepoContext {
  */
 export async function extractRepoContext(opts: RepoContextOptions): Promise<RepoContext | null> {
   const workdirName = `spec-${opts.taskId.slice(0, 8)}-${Date.now().toString(36)}`;
-  const timeoutMs = opts.timeoutMs ?? 60_000;
+  const timeoutMs = opts.timeoutMs ?? 180_000;
   const progress = opts.onProgress ?? (() => undefined);
+  const startedAt = Date.now();
   let handle: git.RepoHandle | null = null;
 
   const work = (async () => {
@@ -188,8 +189,9 @@ export async function extractRepoContext(opts: RepoContextOptions): Promise<Repo
       work,
       new Promise<null>((resolve) =>
         setTimeout(() => {
-          logger.warn({ taskId: opts.taskId, repo: opts.repository, timeoutMs }, 'Repo context extraction timed out');
-          progress('timeout', `${timeoutMs}ms exceeded`);
+          const elapsed = Date.now() - startedAt;
+          logger.warn({ taskId: opts.taskId, repo: opts.repository, timeoutMs, elapsedMs: elapsed }, 'Repo context extraction timed out');
+          progress('timeout', `${timeoutMs}ms exceeded (clone is unusually slow — falling back)`);
           resolve(null);
         }, timeoutMs),
       ),
