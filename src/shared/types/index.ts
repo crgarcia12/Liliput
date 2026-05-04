@@ -11,6 +11,38 @@ export interface Workstream {
   updatedAt: string;
 }
 
+// ─── Feature (a slice of a Workstream's spec) ──────────────────
+// A Workstream may decompose into multiple Features. Each Feature owns its
+// own spec file, branch, dev namespace, and one or more Tasks. The integration
+// Feature exists per Workstream and orchestrates merging across siblings.
+
+export type FeatureStatus =
+  | 'pending'      // Decomposed, no task spawned yet
+  | 'scaffolding'  // Sequential dep/route stub task in flight
+  | 'in-progress'  // Task running the mega-prompt loop
+  | 'integrating'  // Integration agent is merging
+  | 'done'
+  | 'failed';
+
+export type FeatureKind = 'feature' | 'integration';
+
+export interface Feature {
+  id: string;
+  workstreamId: string;
+  name: string;                // Human label (e.g. "User Login")
+  slug: string;                // Stable ID (e.g. "01-user-login")
+  kind: FeatureKind;
+  status: FeatureStatus;
+  description?: string;
+  branch?: string;             // e.g. feat/01-user-login
+  namespace?: string;          // dev namespace
+  specPath?: string;           // e.g. specs/features/01-user-login.feature.md
+  position: number;            // Display order
+  dependsOn?: string[];        // Feature IDs that must complete first
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ─── Task (Feature Request) ───────────────────────────────────
 
 export type TaskStatus =
@@ -33,6 +65,7 @@ export interface Task {
   description: string;
   status: TaskStatus;
   workstreamId?: string;      // Parent workstream (auto-assigned if missing)
+  featureId?: string;         // Parent feature (set when fan-out spawns this task)
   spec?: string;              // Generated specification markdown
   repository?: string;        // Target GitHub repo (e.g. "owner/repo") — what the agent edits
   baseBranch?: string;        // Branch to fork from (default "main")

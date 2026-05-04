@@ -107,6 +107,24 @@ CREATE TABLE IF NOT EXISTS tool_wishes (
 );
 CREATE INDEX IF NOT EXISTS idx_tool_wishes_tool ON tool_wishes(tool);
 CREATE INDEX IF NOT EXISTS idx_tool_wishes_ts ON tool_wishes(ts);
+
+CREATE TABLE IF NOT EXISTS features (
+  id             TEXT PRIMARY KEY,
+  workstream_id  TEXT NOT NULL,
+  name           TEXT NOT NULL,
+  slug           TEXT NOT NULL,
+  status         TEXT NOT NULL,
+  branch         TEXT,
+  namespace      TEXT,
+  spec_path      TEXT,
+  data           TEXT NOT NULL,
+  position       INTEGER NOT NULL DEFAULT 0,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL,
+  FOREIGN KEY (workstream_id) REFERENCES workstreams(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_features_workstream ON features(workstream_id);
+CREATE INDEX IF NOT EXISTS idx_features_status ON features(status);
 `;
 
 export function getDb(): Database.Database {
@@ -128,6 +146,11 @@ export function getDb(): Database.Database {
       logger.info({}, 'Migrated: added workstream_id column to tasks');
     }
     _db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_workstream ON tasks(workstream_id)`);
+    if (!cols.some((c) => c.name === 'feature_id')) {
+      _db.exec(`ALTER TABLE tasks ADD COLUMN feature_id TEXT`);
+      logger.info({}, 'Migrated: added feature_id column to tasks');
+    }
+    _db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_feature ON tasks(feature_id)`);
   } catch (err) {
     logger.warn({ err }, 'Workstream migration check failed (non-fatal)');
   }
@@ -143,6 +166,8 @@ export function resetDb(): void {
     DELETE FROM agents;
     DELETE FROM chat_messages;
     DELETE FROM activity_entries;
+    DELETE FROM tool_wishes;
+    DELETE FROM features;
     DELETE FROM tasks;
     DELETE FROM workstreams;
   `);

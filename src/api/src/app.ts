@@ -7,6 +7,7 @@ import { createAuthRouter } from './routes/auth.js';
 import { createAgentRouter } from './routes/agent.js';
 import { createWorkstreamsRouter } from './routes/workstreams.js';
 import { createToolWishesRouter } from './routes/tool-wishes.js';
+import { createFeaturesRouter } from './routes/features.js';
 import type { SpecGenerator } from './engine/spec-generator.js';
 
 export interface AppOptions {
@@ -29,6 +30,7 @@ export function createApp(io: SocketServer, options: AppOptions = {}): express.E
   // (the hard-delete with cleanup) takes precedence over the legacy stub.
   app.use(createWorkstreamsRouter(io));
   app.use(createToolWishesRouter());
+  app.use(createFeaturesRouter());
   app.use(createTasksRouter(io, options.specGenerator));
 
   return app;
