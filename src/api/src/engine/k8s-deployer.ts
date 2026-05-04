@@ -116,6 +116,13 @@ export async function deployApp(opts: DeployAppOptions): Promise<void> {
   const apps = appsApi();
   const core = coreApi();
 
+  // Defensively ensure the namespace exists — it can disappear between
+  // higher-level ensureNamespace() and this call (eventual consistency,
+  // swept by the delete-sweeper, manual cleanup). Without this the deploy
+  // 404s and the ops-fixer agent can't fix a missing namespace by editing
+  // files, so the task ends up stuck failed.
+  await ensureNamespace({ name: opts.namespace });
+
   const labels = { app: opts.appName, 'liliput.dev/managed': 'true' };
   const envEntries: k8s.V1EnvVar[] = Object.entries(opts.env ?? {}).map(([name, value]) => ({
     name,
