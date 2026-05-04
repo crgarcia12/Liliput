@@ -23,6 +23,7 @@ import type {
 } from '../../../shared/types/index.js';
 import { getDb } from './db.js';
 import * as wsStore from './workstream-store.js';
+import { captureFromText as captureToolWishes } from './tool-wish-store.js';
 
 function now(): string {
   return new Date().toISOString();
@@ -409,6 +410,15 @@ export function addAgentLog(
     `INSERT INTO agent_logs (agent_id, ts, level, message, command, output)
      VALUES (?, ?, ?, ?, ?, ?)`,
   ).run(agentId, now(), level, message, command ?? null, output ?? null);
+
+  // Agent logs can also contain TOOL-WISH directives (esp. from streamed SDK
+  // output). Capture them too. Best-effort, never throws.
+  try {
+    const haystack = [message, output ?? '', command ?? ''].join('\n');
+    captureToolWishes(taskId, agentId, haystack);
+  } catch {
+    /* swallow */
+  }
 }
 
 // ─── Chat ────────────────────────────────────────────────────
@@ -441,6 +451,16 @@ export function addChatMessage(
     `INSERT INTO chat_messages (id, task_id, ts, data) VALUES (?, ?, ?, ?)`,
   ).run(msg.id, taskId, ts, JSON.stringify(msg));
   db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run(ts, taskId);
+
+  // Scan agent/system messages for TOOL-WISH directives. We don't scan
+  // gulliver (human) messages — false positives would be confusing.
+  if (role !== 'gulliver') {
+    try {
+      captureToolWishes(taskId, agentId ?? null, content);
+    } catch {
+      // Tool wish capture must never break chat persistence.
+    }
+  }
 
   return msg;
 }

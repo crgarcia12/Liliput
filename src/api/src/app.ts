@@ -6,6 +6,7 @@ import { createTasksRouter } from './routes/tasks.js';
 import { createAuthRouter } from './routes/auth.js';
 import { createAgentRouter } from './routes/agent.js';
 import { createWorkstreamsRouter } from './routes/workstreams.js';
+import { createToolWishesRouter } from './routes/tool-wishes.js';
 import type { SpecGenerator } from './engine/spec-generator.js';
 
 export interface AppOptions {
@@ -27,6 +28,7 @@ export function createApp(io: SocketServer, options: AppOptions = {}): express.E
   // Workstreams routes register before the tasks router so DELETE /api/tasks/:id
   // (the hard-delete with cleanup) takes precedence over the legacy stub.
   app.use(createWorkstreamsRouter(io));
+  app.use(createToolWishesRouter());
   app.use(createTasksRouter(io, options.specGenerator));
 
   return app;
