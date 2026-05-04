@@ -7,12 +7,22 @@ import {
   type AuthStatus,
   getAuthStatus,
 } from './auth-status.js';
-import { extractRepoContext } from './repo-context.js';
+import { extractRepoContext, type ProgressStage as RepoStage } from './repo-context.js';
 import { logger } from '../logger.js';
 
 const DEFAULT_MODEL = process.env['COPILOT_MODEL'] ?? 'claude-sonnet-4';
 const DEFAULT_TIMEOUT_MS = parseInt(process.env['COPILOT_TIMEOUT_MS'] ?? '120000', 10);
 const PROBE_TIMEOUT_MS = parseInt(process.env['COPILOT_PROBE_TIMEOUT_MS'] ?? '30000', 10);
+
+/** Coarse progress stages the spec generator broadcasts via onProgress. */
+export type SpecProgressStage =
+  | RepoStage
+  | 'connecting-llm'
+  | 'drafting'
+  | 'spec-ready'
+  | 'spec-failed';
+
+export type SpecProgressHandler = (stage: SpecProgressStage, detail?: string) => void;
 
 export interface SpecGeneratorContext {
   /** Target GitHub repo (e.g. "owner/repo"). When provided, Liliput clones it
@@ -22,6 +32,9 @@ export interface SpecGeneratorContext {
   baseBranch?: string;
   /** Stable id used to derive the temp clone dir. */
   taskId?: string;
+  /** Optional progress hook — called as the generator advances through stages.
+   *  Use this to surface what's happening to users (e.g. via socket events). */
+  onProgress?: SpecProgressHandler;
 }
 
 function buildPrompt(title: string, description: string, repoBlob: string | null): string {
@@ -122,12 +135,14 @@ export async function generateSpec(
   description: string,
   context?: SpecGeneratorContext,
 ): Promise<string> {
+  const progress: SpecProgressHandler = context?.onProgress ?? (() => undefined);
   let repoBlob: string | null = null;
   if (context?.repository && context.taskId) {
     const ctx = await extractRepoContext({
       repository: context.repository,
       ...(context.baseBranch ? { baseBranch: context.baseBranch } : {}),
       taskId: context.taskId,
+      onProgress: (stage, detail) => progress(stage, detail),
     });
     if (ctx) {
       repoBlob = ctx.prompt;
@@ -145,6 +160,7 @@ export async function generateSpec(
   const prompt = buildPrompt(title, description, repoBlob);
 
   try {
+    progress('connecting-llm', `model: ${DEFAULT_MODEL}`);
     const client = await getCopilotClient();
     const session = await client.createSession({
       model: DEFAULT_MODEL,
@@ -152,14 +168,17 @@ export async function generateSpec(
     });
 
     try {
+      progress('drafting', `prompt: ${prompt.length} chars`);
       const result = await session.sendAndWait({ prompt }, DEFAULT_TIMEOUT_MS);
       const content = result?.data?.content?.trim();
       if (!content) {
         recordAuthFailure('unknown', 'Empty response from the LLM');
+        progress('spec-failed', 'empty LLM response');
         return fallbackSpec(title, description, 'empty LLM response');
       }
       recordAuthSuccess();
       logger.info({ model: DEFAULT_MODEL, chars: content.length }, 'Spec generated via Copilot SDK');
+      progress('spec-ready', `${content.length} chars`);
       return stripCodeFence(content);
     } finally {
       await session.disconnect().catch((err: unknown) => {
@@ -172,6 +191,7 @@ export async function generateSpec(
     const { kind, message: humanMsg } = classifyError(err);
     recordAuthFailure(kind, humanMsg);
     logger.error({ err: message, kind }, 'Copilot SDK spec generation failed');
+    progress('spec-failed', message);
     return fallbackSpec(title, description, message);
   }
 }
