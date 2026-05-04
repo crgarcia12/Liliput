@@ -6,6 +6,7 @@ import dynamic from 'next/dynamic';
 import Terminal from '../../../components/Terminal';
 import AgentPanel from '../../../components/AgentPanel';
 import ActivityLog from '../../../components/ActivityLog';
+import PhaseStepper from '../../../components/PhaseStepper';
 import { useSocket } from '../../../hooks/useSocket';
 import { useTasks } from '../../../hooks/useTasks';
 import type { Task, ChatMessage, Agent } from '@shared/types';
@@ -285,6 +286,7 @@ export default function TaskPage() {
               {task.status}
             </span>
           )}
+          {task && <PhaseStepper task={task} agents={agents} />}
           {task?.repository && (
             <span className="text-xs text-gray-500 font-mono truncate">
               📦 {task.repository}@{task.baseBranch ?? 'main'}
