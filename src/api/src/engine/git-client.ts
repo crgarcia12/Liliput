@@ -203,10 +203,12 @@ export async function clone(options: CloneOptions): Promise<RepoHandle> {
   const depth = options.depth ?? 1;
   if (depth > 0) args.push('--depth', String(depth), '--no-tags', '--single-branch');
   if (options.ref) args.push('--branch', options.ref);
-  // Fail the clone if the connection stalls (no progress for 30s at <1 KB/s).
-  // Lets a healthy clone of any size finish, but kills hung TCP connections
-  // so the retry layer can recover instead of waiting forever.
-  args.unshift('-c', 'http.lowSpeedLimit=1000', '-c', 'http.lowSpeedTime=30');
+  // Fail the clone only if the connection is genuinely hung — no progress
+  // for 2 min at <100 B/s. GitHub's server-side pack preparation
+  // (Enumerating/Counting/Compressing objects) can run for a minute or more
+  // with zero bytes on the wire before any data starts flowing, so the
+  // window has to be generous. The retry layer handles transient blips.
+  args.unshift('-c', 'http.lowSpeedLimit=100', '-c', 'http.lowSpeedTime=120');
   args.push(authenticatedUrl(options.repo, token), cwd);
 
   await runWithRetry(() => run('git', args), {
