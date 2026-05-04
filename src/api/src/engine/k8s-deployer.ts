@@ -63,7 +63,10 @@ export function devEnvName(repo: string, branch: string): string {
   const safeOwner = sanitiseK8sName(owner);
   const safeName = sanitiseK8sName(name);
   const safeBranch = sanitiseK8sName(branch);
-  return sanitiseK8sName(`dev-${safeOwner}-${safeName}-${safeBranch}`);
+  // Per-instance prefix lets multiple Liliput deployments (e.g. dev + test) share a cluster
+  // without colliding on dev-env namespaces. Default is just "dev" for backwards compat.
+  const prefix = sanitiseK8sName(process.env.LILIPUT_DEV_PREFIX || 'dev');
+  return sanitiseK8sName(`${prefix}-${safeOwner}-${safeName}-${safeBranch}`);
 }
 
 export interface EnsureNamespaceOptions {

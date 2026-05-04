@@ -18,6 +18,21 @@ function LastActive({ iso }: { iso: string }) {
   return <span className="text-red-400">{Math.floor(m / 60)}h {m % 60}m ago</span>;
 }
 
+function Elapsed({ iso }: { iso: string }) {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => force((x) => x + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const ms = Date.now() - new Date(iso).getTime();
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return <span>{s}s</span>;
+  const m = Math.floor(s / 60);
+  if (m < 60) return <span>{m}m {s % 60}s</span>;
+  const h = Math.floor(m / 60);
+  return <span>{h}h {m % 60}m</span>;
+}
+
 interface AgentPanelProps {
   agents: Agent[];
 }
@@ -99,8 +114,24 @@ export default function AgentPanel({ agents }: AgentPanelProps) {
             )}
 
             {agent.status === 'working' && (
-              <p className="text-[10px] text-gray-500 mt-1">
-                last activity: <LastActive iso={agent.updatedAt} />
+              <p className="text-[10px] text-gray-500 mt-1 flex items-center gap-2 flex-wrap">
+                {agent.startedAt && (
+                  <span>
+                    ⏱ <Elapsed iso={agent.startedAt} />
+                  </span>
+                )}
+                {typeof agent.toolCallCount === 'number' && agent.toolCallCount > 0 && (
+                  <span>🔧 {agent.toolCallCount}</span>
+                )}
+                <span>
+                  · last: <LastActive iso={agent.updatedAt} />
+                </span>
+              </p>
+            )}
+
+            {agent.status === 'failed' && agent.errorMessage && (
+              <p className="text-[10px] text-red-400 mt-1 truncate" title={agent.errorMessage}>
+                ✗ {agent.errorMessage}
               </p>
             )}
 

@@ -281,7 +281,7 @@ function spawnPhase(
     message: `${name} (${role}) spawned`,
     timestamp: ts,
   });
-  store.updateAgent(taskId, agent.id, { status: 'working' });
+  store.updateAgent(taskId, agent.id, { status: 'working', startedAt: ts, toolCallCount: 0 });
   io.to(`task:${taskId}`).emit('agent:status', {
     taskId,
     agentId: agent.id,
@@ -415,6 +415,14 @@ function recordToolEvent(
     timestamp: ts,
   });
 
+  // A heartbeat is a synthetic "still thinking" reasoning event from startHeartbeat —
+  // we want it to count as liveness (touch updatedAt via the DB write) but NOT
+  // overwrite the last useful currentAction the user is reading on the UI.
+  const isHeartbeat =
+    event.kind === 'reasoning' && /still thinking/i.test(event.summary);
+  // Bump the tool-call counter on real tool starts (not on tool-complete to avoid double-counting).
+  const isToolStart = event.kind === 'tool-start';
+
   // Drive the agent's currentAction so AgentPanel shows what it's doing now.
   // tool-complete usually clears the action (we set it to a short ✓ snippet).
   // Skip noisy 'tool-complete' with empty summaries (already filtered in UI but
@@ -423,13 +431,28 @@ function recordToolEvent(
   if (!isNoiseyComplete) {
     const action = truncateAction(event.summary);
     if (action) {
-      store.updateAgent(taskId, agentId, { currentAction: action });
+      const patch: { currentAction?: string; lastUsefulAction?: string; toolCallCount?: number } = {};
+      if (!isHeartbeat) {
+        patch.currentAction = action;
+        patch.lastUsefulAction = action;
+      } else {
+        // Heartbeat: still mark agent alive (DB row updatedAt bumps via update()),
+        // and surface idle time on currentAction so UI can show "💭 still thinking 60s"
+        // but keep lastUsefulAction unchanged.
+        patch.currentAction = action;
+      }
+      if (isToolStart) {
+        const cur = store.getAgent(taskId, agentId);
+        patch.toolCallCount = (cur?.toolCallCount ?? 0) + 1;
+      }
+      store.updateAgent(taskId, agentId, patch);
       io.to(`task:${taskId}`).emit('agent:status', {
         taskId,
         agentId,
         status: 'working',
         currentAction: action,
         timestamp: ts,
+        ...(typeof patch.toolCallCount === 'number' ? { toolCallCount: patch.toolCallCount } : {}),
       });
     }
   }
@@ -438,6 +461,9 @@ function recordToolEvent(
   // noisiest events so the feed stays scannable.
   if (isNoiseyComplete) return;
   if (event.kind === 'reasoning' && !event.summary) return;
+  // Don't persist heartbeat reasoning events — they are pure liveness signals
+  // and would otherwise spam the activity log.
+  if (isHeartbeat) return;
   store.addActivityEntry(taskId, {
     kind: 'agent-log',
     agentId,
@@ -2297,9 +2323,10 @@ async function resurrectLiveSession(
     const agentSession = await createAgentSession(handle.cwd);
 
     const imageName = `liliput-app-${sanitiseK8sName(task.repository.replace('/', '-'))}`;
+    const devPrefix = sanitiseK8sName(process.env.LILIPUT_DEV_PREFIX || 'dev');
     const namespace =
       task.devNamespace ??
-      `dev-${sanitiseK8sName(owner)}-${sanitiseK8sName(name)}-liliput-${taskId.substring(0, 8)}`;
+      `${devPrefix}-${sanitiseK8sName(owner)}-${sanitiseK8sName(name)}-liliput-${taskId.substring(0, 8)}`;
 
     const live: LiveSession = {
       agentSession,

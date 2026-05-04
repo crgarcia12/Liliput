@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: liliput
+  name: __NS__
   labels:
     azure.workload.identity/use: "true"
 ---
@@ -13,7 +13,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: liliput-data
-  namespace: liliput
+  namespace: __NS__
 spec:
   accessModes:
     - ReadWriteOnce
@@ -27,7 +27,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: liliput-agent
-  namespace: liliput
+  namespace: __NS__
   annotations:
     azure.workload.identity/client-id: "f14665ae-86f5-41c2-95ba-96e817132222"
   labels:
@@ -37,7 +37,7 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: liliput-agent
+  name: liliput-agent-__NS__
 rules:
   # Manage namespaces (create per-task dev envs, tear them down)
   - apiGroups: [""]
@@ -64,22 +64,22 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: liliput-agent
+  name: liliput-agent-__NS__
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: liliput-agent
+  name: liliput-agent-__NS__
 subjects:
   - kind: ServiceAccount
     name: liliput-agent
-    namespace: liliput
+    namespace: __NS__
 ---
 # ─── NGINX Reverse Proxy Config ───
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: nginx-config
-  namespace: liliput
+  namespace: __NS__
 data:
   nginx.conf: |
     events { worker_connections 1024; }
@@ -130,7 +130,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: liliput-api
-  namespace: liliput
+  namespace: __NS__
 spec:
   replicas: 1
   strategy:
@@ -160,6 +160,10 @@ spec:
               value: "8080"
             - name: NODE_ENV
               value: "production"
+            - name: LILIPUT_NAMESPACE
+              value: "__NS__"
+            - name: LILIPUT_DEV_PREFIX
+              value: "__DEV_PREFIX__"
             # Azure context for `az acr build`
             - name: AZURE_TENANT_ID
               value: "f75dc6d8-f0ea-4a54-9d3c-622e4aef8eb3"
@@ -206,7 +210,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: liliput-api
-  namespace: liliput
+  namespace: __NS__
 spec:
   selector: { app: liliput-api }
   ports:
@@ -218,7 +222,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: liliput-web
-  namespace: liliput
+  namespace: __NS__
 spec:
   replicas: 1
   strategy:
@@ -253,7 +257,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: liliput-web
-  namespace: liliput
+  namespace: __NS__
 spec:
   selector: { app: liliput-web }
   ports:
@@ -265,7 +269,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: liliput-gateway
-  namespace: liliput
+  namespace: __NS__
 spec:
   replicas: 1
   strategy:
@@ -299,7 +303,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: liliput-gateway
-  namespace: liliput
+  namespace: __NS__
 spec:
   type: LoadBalancer
   selector: { app: liliput-gateway }

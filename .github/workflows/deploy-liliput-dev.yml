@@ -1,0 +1,136 @@
+name: Deploy Liliput DEV (AKS)
+
+# Manual-only DEV deployment — uses a separate namespace `liliput-dev`
+# with its own gateway IP, PVC, and DB. Lets us iterate without touching
+# the stable `liliput` namespace.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to build (branch, tag, or SHA)'
+        required: false
+        default: ''
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RG: crgar-liliput-rg
+  AKS: crgar-liliput-aks
+  ACR: crgarliliputacr
+  ACR_LOGIN_SERVER: crgarliliputacr.azurecr.io
+  NS: liliput-dev
+  DEV_PREFIX: devx
+  IMAGE_SUFFIX: dev
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build API image
+        run: |
+          az acr build \
+            --registry $ACR \
+            --image "liliput-api-${IMAGE_SUFFIX}:${{ github.sha }}" \
+            --image "liliput-api-${IMAGE_SUFFIX}:latest" \
+            --file src/api/Dockerfile \
+            .
+
+      - name: Build Web image
+        run: |
+          az acr build \
+            --registry $ACR \
+            --image "liliput-web-${IMAGE_SUFFIX}:${{ github.sha }}" \
+            --image "liliput-web-${IMAGE_SUFFIX}:latest" \
+            --file src/web/Dockerfile \
+            .
+
+      - name: Get AKS credentials
+        uses: azure/aks-set-context@v4
+        with:
+          resource-group: ${{ env.RG }}
+          cluster-name: ${{ env.AKS }}
+
+      - name: Render manifest
+        run: |
+          sed -e "s|__NS__|${NS}|g" \
+              -e "s|__DEV_PREFIX__|${DEV_PREFIX}|g" \
+              k8s/liliput.yaml > k8s/liliput.rendered.yaml
+          # Swap the image references so DEV pulls dev-tagged images
+          sed -i "s|liliput-api:latest|liliput-api-${IMAGE_SUFFIX}:latest|g; s|liliput-web:latest|liliput-web-${IMAGE_SUFFIX}:latest|g" k8s/liliput.rendered.yaml
+
+      - name: Sync Copilot GitHub token secret
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: |
+          kubectl create namespace ${NS} --dry-run=client -o yaml | kubectl apply -f -
+          if [ -z "$COPILOT_GITHUB_TOKEN" ]; then
+            echo "::warning::COPILOT_GITHUB_TOKEN secret is not set."
+            kubectl -n ${NS} create secret generic liliput-secrets \
+              --from-literal=COPILOT_GITHUB_TOKEN="" \
+              --dry-run=client -o yaml | kubectl apply -f -
+          else
+            kubectl -n ${NS} create secret generic liliput-secrets \
+              --from-literal=COPILOT_GITHUB_TOKEN="$COPILOT_GITHUB_TOKEN" \
+              --dry-run=client -o yaml | kubectl apply -f -
+          fi
+
+      - name: Deploy to AKS
+        run: |
+          kubectl delete deployments --all -n ${NS} --ignore-not-found 2>/dev/null || true
+          kubectl apply -f k8s/liliput.rendered.yaml
+          kubectl -n ${NS} set image deployment/liliput-api \
+            api=$ACR_LOGIN_SERVER/liliput-api-${IMAGE_SUFFIX}:${{ github.sha }}
+          kubectl -n ${NS} set image deployment/liliput-web \
+            web=$ACR_LOGIN_SERVER/liliput-web-${IMAGE_SUFFIX}:${{ github.sha }}
+          kubectl -n ${NS} rollout restart deployment/liliput-api
+
+      - name: Wait for rollout
+        run: |
+          set +e
+          kubectl -n ${NS} rollout status deployment/liliput-api --timeout=5m
+          API_RC=$?
+          kubectl -n ${NS} rollout status deployment/liliput-web --timeout=5m
+          WEB_RC=$?
+          kubectl -n ${NS} rollout status deployment/liliput-gateway --timeout=5m
+          GW_RC=$?
+          if [ $API_RC -ne 0 ] || [ $WEB_RC -ne 0 ] || [ $GW_RC -ne 0 ]; then
+            echo "::group::Diagnostics"
+            kubectl -n ${NS} get pods -o wide
+            kubectl -n ${NS} get events --sort-by='.lastTimestamp' | tail -30
+            kubectl -n ${NS} logs -l app=liliput-api --tail=50 2>/dev/null || true
+            kubectl -n ${NS} logs -l app=liliput-web --tail=50 2>/dev/null || true
+            kubectl -n ${NS} describe pod -l app=liliput-api 2>/dev/null | tail -40 || true
+            kubectl -n ${NS} describe pod -l app=liliput-web 2>/dev/null | tail -40 || true
+            echo "::endgroup::"
+            exit 1
+          fi
+
+      - name: Get service URL
+        run: |
+          {
+            echo "### Liliput DEV Deployed ✅"
+            echo ""
+            for i in $(seq 1 30); do
+              EXTERNAL_IP=$(kubectl -n ${NS} get svc liliput-gateway -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+              [ -n "$EXTERNAL_IP" ] && break
+              echo "Waiting for LoadBalancer IP... ($i/30)" >&2
+              sleep 10
+            done
+            echo "- **DEV URL: http://$EXTERNAL_IP**"
+            echo "- Namespace: \`${NS}\`"
+            echo "- Image tag: \`${{ github.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
