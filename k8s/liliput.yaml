@@ -33,34 +33,13 @@ metadata:
   labels:
     azure.workload.identity/use: "true"
 ---
-# ─── ClusterRole granting the agent perms to manage dev environments ───
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: liliput-agent-__NS__
-rules:
-  # Manage namespaces (create per-task dev envs, tear them down)
-  - apiGroups: [""]
-    resources: ["namespaces"]
-    verbs: ["get", "list", "watch", "create", "delete"]
-  # Manage workloads in any namespace
-  - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: [""]
-    resources: ["services", "configmaps", "secrets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "list", "watch", "delete"]
-  - apiGroups: [""]
-    resources: ["pods/log", "pods/exec"]
-    verbs: ["get", "create"]
-  # Read events for diagnostics
-  - apiGroups: [""]
-    resources: ["events"]
-    verbs: ["get", "list", "watch"]
----
+# ─── ClusterRoleBinding granting the agent full cluster admin ───
+# The agent SDK runs in-process inside the API pod and needs to:
+#   - manage per-task dev-env namespaces (create/delete/patch)
+#   - kubectl logs / exec / describe across any ns to debug failed deploys
+#   - patch deployments/services to recover from misconfigurations
+# The user explicitly opted in to cluster-wide full access. If you want to
+# tighten this later, replace `cluster-admin` with a narrower ClusterRole.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -68,7 +47,7 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: liliput-agent-__NS__
+  name: cluster-admin
 subjects:
   - kind: ServiceAccount
     name: liliput-agent
