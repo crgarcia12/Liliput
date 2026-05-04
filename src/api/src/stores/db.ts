@@ -125,6 +125,20 @@ CREATE TABLE IF NOT EXISTS features (
 );
 CREATE INDEX IF NOT EXISTS idx_features_workstream ON features(workstream_id);
 CREATE INDEX IF NOT EXISTS idx_features_status ON features(status);
+
+CREATE TABLE IF NOT EXISTS agent_verdicts (
+  id        TEXT PRIMARY KEY,
+  task_id   TEXT NOT NULL,
+  agent_id  TEXT,
+  ts        TEXT NOT NULL,
+  status    TEXT NOT NULL,  -- 'done' | 'blocked' | 'continue'
+  reason    TEXT,
+  raw       TEXT,           -- the matched line as the agent emitted it
+  FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_agent_verdicts_task ON agent_verdicts(task_id);
+CREATE INDEX IF NOT EXISTS idx_agent_verdicts_status ON agent_verdicts(status);
+CREATE INDEX IF NOT EXISTS idx_agent_verdicts_ts ON agent_verdicts(ts);
 `;
 
 export function getDb(): Database.Database {
@@ -167,6 +181,7 @@ export function resetDb(): void {
     DELETE FROM chat_messages;
     DELETE FROM activity_entries;
     DELETE FROM tool_wishes;
+    DELETE FROM agent_verdicts;
     DELETE FROM features;
     DELETE FROM tasks;
     DELETE FROM workstreams;
