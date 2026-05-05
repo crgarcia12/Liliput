@@ -1925,7 +1925,13 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
     }
   }
 
-  setTaskStatus(io, taskId, 'review', {
+  // Persist the dev URL + namespace + PR info now (so resurrection / UI know
+  // where the preview lives), but DON'T flip status to 'review' yet — we
+  // first run the autonomous validate-and-heal loop. Users will only see
+  // 'review' once we've confirmed the preview is actually healthy (or once
+  // the heal loop has exhausted itself and there's nothing more we can do
+  // without their input).
+  store.updateTask(taskId, {
     devNamespace: namespace,
     devUrl,
     ...(prUrl ? { pullRequestUrl: prUrl } : {}),
@@ -1949,12 +1955,9 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   const liliputMsg = store.addChatMessage(
     taskId,
     'liliput',
-    `✨ Build complete!\n\n• **Preview:** ${devUrl}\n` +
-      (prUrl ? `• **Draft PR:** ${prUrl}\n` : '') +
-      `\n💬 Keep chatting to iterate — every message will run another turn ` +
-      `(same workspace, same branch, same PR). Or click **Ship** to ${
-        task.commitMode === 'direct' ? 'merge' : 'mark the PR ready for review'
-      }, or **Discard** to close it.`,
+    `🚢 Pod is deployed. Running autonomous validation against the preview now — ` +
+      `I'll let you know once it's healthy.\n\n• **Preview (validating):** ${devUrl}\n` +
+      (prUrl ? `• **Draft PR:** ${prUrl}\n` : ''),
   );
   if (liliputMsg) io.to(`task:${taskId}`).emit('chat:message', liliputMsg);
 
@@ -1975,6 +1978,17 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
     devUrl,
     initialImageRef: deployOutcome.imageRef,
     initialSha: deployOutcome.sha,
+  });
+
+  // After validate (healthy OR cap-exhausted OR chat-preempt), surface the
+  // task as 'review' so the UI lets the user chat / ship / discard. The
+  // validate loop already posted the appropriate "✅ healthy" or "⚠️
+  // auto-heal paused" chat message — we don't duplicate it here.
+  setTaskStatus(io, taskId, 'review', {
+    devNamespace: namespace,
+    devUrl,
+    ...(prUrl ? { pullRequestUrl: prUrl } : {}),
+    ...(prNumber !== undefined ? { pullRequestNumber: prNumber } : {}),
   });
 }
 
@@ -2470,15 +2484,17 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   completePhase(io, taskId, deployer);
 
   const devUrl = `${PUBLIC_BASE_URL}${live.pathPrefix}/`;
-  setTaskStatus(io, taskId, 'review', { devUrl, devNamespace: live.namespace });
+  // Persist devUrl/namespace early but keep status='deploying' until validate
+  // confirms healthy (or exhausts).
+  store.updateTask(taskId, { devUrl, devNamespace: live.namespace });
 
   const liliputMsg = store.addChatMessage(
     taskId,
     'liliput',
-    `🔁 Iteration applied!\n\n• ${changed.length} file(s) changed (commit \`${sha.substring(0, 7)}\`)\n` +
-      `• **Preview:** ${devUrl}\n` +
+    `🔁 Iteration applied — running validation against the new preview…\n\n• ${changed.length} file(s) changed (commit \`${sha.substring(0, 7)}\`)\n` +
+      `• **Preview (validating):** ${devUrl}\n` +
       (task.pullRequestUrl ? `• **PR:** ${task.pullRequestUrl}\n` : '') +
-      `\n${result.summary}\n\n💬 Keep chatting to keep iterating, or **Ship** / **Discard** when ready.`,
+      `\n${result.summary}`,
   );
   if (liliputMsg) io.to(`task:${taskId}`).emit('chat:message', liliputMsg);
 
@@ -2499,6 +2515,10 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
     initialImageRef: deployOutcome.imageRef,
     initialSha: deployOutcome.sha,
   });
+
+  // Flip back to 'review' after validate (loop already posted the appropriate
+  // healthy/exhausted chat message).
+  setTaskStatus(io, taskId, 'review', { devUrl, devNamespace: live.namespace });
 }
 
 /** Returns true if a follow-up chat message would trigger an iteration. */
