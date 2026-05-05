@@ -23,6 +23,8 @@ Liliput then, end-to-end:
 5. **Builds a container image** (Azure Container Registry) and **deploys a preview** to AKS so you can click a URL and try the change.
 6. **Hands the task back to you for review.** You can chat with the Liliputian to ask for changes, and it iterates on the same branch + preview.
 
+When **autopilot mode** is on (see [Autonomous loop](#autonomous-loop-autopilot)), the Liliputian doesn't stop at step 6 — it runs integration tests against its own preview, fixes failures, redeploys, and keeps looping until the LLM itself signals "done".
+
 Each task lives in its own card on the dashboard with status (`specifying → building → deploying → review`), a streaming activity feed, the chat, the diff, the PR link, and the preview URL.
 
 ## How you use it
@@ -167,6 +169,68 @@ sequenceDiagram
 ```
 
 The agent's conversation memory is preserved — it knows what it was doing and why it pivoted.
+
+### Autonomous loop (autopilot)
+
+By default a task stops after the first deploy and waits for human review. **Autopilot** removes that stop: the Liliputian runs its own integration tests against its own preview deployment, and if anything fails it loops back into the SDK with the failure attached and tries again. It keeps going until the LLM itself decides the task is complete.
+
+The loop is **LLM-terminated**, not iteration-bounded. Every agent turn is required to end with a verdict line:
+
+```
+VERDICT: done | continue | abandon — <one-line reason>
+```
+
+A `done` verdict is only honored if a verdict gate also confirms the objective evidence: tests ran with exit 0, the deploy is healthy, and any Gherkin/UI specs executed all passed. If the gate rejects, the loop continues regardless of what the LLM said.
+
+```mermaid
+graph TD
+    SPEC[Spec ready<br/>+ approved] --> WRITE[Write code + tests]
+    WRITE --> BUILD[Build locally<br/>npm/maven/etc]
+    BUILD -->|fail| WRITE
+    BUILD -->|green| LOCAL[Run local unit tests]
+    LOCAL -->|fail| WRITE
+    LOCAL -->|green| DEPLOY[az acr build<br/>+ kubectl apply<br/>preview namespace]
+    DEPLOY -->|fail| FIX[LLM diagnoses<br/>infra/manifest issue]
+    FIX --> DEPLOY
+    DEPLOY -->|healthy| GHERKIN[Run Gherkin / UI tests<br/>against preview URL]
+    GHERKIN -->|fail| WRITE
+    GHERKIN -->|green| GATE{LLM verdict<br/>+ gate check}
+    GATE -->|continue| WRITE
+    GATE -->|done + gate accepts| SHIP[Mark complete<br/>PR ready for human]
+    GATE -->|abandon| STOP[Mark failed<br/>preserves logs + branch]
+```
+
+Two side-channels run alongside every turn:
+
+- **Tool wishes** — agents emit `TOOL-WISH: <tool> — <why>` lines when they want a CLI that isn't in the image (e.g., `gh`, `jq`, `playwright`). Wishes accumulate at `/tool-wishes` so the operator sees what to bake into the next image revision.
+- **Verdicts** — every `VERDICT:` line is captured and visible at `/verdicts`, so you can see exactly when and why a task self-terminated.
+
+#### Workstream → Feature → Task hierarchy
+
+A single English request can be too big for one PR. Liliput's hierarchy is:
+
+```
+Repo  →  Workstream  →  Feature  →  Task  →  Agent (Copilot SDK session)
+```
+
+- **Repo** — the GitHub target.
+- **Workstream** — one user-facing request ("add multi-tenant billing"). Holds the spec.
+- **Feature** — a slice of the workstream that can ship independently. The decomposer agent reads the spec and proposes a feature breakdown (e.g. `01-tenant-model`, `02-billing-api`, `03-admin-ui`, plus a `99-integration` feature that wires them together). Features carry their own `dependsOn` graph.
+- **Task** — one execution attempt for a feature, with its own clone, branch, and preview namespace.
+- **Agent** — the Copilot SDK session driving a task.
+
+Decomposition is **best-effort and behind a flag** (`AUTOPILOT_DECOMPOSE=1`): if the LLM returns nothing parseable, the workstream just runs as a single feature. Persisted features are not yet consumed for parallel fan-out — that's the next milestone. For now decomposition is an observability surface so we can see how the LLM chooses to split real specs.
+
+#### Autopilot configuration
+
+| Env var | Purpose |
+|---|---|
+| `AUTOPILOT_DECOMPOSE=1` | After spec generation, run the feature decomposer and persist Feature rows for the workstream. |
+| `COPILOT_MODEL` | Override the default model (`claude-sonnet-4`). |
+| `COPILOT_TIMEOUT_MS` | Per-turn SDK timeout (default 120 s; 15 min for build/deploy turns). |
+| `DECOMPOSER_TIMEOUT_MS` | Override decomposer timeout (default 120 s). |
+
+
 
 ### Self-healing: LLM-driven failure recovery
 
