@@ -8,7 +8,67 @@ import { generateSpec as defaultGenerateSpec, type SpecGenerator } from '../engi
 import { listDevPods, getPodLogs } from '../engine/k8s-deployer.js';
 import { startBuild, shipTask, discardTask, iterateTask, canIterate, enqueueChatForAgent, hasInFlightAgent } from '../engine/agent-engine.js';
 import { verifyRepositoryAccess } from '../engine/github-pr.js';
+import { runFeatureDecomposer } from '../engine/feature-decomposer-runner.js';
+import * as featureStore from '../stores/feature-store.js';
 import { logger } from '../logger.js';
+
+/**
+ * Run the LLM decomposer and persist Feature rows for a workstream.
+ *
+ * Best-effort: any failure is swallowed (logged only). Skips if the
+ * workstream already has features (idempotent for repeat spec edits).
+ */
+async function decomposeAndPersist(
+  workstreamId: string,
+  title: string,
+  spec: string,
+): Promise<void> {
+  const existing = featureStore.listFeaturesByWorkstream(workstreamId);
+  if (existing.length > 0) {
+    logger.info(
+      { workstreamId, existing: existing.length },
+      'decomposer: workstream already has features — skipping',
+    );
+    return;
+  }
+  const decomp = await runFeatureDecomposer({ workstreamId, title, spec });
+  if (!decomp) {
+    logger.info({ workstreamId }, 'decomposer: no decomposition — single-feature fallback');
+    return;
+  }
+  for (const f of decomp.features) {
+    featureStore.createFeature({
+      workstreamId,
+      name: f.name,
+      slug: f.slug,
+      kind: 'feature',
+      ...(f.description ? { description: f.description } : {}),
+      ...(f.specPath ? { specPath: f.specPath } : {}),
+      position: f.position,
+      ...(f.dependsOn?.length ? { dependsOn: f.dependsOn } : {}),
+    });
+  }
+  if (decomp.integration) {
+    const i = decomp.integration;
+    featureStore.createFeature({
+      workstreamId,
+      name: i.name,
+      slug: i.slug,
+      kind: 'integration',
+      ...(i.description ? { description: i.description } : {}),
+      ...(i.specPath ? { specPath: i.specPath } : {}),
+      position: 999,
+    });
+  }
+  logger.info(
+    {
+      workstreamId,
+      features: decomp.features.length,
+      hasIntegration: !!decomp.integration,
+    },
+    'decomposer: persisted features',
+  );
+}
 
 export function createTasksRouter(
   io: SocketServer,
@@ -194,6 +254,23 @@ export function createTasksRouter(
               'I\'ve drafted a specification based on your requirements. Please review and approve it to start building!',
             );
             io.to(`task:${task.id}`).emit('chat:message', sysMsg);
+
+            // Best-effort decomposition (behind feature flag).
+            // Splits the spec into feature slices and persists Feature rows
+            // for the workstream. NOT YET consumed by the engine — this PR
+            // just lights up the data path so we can verify the LLM produces
+            // sensible decompositions on real specs before wiring fan-out.
+            if (process.env['AUTOPILOT_DECOMPOSE'] === '1' && task.workstreamId) {
+              void decomposeAndPersist(task.workstreamId, task.title, spec).catch(
+                (err: unknown) => {
+                  const m = err instanceof Error ? err.message : String(err);
+                  logger.warn(
+                    { taskId: task.id, err: m },
+                    'decomposer: persist step threw — ignoring',
+                  );
+                },
+              );
+            }
           })
           .catch((specErr: unknown) => {
             const errMessage = specErr instanceof Error ? specErr.message : String(specErr);
