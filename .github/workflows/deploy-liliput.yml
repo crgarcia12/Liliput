@@ -81,6 +81,7 @@ jobs:
           sed -e "s|__NS__|liliput|g" \
               -e "s|__DEV_PREFIX__|dev|g" \
               -e "s|__ENV_NAME__|TEST|g" \
+              -e "s|__PUBLIC_BASE_URL__|http://4.165.50.135|g" \
               k8s/liliput.yaml > k8s/liliput.rendered.yaml
 
       - name: Deploy to AKS

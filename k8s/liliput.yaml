@@ -145,6 +145,8 @@ spec:
               value: "__DEV_PREFIX__"
             - name: LILIPUT_ENV
               value: "__ENV_NAME__"
+            - name: LILIPUT_PUBLIC_URL
+              value: "__PUBLIC_BASE_URL__"
             # Azure context for `az acr build`
             - name: AZURE_TENANT_ID
               value: "f75dc6d8-f0ea-4a54-9d3c-622e4aef8eb3"
