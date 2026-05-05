@@ -47,6 +47,7 @@ import { syncRoutes, type DevRoute } from './nginx-patcher.js';
 import { openPullRequest, markPullRequestReady, closePullRequest } from './github-pr.js';
 import { pathPrefixFor, writeContractIntoWorkspace } from './liliput-deploy-contract.js';
 import { writeAcceptanceFeature } from './acceptance-feature-writer.js';
+import { installCucumberIfMissing } from './cucumber-installer.js';
 import { gateVerdict } from './autopilot.js';
 import { latestVerdictForTask } from '../stores/verdict-store.js';
 import { recordAndDecide as recordStuck, resetStuckHistory } from './stuck-detector.js';
@@ -1641,6 +1642,41 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
         'info',
         '🥒 Wrote tests/features/acceptance.feature from spec Gherkin',
       );
+      // We have a .feature file; make sure cucumber-js is available so the
+      // post-deploy gherkin-runner doesn't silently skip. Best-effort.
+      try {
+        const ic = await installCucumberIfMissing(handle.cwd);
+        if (ic.installed) {
+          logPhase(
+            io,
+            taskId,
+            coder,
+            'info',
+            `🥒 Installed @cucumber/cucumber as devDependency (${ic.durationMs}ms)`,
+          );
+        } else if (
+          ic.skippedReason &&
+          ic.skippedReason !== 'no-package-json' &&
+          ic.skippedReason !== 'already-in-package-json' &&
+          ic.skippedReason !== 'already-in-node-modules'
+        ) {
+          logPhase(
+            io,
+            taskId,
+            coder,
+            'warn',
+            `(cucumber install skipped: ${ic.skippedReason})`,
+          );
+        }
+      } catch (err) {
+        logPhase(
+          io,
+          taskId,
+          coder,
+          'warn',
+          `Could not install cucumber: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     } else if (r.skippedReason && r.skippedReason !== 'no-spec') {
       logPhase(
         io,
