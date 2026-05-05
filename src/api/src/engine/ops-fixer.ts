@@ -51,6 +51,8 @@ export interface OpsFixerOptions {
     /** Path-prefix the app is served under, e.g. /dev/owner/repo/branch. */
     pathPrefix?: string;
   };
+  /** Optional escalation block injected into the prompt when the loop is stuck. */
+  escalationBlock?: string;
   onLog?: LogFn;
   onToolEvent?: ToolEventFn;
 }
@@ -166,6 +168,8 @@ function buildPrompt(opts: OpsFixerOptions): string {
     '```',
     errBlob,
     '```',
+    '',
+    opts.escalationBlock ?? '',
     '',
     `## Context`,
     '',

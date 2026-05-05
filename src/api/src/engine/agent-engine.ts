@@ -49,6 +49,8 @@ import { pathPrefixFor, writeContractIntoWorkspace } from './liliput-deploy-cont
 import { writeAcceptanceFeature } from './acceptance-feature-writer.js';
 import { gateVerdict } from './autopilot.js';
 import { latestVerdictForTask } from '../stores/verdict-store.js';
+import { recordAndDecide as recordStuck, resetStuckHistory } from './stuck-detector.js';
+import { runGherkinChecks } from './gherkin-runner.js';
 
 const ACR_NAME = process.env['ACR_NAME'] ?? '';
 const PUBLIC_BASE_URL = process.env['LILIPUT_PUBLIC_URL'] ?? 'http://4.165.50.135';
@@ -57,22 +59,31 @@ const DEFAULT_REPO = process.env['LILIPUT_DEFAULT_TARGET_REPO'];
 const MAX_BUILD_FIX_ATTEMPTS = parseInt(process.env['MAX_BUILD_FIX_ATTEMPTS'] ?? '2', 10);
 const MAX_DEPLOY_FIX_ATTEMPTS = parseInt(process.env['MAX_DEPLOY_FIX_ATTEMPTS'] ?? '2', 10);
 /**
- * Cap for the post-deploy validate+heal loop. The user said "forever" — this
- * is a safety net against runaway token spend if the agent is genuinely stuck
- * with no useful fix. Override via env. Set very high (default 30).
+ * Cap for the post-deploy validate+heal loop. The user's mandate is "press
+ * the button and walk away — keep trying until it works." This cap is a
+ * cost-safety net, not a give-up philosophy. With stuck-detection rotating
+ * strategy hints we want a generous budget (200) before bailing entirely.
+ * Override via env if you need tighter control during cost spikes.
  */
-const MAX_VALIDATE_ATTEMPTS = parseInt(process.env['MAX_VALIDATE_ATTEMPTS'] ?? '30', 10);
+const MAX_VALIDATE_ATTEMPTS = parseInt(process.env['MAX_VALIDATE_ATTEMPTS'] ?? '200', 10);
 /** How long to wait between probes for the very first validation (lets app boot). */
 const VALIDATE_INITIAL_SETTLE_MS = parseInt(process.env['VALIDATE_INITIAL_SETTLE_MS'] ?? '8000', 10);
 
 /**
- * Shadow autopilot gate. Logs (does NOT enforce) what `gateVerdict` would
- * decide given the agent's most recent VERDICT and the current pipeline
- * outcome. Pure observability — when this consistently agrees with the
- * existing bounded-loop decisions, we'll flip it to enforcing in the
- * mega-prompt PR.
+ * Autopilot gate decision. Reads the latest `VERDICT:` line the agent
+ * emitted, runs it through `gateVerdict`, and:
+ *
+ *  - on healthy exit: logs that the verdict (if any) is accepted.
+ *  - on cap-exhausted exit: if the agent had claimed `done`, post a chat
+ *    message refuting the claim so the user can see the agent over-promised.
+ *
+ * No shadow anymore — this is enforcing. The "enforcement" is observational
+ * for now (chat message + log) since the loop already exits at cap; future
+ * PRs will let the gate force additional iterations or trigger a strategy
+ * pivot.
  */
-function shadowGateLog(
+function applyVerdictGate(
+  io: SocketServer,
   taskId: string,
   outcome: { deployHealthy: boolean; exitReason: 'healthy' | 'exhausted' },
 ): void {
@@ -81,16 +92,13 @@ function shadowGateLog(
     if (!v) {
       logger.info(
         { taskId, exitReason: outcome.exitReason, deployHealthy: outcome.deployHealthy },
-        'autopilot/shadow-gate: no verdict on file',
+        'autopilot/gate: no verdict on file',
       );
       return;
     }
     const reject = gateVerdict({
       verdict: { status: v.status, reason: v.reason ?? '', raw: v.raw ?? '' },
       objective: {
-        // We do not run unit tests in the validate loop itself; checksRan.tests=false
-        // means the gate will reject on a 'done' verdict here, which is correct
-        // strict behaviour. The mega-prompt PR will pipe real test outcomes in.
         testsExitCode: null,
         deployHealthy: outcome.deployHealthy,
         gherkinAllPassed: false,
@@ -104,15 +112,29 @@ function shadowGateLog(
         verdictReason: v.reason,
         exitReason: outcome.exitReason,
         deployHealthy: outcome.deployHealthy,
-        wouldAccept: reject === null,
+        accepted: reject === null,
         rejectReason: reject,
       },
-      'autopilot/shadow-gate decision',
+      'autopilot/gate decision',
     );
+    // If the agent claimed done but we exhausted the loop unhealthy, surface
+    // it to the user — the verdict was over-promising.
+    if (
+      outcome.exitReason === 'exhausted' &&
+      v.status === 'done' &&
+      reject !== null
+    ) {
+      const msg = store.addChatMessage(
+        taskId,
+        'liliput',
+        `🚫 The agent claimed \`VERDICT: done\` but the deploy gate rejected it: ${reject}`,
+      );
+      if (msg) io.to(`task:${taskId}`).emit('chat:message', msg);
+    }
   } catch (err) {
     logger.warn(
       { taskId, err: err instanceof Error ? err.message : String(err) },
-      'autopilot/shadow-gate failed (non-fatal)',
+      'autopilot/gate failed (non-fatal)',
     );
   }
 }
@@ -141,6 +163,13 @@ interface LiveSession {
   namespace: string;
   dockerfile: string;
   port: number;
+  /**
+   * Set true by `resurrectLiveSession` and consumed (cleared) by the first
+   * `runIteration` after resurrection. Triggers a `Recap` block in the
+   * follow-up prompt so the agent gets a transcript of what was discussed
+   * before the pod restart.
+   */
+  freshlyResurrected?: boolean;
 }
 const liveSessions = new Map<string, LiveSession>();
 
@@ -1231,17 +1260,68 @@ async function validateAndHealLoop(ctx: ValidateContext): Promise<ValidateOutcom
     }
 
     if (result.healthy) {
-      logPhase(io, taskId, tester, 'info', `✅ Healthy: ${result.summary}`);
+      logPhase(io, taskId, tester, 'info', `✅ HTTP healthy: ${result.summary}`);
       logger.info({ taskId, attempt, http: result.httpStatus }, 'validate probe healthy');
-      shadowGateLog(taskId, { deployHealthy: true, exitReason: 'healthy' });
-      completePhase(io, taskId, tester);
-      const okMsg = store.addChatMessage(
-        taskId,
-        'liliput',
-        `✅ Dev preview validated and healthy after ${attempt} probe(s).\n\n${result.summary}`,
-      );
-      if (okMsg) io.to(`task:${taskId}`).emit('chat:message', okMsg);
-      return { imageRef, sha, healthy: true, attemptsUsed: attempt };
+
+      // Stronger gate: run cucumber against the live preview if possible.
+      // Failures here re-enter the heal loop so the agent fixes them just
+      // like it would fix an HTTP failure.
+      let gherkinFail = false;
+      try {
+        const g = await runGherkinChecks(ctx.handle.cwd, ctx.devUrl);
+        if (g.status === 'passed') {
+          logPhase(
+            io,
+            taskId,
+            tester,
+            'info',
+            `🥒 Gherkin scenarios all green (${g.durationMs}ms).`,
+          );
+        } else if (g.status === 'skipped') {
+          logPhase(io, taskId, tester, 'info', `🥒 Gherkin skipped: ${g.reason}`);
+        } else {
+          gherkinFail = true;
+          // Repurpose `result` to drive the fixer with the gherkin failure.
+          result = {
+            healthy: false,
+            httpStatus: result.httpStatus,
+            summary: `gherkin scenarios failed: ${g.reason}`,
+            diagnostics: g.output,
+            podSummary: result.podSummary,
+          };
+          logPhase(
+            io,
+            taskId,
+            tester,
+            'warn',
+            `🥒 Gherkin red — re-entering heal loop to fix scenarios.`,
+            undefined,
+            g.output,
+          );
+        }
+      } catch (e) {
+        const m = e instanceof Error ? e.message : String(e);
+        logPhase(
+          io,
+          taskId,
+          tester,
+          'warn',
+          `🥒 Gherkin runner threw: ${m} (treating as skipped)`,
+        );
+      }
+
+      if (!gherkinFail) {
+        applyVerdictGate(io, taskId, { deployHealthy: true, exitReason: 'healthy' });
+        completePhase(io, taskId, tester);
+        resetStuckHistory(taskId);
+        const okMsg = store.addChatMessage(
+          taskId,
+          'liliput',
+          `✅ Dev preview validated and healthy after ${attempt} probe(s).\n\n${result.summary}`,
+        );
+        if (okMsg) io.to(`task:${taskId}`).emit('chat:message', okMsg);
+        return { imageRef, sha, healthy: true, attemptsUsed: attempt };
+      }
     }
 
     logPhase(
@@ -1258,22 +1338,46 @@ async function validateAndHealLoop(ctx: ValidateContext): Promise<ValidateOutcom
       'validate probe unhealthy',
     );
 
+    // Stuck detection: if we keep hitting the same error class, escalate
+    // strategy in the next fixer prompt instead of running the same prompt
+    // verbatim.
+    const stuckDecision = recordStuck(taskId, result.summary);
+    if (stuckDecision.stuck) {
+      logPhase(
+        io,
+        taskId,
+        tester,
+        'warn',
+        `🔁 Stuck on \`${stuckDecision.signature}\` for ${stuckDecision.streak} attempts — escalating fixer strategy (#${stuckDecision.strategyIndex}).`,
+      );
+      logger.warn(
+        {
+          taskId,
+          signature: stuckDecision.signature,
+          streak: stuckDecision.streak,
+          strategy: stuckDecision.strategyIndex,
+        },
+        'validate loop escalating',
+      );
+    }
+
     if (attempt >= MAX_VALIDATE_ATTEMPTS) {
       logPhase(
         io,
         taskId,
         tester,
         'warn',
-        `Exhausted ${MAX_VALIDATE_ATTEMPTS} validation attempts — stopping the heal loop. Chat to retry.`,
+        `Exhausted ${MAX_VALIDATE_ATTEMPTS} validation attempts — pausing the heal loop. Chat to redirect.`,
       );
-      shadowGateLog(taskId, { deployHealthy: false, exitReason: 'exhausted' });
+      applyVerdictGate(io, taskId, { deployHealthy: false, exitReason: 'exhausted' });
       completePhase(io, taskId, tester);
       const stuckMsg = store.addChatMessage(
         taskId,
         'liliput',
-        `⚠️  Auto-heal exhausted (${MAX_VALIDATE_ATTEMPTS} attempts) — last status: ${result.summary}\n\nChat with me to keep iterating.`,
+        `⚠️  Auto-heal paused after ${MAX_VALIDATE_ATTEMPTS} attempts — last status: ${result.summary}\n\nI tried rotating through ${stuckDecision.strategyIndex !== null ? 'multiple' : 'several'} strategies. Chat with me to redirect — e.g. "revert the last 3 commits and try a static HTML approach instead", or "look at the pod logs and tell me what's actually wrong".`,
       );
       if (stuckMsg) io.to(`task:${taskId}`).emit('chat:message', stuckMsg);
+      resetStuckHistory(taskId);
       return { imageRef, sha, healthy: false, attemptsUsed: attempt };
     }
 
@@ -1293,6 +1397,7 @@ async function validateAndHealLoop(ctx: ValidateContext): Promise<ValidateOutcom
           attempt,
           errorMessage: result.summary,
           errorOutput: result.diagnostics,
+          escalationBlock: stuckDecision.escalationBlock ?? undefined,
           context: {
             repo: ctx.handle.repo,
             dockerfile: ctx.dockerfile,
@@ -2079,6 +2184,44 @@ export function iterateTask(io: SocketServer, taskId: string, message: string): 
   })();
 }
 
+/**
+ * Build a recap block from the task's chat history. Used after a session
+ * resurrection (SDK lost in-memory context) so the agent's first follow-up
+ * turn has continuity. We include up to the last N messages, oldest-first,
+ * and truncate each so a long history doesn't blow the prompt budget.
+ *
+ * The current `newMessage` is excluded — it appears in the prompt's
+ * `## New instruction` block on its own.
+ */
+function buildResurrectionRecap(
+  taskId: string,
+  newMessage: string,
+  maxMessages = 20,
+  maxBytesPerMessage = 600,
+): string {
+  const all = store.getChatHistory(taskId);
+  const filtered = all.filter((m) => m.content !== newMessage);
+  const tail = filtered.slice(-maxMessages);
+  if (tail.length === 0) return '(no prior chat history on file)';
+  const lines: string[] = [];
+  for (const m of tail) {
+    const who =
+      m.role === 'gulliver'
+        ? 'USER'
+        : m.role === 'liliput'
+          ? 'LILIPUT'
+          : (m.agentName ?? String(m.role).toUpperCase());
+    const body =
+      m.content.length > maxBytesPerMessage
+        ? m.content.slice(0, maxBytesPerMessage) + '…'
+        : m.content;
+    lines.push(`### ${who} (${m.timestamp})`);
+    lines.push(body);
+    lines.push('');
+  }
+  return lines.join('\n').trim();
+}
+
 async function runIteration(io: SocketServer, taskId: string, message: string): Promise<void> {
   const task = store.getTask(taskId);
   if (!task) throw new Error('Task not found');
@@ -2108,6 +2251,15 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
 
   chatStatus(io, taskId, `🛠️  Coder Liliputian is reading your message and editing files — this can take a few minutes…`);
   logPhase(io, taskId, coder, 'info', `Iteration: ${message.substring(0, 200)}`);
+
+  // Consume freshlyResurrected one-shot: build a recap from chat history so
+  // the agent has context after the SDK session was rebuilt empty.
+  let recap: string | undefined;
+  if (live.freshlyResurrected) {
+    recap = buildResurrectionRecap(taskId, message);
+    live.freshlyResurrected = false;
+  }
+
   const hb = startHeartbeat(io, taskId, coder);
   let result;
   try {
@@ -2118,6 +2270,7 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
       followUp: message,
       isInitial: false,
       liliputContext: { pathPrefix: live.pathPrefix, port: live.port },
+      recap,
       onLog: (level, msg, cmd, out) => {
         hb.bump();
         logPhase(io, taskId, coder, level, msg, cmd, out);
@@ -2427,6 +2580,7 @@ async function resurrectLiveSession(
       namespace,
       dockerfile: df.dockerfile,
       port: df.port,
+      freshlyResurrected: true,
     };
     liveSessions.set(taskId, live);
 
@@ -2435,7 +2589,7 @@ async function resurrectLiveSession(
       taskId,
       phaseAgent,
       'info',
-      `✅ Session resurrected. Memory is empty (no prior turns) but workspace + branch + PR are intact.`,
+      `✅ Session resurrected. Memory is empty (no prior turns) but workspace + branch + PR are intact. Recap from chat history will be replayed on the next turn.`,
     );
     completePhase(io, taskId, phaseAgent);
 
@@ -2443,7 +2597,7 @@ async function resurrectLiveSession(
       taskId,
       'liliput',
       `✅ Resurrected. SDK session recreated on branch \`${task.branch}\`. ` +
-        `Note: I don't remember our previous conversation, so feel free to recap. Now applying your message…`,
+        `I'll seed the recap from our chat history into the next turn so I have your context.`,
     );
     if (okMsg) io.to(`task:${taskId}`).emit('chat:message', okMsg);
 
