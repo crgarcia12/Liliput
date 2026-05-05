@@ -96,6 +96,40 @@ describe('POST /api/tasks', () => {
     expect(res.body.error).toContain('not found');
     expect(res.body.field).toBe('repository');
   });
+
+  it('should accept and persist a valid model id', async () => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .post('/api/tasks')
+      .send({ title: 'T', description: 'D', model: 'gpt-5-mini' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.task.model).toBe('gpt-5-mini');
+  });
+
+  it('should reject unknown model ids with 400', async () => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .post('/api/tasks')
+      .send({ title: 'T', description: 'D', model: 'imagined-model-7' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.field).toBe('model');
+  });
+});
+
+describe('GET /api/models', () => {
+  it('should return the curated model list and default', async () => {
+    const { app } = buildApp();
+    const res = await request(app).get('/api/models');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.options)).toBe(true);
+    expect(res.body.options.length).toBeGreaterThan(0);
+    expect(res.body.default).toBeDefined();
+    // default must be one of the options
+    const ids = res.body.options.map((m: { id: string }) => m.id);
+    expect(ids).toContain(res.body.default);
+  });
 });
 
 describe('GET /api/tasks', () => {

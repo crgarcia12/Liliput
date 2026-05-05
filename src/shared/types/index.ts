@@ -78,6 +78,7 @@ export interface Task {
   devNamespace?: string;      // K8s namespace hosting the dev env
   devUrl?: string;            // Public URL where the dev env is reachable
   errorMessage?: string;      // Populated when status='failed'
+  model?: string;             // Copilot SDK model id to use for agent turns (e.g. "gpt-5", "claude-sonnet-4.5"). Falls back to server default when missing.
   agents: Agent[];
   chatHistory: ChatMessage[];
   activityHistory?: ActivityEntry[];
@@ -221,6 +222,37 @@ export interface CreateTaskRequest {
   baseBranch?: string;
   commitMode?: CommitMode;
   workstreamId?: string;       // Optional explicit parent; auto-assigned otherwise
+  model?: string;              // Optional Copilot SDK model id (e.g. "gpt-5"). Server falls back to default when missing.
+}
+
+/** Curated list of Copilot SDK model ids surfaced in the new-task UI.
+ *  Update this when GitHub Copilot exposes new models. The first entry is
+ *  the default. Server-side `COPILOT_MODEL` env var still overrides for
+ *  tasks that don't explicitly specify one.
+ */
+export interface ModelOption {
+  id: string;          // SDK model id (passed to client.createSession)
+  label: string;       // Human-readable label for the picker
+  family: 'gpt' | 'claude' | 'gemini' | 'other';
+  note?: string;       // Optional hint shown in the dropdown
+}
+
+export const MODEL_OPTIONS: readonly ModelOption[] = [
+  { id: 'gpt-5',             label: 'GPT-5',                 family: 'gpt',    note: 'default — strongest GPT' },
+  { id: 'gpt-5-mini',        label: 'GPT-5 mini',            family: 'gpt',    note: 'fast / cheap' },
+  { id: 'gpt-4.1',           label: 'GPT-4.1',               family: 'gpt' },
+  { id: 'claude-sonnet-4.5', label: 'Claude Sonnet 4.5',     family: 'claude', note: 'strong coder' },
+  { id: 'claude-sonnet-4',   label: 'Claude Sonnet 4',       family: 'claude' },
+  { id: 'claude-opus-4.1',   label: 'Claude Opus 4.1',       family: 'claude', note: 'premium' },
+  { id: 'claude-haiku-4.5',  label: 'Claude Haiku 4.5',      family: 'claude', note: 'fast / cheap' },
+  { id: 'gemini-2.5-pro',    label: 'Gemini 2.5 Pro',        family: 'gemini' },
+];
+
+export const DEFAULT_MODEL_ID = MODEL_OPTIONS[0]!.id;
+
+export interface ModelsResponse {
+  options: readonly ModelOption[];
+  default: string;
 }
 
 export interface CreateWorkstreamRequest {

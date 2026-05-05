@@ -24,29 +24,34 @@ import {
   type Decomposition,
 } from './feature-decomposer.js';
 
-const DEFAULT_MODEL = process.env['COPILOT_MODEL'] ?? 'claude-sonnet-4';
+const DEFAULT_MODEL = process.env['COPILOT_MODEL'] ?? 'gpt-5';
 const DEFAULT_TIMEOUT_MS = parseInt(
   process.env['DECOMPOSER_TIMEOUT_MS'] ?? '120000',
   10,
 );
 
 export interface DecomposerRunner {
-  (input: DecomposeInput): Promise<Decomposition | null>;
+  (input: DecomposeInput, modelOverride?: string): Promise<Decomposition | null>;
 }
 
 /**
  * Default runner: invokes the Copilot SDK with the decomposition prompt and
  * parses the response. Returns null on any error so the caller can fall
  * back gracefully.
+ *
+ * `modelOverride` lets the caller force a specific Copilot model (used by
+ * the per-task model picker). Falls back to the env default when missing.
  */
 export async function runFeatureDecomposer(
   input: DecomposeInput,
+  modelOverride?: string,
 ): Promise<Decomposition | null> {
   const prompt = buildDecompositionPrompt(input);
+  const model = modelOverride && modelOverride.trim() ? modelOverride.trim() : DEFAULT_MODEL;
   try {
     const client = await getCopilotClient();
     const session = await client.createSession({
-      model: DEFAULT_MODEL,
+      model,
       onPermissionRequest: approveAll,
     });
     try {

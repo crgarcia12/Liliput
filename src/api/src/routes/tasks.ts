@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import type { Server as SocketServer } from 'socket.io';
-import type { CreateTaskRequest, ChatRequest } from '../../../shared/types/index.js';
+import type { CreateTaskRequest, ChatRequest, ModelsResponse } from '../../../shared/types/index.js';
+import { MODEL_OPTIONS, DEFAULT_MODEL_ID } from '../../../shared/types/index.js';
 import * as store from '../stores/task-store.js';
 import * as wsStore from '../stores/workstream-store.js';
 import { generateSpec as defaultGenerateSpec, type SpecGenerator } from '../engine/spec-generator.js';
@@ -22,6 +23,7 @@ async function decomposeAndPersist(
   workstreamId: string,
   title: string,
   spec: string,
+  model?: string,
 ): Promise<void> {
   const existing = featureStore.listFeaturesByWorkstream(workstreamId);
   if (existing.length > 0) {
@@ -31,7 +33,7 @@ async function decomposeAndPersist(
     );
     return;
   }
-  const decomp = await runFeatureDecomposer({ workstreamId, title, spec });
+  const decomp = await runFeatureDecomposer({ workstreamId, title, spec }, model);
   if (!decomp) {
     logger.info({ workstreamId }, 'decomposer: no decomposition — single-feature fallback');
     return;
@@ -79,10 +81,21 @@ export function createTasksRouter(
   // POST /api/tasks — create a new task
   router.post('/api/tasks', async (req: Request, res: Response) => {
     try {
-      const { title, description, repository, baseBranch, commitMode, workstreamId } =
+      const { title, description, repository, baseBranch, commitMode, workstreamId, model } =
         req.body as CreateTaskRequest;
       if (!title || !description) {
         res.status(400).json({ error: 'title and description are required' });
+        return;
+      }
+
+      // Validate model id against the curated list (if provided). Reject
+      // unknown ids loudly so typos don't silently fall through to a SDK
+      // session that may then take 30s to fail.
+      if (model && !MODEL_OPTIONS.some((m) => m.id === model)) {
+        res.status(400).json({
+          error: `Unknown model: ${model}. Allowed: ${MODEL_OPTIONS.map((m) => m.id).join(', ')}`,
+          field: 'model',
+        });
         return;
       }
 
@@ -122,6 +135,7 @@ export function createTasksRouter(
         baseBranch,
         commitMode,
         ...(resolvedWorkstreamId ? { workstreamId: resolvedWorkstreamId } : {}),
+        ...(model ? { model } : {}),
       });
 
       // Add system welcome message
@@ -131,7 +145,7 @@ export function createTasksRouter(
         `Task "${title}" created. Tell me more about what you need, Gulliver!`,
       );
 
-      logger.info({ taskId: task.id }, 'Task created');
+      logger.info({ taskId: task.id, model: task.model ?? 'default' }, 'Task created');
       const created = store.getTask(task.id) ?? task;
       res.status(201).json({ task: created });
     } catch (err: unknown) {
@@ -139,6 +153,15 @@ export function createTasksRouter(
       logger.error({ err: message }, 'Failed to create task');
       res.status(500).json({ error: 'Failed to create task', details: message });
     }
+  });
+
+  // GET /api/models — list available Copilot SDK models for the picker
+  router.get('/api/models', (_req: Request, res: Response) => {
+    const body: ModelsResponse = {
+      options: MODEL_OPTIONS,
+      default: DEFAULT_MODEL_ID,
+    };
+    res.json(body);
   });
 
   // GET /api/tasks — list all tasks
@@ -229,6 +252,7 @@ export function createTasksRouter(
           {
             ...(task.repository ? { repository: task.repository } : {}),
             ...(task.baseBranch ? { baseBranch: task.baseBranch } : {}),
+            ...(task.model ? { model: task.model } : {}),
             taskId: task.id,
             onProgress: (stage, detail) => {
               const label = stageLabels[stage] ?? stage;
@@ -261,7 +285,7 @@ export function createTasksRouter(
             // just lights up the data path so we can verify the LLM produces
             // sensible decompositions on real specs before wiring fan-out.
             if (process.env['AUTOPILOT_DECOMPOSE'] === '1' && task.workstreamId) {
-              void decomposeAndPersist(task.workstreamId, task.title, spec).catch(
+              void decomposeAndPersist(task.workstreamId, task.title, spec, task.model).catch(
                 (err: unknown) => {
                   const m = err instanceof Error ? err.message : String(err);
                   logger.warn(
