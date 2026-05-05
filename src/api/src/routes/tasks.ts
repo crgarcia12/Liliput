@@ -25,6 +25,7 @@ async function decomposeAndPersist(
   title: string,
   spec: string,
   model?: string,
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh',
 ): Promise<void> {
   const existing = featureStore.listFeaturesByWorkstream(workstreamId);
   if (existing.length > 0) {
@@ -34,7 +35,7 @@ async function decomposeAndPersist(
     );
     return;
   }
-  const decomp = await runFeatureDecomposer({ workstreamId, title, spec }, model);
+  const decomp = await runFeatureDecomposer({ workstreamId, title, spec }, model, reasoningEffort);
   if (!decomp) {
     logger.info({ workstreamId }, 'decomposer: no decomposition — single-feature fallback');
     return;
@@ -82,7 +83,7 @@ export function createTasksRouter(
   // POST /api/tasks — create a new task
   router.post('/api/tasks', async (req: Request, res: Response) => {
     try {
-      const { title, description, repository, baseBranch, commitMode, workstreamId, model } =
+      const { title, description, repository, baseBranch, commitMode, workstreamId, model, reasoningEffort } =
         req.body as CreateTaskRequest;
       if (!title || !description) {
         res.status(400).json({ error: 'title and description are required' });
@@ -103,6 +104,16 @@ export function createTasksRouter(
           });
           return;
         }
+      }
+
+      // Validate reasoning effort if provided. Allowed: low | medium | high | xhigh.
+      const REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const;
+      if (reasoningEffort && !REASONING_EFFORTS.includes(reasoningEffort as typeof REASONING_EFFORTS[number])) {
+        res.status(400).json({
+          error: `Unknown reasoningEffort: ${reasoningEffort}. Allowed: ${REASONING_EFFORTS.join(', ')}`,
+          field: 'reasoningEffort',
+        });
+        return;
       }
 
       // Fail loudly on typoed / inaccessible repos. Without this an invalid
@@ -142,6 +153,7 @@ export function createTasksRouter(
         commitMode,
         ...(resolvedWorkstreamId ? { workstreamId: resolvedWorkstreamId } : {}),
         ...(model ? { model } : {}),
+        ...(reasoningEffort ? { reasoningEffort } : {}),
       });
 
       // Add system welcome message
@@ -269,6 +281,7 @@ export function createTasksRouter(
             ...(task.repository ? { repository: task.repository } : {}),
             ...(task.baseBranch ? { baseBranch: task.baseBranch } : {}),
             ...(task.model ? { model: task.model } : {}),
+            ...(task.reasoningEffort ? { reasoningEffort: task.reasoningEffort } : {}),
             taskId: task.id,
             onProgress: (stage, detail) => {
               const label = stageLabels[stage] ?? stage;
@@ -301,7 +314,7 @@ export function createTasksRouter(
             // just lights up the data path so we can verify the LLM produces
             // sensible decompositions on real specs before wiring fan-out.
             if (process.env['AUTOPILOT_DECOMPOSE'] === '1' && task.workstreamId) {
-              void decomposeAndPersist(task.workstreamId, task.title, spec, task.model).catch(
+              void decomposeAndPersist(task.workstreamId, task.title, spec, task.model, task.reasoningEffort).catch(
                 (err: unknown) => {
                   const m = err instanceof Error ? err.message : String(err);
                   logger.warn(
@@ -432,6 +445,52 @@ export function createTasksRouter(
       const errMessage = err instanceof Error ? err.message : String(err);
       logger.error({ err: errMessage }, 'Failed to update task model');
       res.status(500).json({ error: 'Failed to update task model', details: errMessage });
+    }
+  });
+
+  // PATCH /api/tasks/:id/reasoning-effort — change the SDK reasoning effort
+  // hint on a live task. Takes effect on the NEXT agent turn (existing
+  // sessions keep their original effort). Pass an empty string or null to
+  // clear and let the server auto-derive from the model id (e.g.
+  // `claude-opus-4.7-xhigh` -> `xhigh`).
+  router.patch('/api/tasks/:id/reasoning-effort', (req: Request, res: Response) => {
+    try {
+      const task = store.getTask(req.params['id'] as string);
+      if (!task || task.status === 'deleting') {
+        res.status(404).json({ error: 'Task not found' });
+        return;
+      }
+      const { reasoningEffort } = (req.body ?? {}) as { reasoningEffort?: string | null };
+      const ALLOWED = ['low', 'medium', 'high', 'xhigh'] as const;
+      let next: 'low' | 'medium' | 'high' | 'xhigh' | undefined;
+      if (reasoningEffort === null || reasoningEffort === '' || reasoningEffort === undefined) {
+        next = undefined; // clear -> auto-derive
+      } else if (ALLOWED.includes(reasoningEffort as typeof ALLOWED[number])) {
+        next = reasoningEffort as typeof ALLOWED[number];
+      } else {
+        res.status(400).json({
+          error: `Unknown reasoningEffort: ${reasoningEffort}. Allowed: ${ALLOWED.join(', ')} (or empty to auto-derive)`,
+          field: 'reasoningEffort',
+        });
+        return;
+      }
+      const previous = task.reasoningEffort ?? '(auto)';
+      // Passing `undefined` falls through the spread merge in updateTask,
+      // so the field is dropped from the persisted JSON next round-trip.
+      store.updateTask(task.id, { reasoningEffort: next });
+      const sysMsg = store.addChatMessage(
+        task.id,
+        'system',
+        `🧠 Reasoning effort: ${previous} → ${next ?? '(auto-derive)'} . Takes effect on the next agent turn.`,
+      );
+      io.to(`task:${task.id}`).emit('chat:message', sysMsg);
+      const updated = store.getTask(task.id);
+      logger.info({ taskId: task.id, from: previous, to: next ?? 'auto' }, 'Task reasoningEffort updated');
+      res.json({ task: updated });
+    } catch (err: unknown) {
+      const errMessage = err instanceof Error ? err.message : String(err);
+      logger.error({ err: errMessage }, 'Failed to update reasoningEffort');
+      res.status(500).json({ error: 'Failed to update reasoningEffort', details: errMessage });
     }
   });
 

@@ -1699,7 +1699,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   }
 
   logPhase(io, taskId, coder, 'info', `Spawning Copilot SDK session (model: ${task.model || 'default'})…`);
-  const agentSession = await createAgentSession(handle.cwd, task.model);
+  const agentSession = await createAgentSession(handle.cwd, task.model, task.reasoningEffort);
   registerInFlightAgent(taskId, {
     agentSession,
     pendingChatMessages: [],
@@ -2897,7 +2897,7 @@ async function resurrectLiveSession(
     await writeContractIntoWorkspace(handle.cwd, { pathPrefix, port: df.port });
 
     logPhase(io, taskId, phaseAgent, 'info', `Re-creating Copilot SDK session (model: ${task.model || 'default'})…`);
-    const agentSession = await createAgentSession(handle.cwd, task.model);
+    const agentSession = await createAgentSession(handle.cwd, task.model, task.reasoningEffort);
 
     const imageName = `liliput-app-${sanitiseK8sName(task.repository.replace('/', '-'))}`;
     const devPrefix = sanitiseK8sName(process.env.LILIPUT_DEV_PREFIX || 'dev');

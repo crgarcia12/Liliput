@@ -30,6 +30,7 @@ interface CreateProjectBody {
   visibility?: 'public' | 'private';
   initialBranch?: string;
   model?: string;
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
 }
 
 export function createProjectsRouter(deps: ProjectsRouterDeps = {}): Router {
@@ -46,6 +47,7 @@ export function createProjectsRouter(deps: ProjectsRouterDeps = {}): Router {
           visibility: body.visibility ?? 'private',
           ...(body.initialBranch ? { initialBranch: body.initialBranch.trim() } : {}),
           ...(body.model ? { model: body.model.trim() } : {}),
+          ...(body.reasoningEffort ? { reasoningEffort: body.reasoningEffort } : {}),
         },
         {
           taskStore,

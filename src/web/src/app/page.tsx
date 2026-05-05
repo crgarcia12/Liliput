@@ -35,6 +35,8 @@ export default function Home() {
   const [commitMode, setCommitMode] = useState<'pr' | 'direct'>('pr');
   const [modelOptions, setModelOptions] = useState<readonly ModelOption[]>([]);
   const [model, setModel] = useState<string>('');
+  // '' means "auto-derive" — server picks based on model id suffix.
+  const [reasoningEffort, setReasoningEffort] = useState<'' | 'low' | 'medium' | 'high' | 'xhigh'>('');
   // Greenfield ("Create new project") state.
   const [projectMode, setProjectMode] = useState<'existing' | 'create'>('existing');
   const [newRepoName, setNewRepoName] = useState('');
@@ -134,6 +136,7 @@ export default function Home() {
                 description: message,
                 visibility: newRepoVisibility,
                 ...(model ? { model } : {}),
+                ...(reasoningEffort ? { reasoningEffort } : {}),
               }),
             });
             if (!res.ok) {
@@ -142,6 +145,14 @@ export default function Home() {
             }
             const data = (await res.json()) as { task: Task };
             setCurrentTask(data.task);
+            // Mirror the existing-repo flow: send the description as a chat
+            // message so /api/tasks/:id/chat triggers spec generation. Without
+            // this, the new task sits in `clarifying` forever.
+            try {
+              await sendMessage(data.task.id, message);
+            } catch {
+              /* surface on task page */
+            }
             router.push(`/task/${data.task.id}`);
             return;
           }
@@ -152,6 +163,7 @@ export default function Home() {
             baseBranch: baseBranch.trim() || 'main',
             commitMode,
             ...(model ? { model } : {}),
+            ...(reasoningEffort ? { reasoningEffort } : {}),
           });
           setCurrentTask(task);
 
@@ -178,7 +190,7 @@ export default function Home() {
         setIsWorking(false);
       }
     },
-    [currentTask, createTask, sendMessage, targetRepo, baseBranch, commitMode, model, router, projectMode, newRepoName, newRepoVisibility]
+    [currentTask, createTask, sendMessage, targetRepo, baseBranch, commitMode, model, reasoningEffort, router, projectMode, newRepoName, newRepoVisibility]
   );
 
   const activeCount = agents.filter((a) => a.status === 'working').length;
@@ -321,6 +333,21 @@ export default function Home() {
                   {m.label}
                 </option>
               ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-2">
+            <span className="text-gray-400">Reasoning:</span>
+            <select
+              value={reasoningEffort}
+              onChange={(e) => setReasoningEffort(e.target.value as typeof reasoningEffort)}
+              className="bg-[#050510] border border-[#1a1a2e] rounded px-2 py-1 text-gray-200 focus:outline-none focus:border-cyan-500"
+              title="Some models (like claude-opus-4.7-xhigh) only accept ONE effort. Auto picks it from the model id suffix."
+            >
+              <option value="">auto</option>
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+              <option value="xhigh">xhigh</option>
             </select>
           </label>
           <span className="text-gray-600 ml-auto">

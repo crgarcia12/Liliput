@@ -8,6 +8,7 @@ import {
   getAuthStatus,
 } from './auth-status.js';
 import { extractRepoContext, type ProgressStage as RepoStage } from './repo-context.js';
+import { deriveReasoningEffort } from '../../../shared/types/index.js';
 import { logger } from '../logger.js';
 
 const DEFAULT_MODEL = process.env['COPILOT_MODEL'] ?? 'claude-sonnet-4';
@@ -35,6 +36,11 @@ export interface SpecGeneratorContext {
   /** Optional Copilot SDK model id to use for this spec generation. Falls
    *  back to the server default (`COPILOT_MODEL` env or `gpt-5`) when missing. */
   model?: string;
+  /** Optional reasoning-effort hint forwarded to the SDK. When omitted, the
+   *  generator auto-derives it from the model id suffix (e.g. `*-xhigh` ->
+   *  'xhigh'). Some models (like `claude-opus-4.7-xhigh`) accept ONLY one
+   *  effort value — passing the wrong one causes the SDK to throw 400. */
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
   /** Optional progress hook — called as the generator advances through stages.
    *  Use this to surface what's happening to users (e.g. via socket events). */
   onProgress?: SpecProgressHandler;
@@ -201,12 +207,14 @@ export async function generateSpec(
   }
   const prompt = buildPrompt(title, description, repoBlob);
   const model = context?.model && context.model.trim() ? context.model.trim() : DEFAULT_MODEL;
+  const reasoningEffort = context?.reasoningEffort ?? deriveReasoningEffort(model);
 
   try {
     progress('connecting-llm', `model: ${model}`);
     const client = await getCopilotClient();
     const session = await client.createSession({
       model,
+      ...(reasoningEffort ? { reasoningEffort } : {}),
       onPermissionRequest: approveAll,
     });
 
@@ -248,6 +256,7 @@ export async function probeAuth(): Promise<AuthStatus> {
     const client = await getCopilotClient();
     const session = await client.createSession({
       model: DEFAULT_MODEL,
+      ...(deriveReasoningEffort(DEFAULT_MODEL) ? { reasoningEffort: deriveReasoningEffort(DEFAULT_MODEL)! } : {}),
       onPermissionRequest: approveAll,
     });
     try {
