@@ -237,18 +237,19 @@ export interface ModelOption {
   note?: string;       // Optional hint shown in the dropdown
 }
 
+/** Static fallback list. The live list comes from `client.listModels()` —
+ *  see `src/api/src/engine/copilot-client.ts#listAvailableModels`. This
+ *  array is only used when the SDK call fails (no auth, offline, etc).
+ *  Keep ids here strictly to ones the Copilot SDK actually accepts. */
 export const MODEL_OPTIONS: readonly ModelOption[] = [
-  { id: 'gpt-5',             label: 'GPT-5',                 family: 'gpt',    note: 'default — strongest GPT' },
+  { id: 'claude-sonnet-4',   label: 'Claude Sonnet 4',       family: 'claude', note: 'default fallback' },
+  { id: 'claude-sonnet-4.5', label: 'Claude Sonnet 4.5',     family: 'claude' },
+  { id: 'claude-haiku-4.5',  label: 'Claude Haiku 4.5',      family: 'claude', note: 'fast / cheap' },
   { id: 'gpt-5-mini',        label: 'GPT-5 mini',            family: 'gpt',    note: 'fast / cheap' },
   { id: 'gpt-4.1',           label: 'GPT-4.1',               family: 'gpt' },
-  { id: 'claude-sonnet-4.5', label: 'Claude Sonnet 4.5',     family: 'claude', note: 'strong coder' },
-  { id: 'claude-sonnet-4',   label: 'Claude Sonnet 4',       family: 'claude' },
-  { id: 'claude-opus-4.1',   label: 'Claude Opus 4.1',       family: 'claude', note: 'premium' },
-  { id: 'claude-haiku-4.5',  label: 'Claude Haiku 4.5',      family: 'claude', note: 'fast / cheap' },
-  { id: 'gemini-2.5-pro',    label: 'Gemini 2.5 Pro',        family: 'gemini' },
 ];
 
-export const DEFAULT_MODEL_ID = MODEL_OPTIONS[0]!.id;
+export const DEFAULT_MODEL_ID = 'claude-sonnet-4';
 
 export interface ModelsResponse {
   options: readonly ModelOption[];

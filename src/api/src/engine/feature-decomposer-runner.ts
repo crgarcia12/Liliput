@@ -24,7 +24,7 @@ import {
   type Decomposition,
 } from './feature-decomposer.js';
 
-const DEFAULT_MODEL = process.env['COPILOT_MODEL'] ?? 'gpt-5';
+const DEFAULT_MODEL = process.env['COPILOT_MODEL'] ?? 'claude-sonnet-4';
 const DEFAULT_TIMEOUT_MS = parseInt(
   process.env['DECOMPOSER_TIMEOUT_MS'] ?? '120000',
   10,
