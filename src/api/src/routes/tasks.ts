@@ -376,6 +376,48 @@ export function createTasksRouter(
     }
   });
 
+  // PATCH /api/tasks/:id/model — change the Copilot SDK model on a live task.
+  // Only takes effect on the NEXT agent turn (we don't kill the in-flight SDK
+  // session — that would lose context and is rarely what the operator wants).
+  // Allowed in any non-terminal status; rejected on `deleting`.
+  router.patch('/api/tasks/:id/model', (req: Request, res: Response) => {
+    try {
+      const task = store.getTask(req.params['id'] as string);
+      if (!task || task.status === 'deleting') {
+        res.status(404).json({ error: 'Task not found' });
+        return;
+      }
+      const { model } = (req.body ?? {}) as { model?: string };
+      if (!model || !model.trim()) {
+        res.status(400).json({ error: 'model is required', field: 'model' });
+        return;
+      }
+      const trimmed = model.trim();
+      if (!MODEL_OPTIONS.some((m) => m.id === trimmed)) {
+        res.status(400).json({
+          error: `Unknown model: ${trimmed}. Allowed: ${MODEL_OPTIONS.map((m) => m.id).join(', ')}`,
+          field: 'model',
+        });
+        return;
+      }
+      const previous = task.model ?? '(default)';
+      store.updateTask(task.id, { model: trimmed });
+      const sysMsg = store.addChatMessage(
+        task.id,
+        'system',
+        `🔀 Model switched: ${previous} → ${trimmed}. Takes effect on the next agent turn.`,
+      );
+      io.to(`task:${task.id}`).emit('chat:message', sysMsg);
+      const updated = store.getTask(task.id);
+      logger.info({ taskId: task.id, from: previous, to: trimmed }, 'Task model updated');
+      res.json({ task: updated });
+    } catch (err: unknown) {
+      const errMessage = err instanceof Error ? err.message : String(err);
+      logger.error({ err: errMessage }, 'Failed to update task model');
+      res.status(500).json({ error: 'Failed to update task model', details: errMessage });
+    }
+  });
+
   // POST /api/tasks/:id/approve-spec — approve spec and start building
   router.post('/api/tasks/:id/approve-spec', (req: Request, res: Response) => {
     try {

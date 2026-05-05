@@ -220,6 +220,7 @@ export function updateTask(
       | 'devUrl'
       | 'errorMessage'
       | 'workstreamId'
+      | 'model'
     >
   >,
 ): Task | undefined {
