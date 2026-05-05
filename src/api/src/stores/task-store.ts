@@ -144,7 +144,13 @@ export function createTask(
   title: string,
   description: string,
   repository?: string,
-  options: { baseBranch?: string; commitMode?: CommitMode; workstreamId?: string; model?: string } = {},
+  options: {
+    baseBranch?: string;
+    commitMode?: CommitMode;
+    workstreamId?: string;
+    model?: string;
+    reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+  } = {},
 ): Task {
   const ts = now();
   const task: Task = {
@@ -157,6 +163,7 @@ export function createTask(
     commitMode: options.commitMode ?? 'pr',
     ...(options.workstreamId ? { workstreamId: options.workstreamId } : {}),
     ...(options.model && options.model.trim() ? { model: options.model.trim() } : {}),
+    ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
     agents: [],
     chatHistory: [],
     createdAt: ts,
@@ -221,6 +228,7 @@ export function updateTask(
       | 'errorMessage'
       | 'workstreamId'
       | 'model'
+      | 'reasoningEffort'
     >
   >,
 ): Task | undefined {

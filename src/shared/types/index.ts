@@ -79,6 +79,7 @@ export interface Task {
   devUrl?: string;            // Public URL where the dev env is reachable
   errorMessage?: string;      // Populated when status='failed'
   model?: string;             // Copilot SDK model id to use for agent turns (e.g. "gpt-5", "claude-sonnet-4.5"). Falls back to server default when missing.
+  reasoningEffort?: ReasoningEffort;  // Optional reasoning-effort hint for the SDK. When undefined, the server auto-derives from the model id (e.g. `*-xhigh` -> 'xhigh') so models that only accept one effort (like claude-opus-4.7-xhigh) work out of the box.
   agents: Agent[];
   chatHistory: ChatMessage[];
   activityHistory?: ActivityEntry[];
@@ -223,6 +224,7 @@ export interface CreateTaskRequest {
   commitMode?: CommitMode;
   workstreamId?: string;       // Optional explicit parent; auto-assigned otherwise
   model?: string;              // Optional Copilot SDK model id (e.g. "gpt-5"). Server falls back to default when missing.
+  reasoningEffort?: ReasoningEffort;  // Optional reasoning-effort hint. Auto-derived from model id when missing.
 }
 
 /** Curated list of Copilot SDK model ids surfaced in the new-task UI.
@@ -250,6 +252,26 @@ export const MODEL_OPTIONS: readonly ModelOption[] = [
 ];
 
 export const DEFAULT_MODEL_ID = 'claude-sonnet-4';
+
+/** Reasoning-effort hint passed to the Copilot SDK. Some models REQUIRE a
+ *  specific value (e.g. `claude-opus-4.7-xhigh` only accepts `'xhigh'`); for
+ *  those, the server auto-derives from the model id suffix. */
+export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
+
+/** Auto-derive the reasoning effort that a model id implies. Models that
+ *  encode an effort in the suffix (e.g. `claude-opus-4.7-xhigh`) only accept
+ *  THAT effort; using anything else throws a 400 from the SDK. Returns
+ *  `undefined` when the model id implies nothing — caller should pass the
+ *  user's explicit choice (or omit, letting the SDK pick its own default). */
+export function deriveReasoningEffort(modelId: string | undefined): ReasoningEffort | undefined {
+  if (!modelId) return undefined;
+  const lower = modelId.toLowerCase();
+  if (lower.endsWith('-xhigh')) return 'xhigh';
+  if (lower.endsWith('-high')) return 'high';
+  if (lower.endsWith('-low')) return 'low';
+  if (lower.endsWith('-mini')) return 'medium';
+  return undefined;
+}
 
 export interface ModelsResponse {
   options: readonly ModelOption[];

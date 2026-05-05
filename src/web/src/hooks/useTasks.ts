@@ -16,6 +16,7 @@ interface CreateTaskOptions {
   baseBranch?: string;
   commitMode?: CommitMode;
   model?: string;
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
 }
 
 interface UseTasksReturn {
@@ -51,6 +52,7 @@ export function useTasks(): UseTasksReturn {
         baseBranch: options?.baseBranch,
         commitMode: options?.commitMode,
         model: options?.model,
+        reasoningEffort: options?.reasoningEffort,
       };
       const data = await apiRequest<TaskDetailResponse>('/api/tasks', {
         method: 'POST',

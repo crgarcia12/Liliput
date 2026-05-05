@@ -26,6 +26,7 @@
 import { approveAll } from '@github/copilot-sdk';
 import type { CopilotSession, SessionEvent } from '@github/copilot-sdk';
 import { getCopilotClient } from './copilot-client.js';
+import { deriveReasoningEffort, type ReasoningEffort } from '../../../shared/types/index.js';
 import { buildDeployContract, type DeployContractContext } from './liliput-deploy-contract.js';
 import { logger } from '../logger.js';
 
@@ -479,6 +480,7 @@ const noEvent: ToolEventFn = () => {};
 export async function createAgentSession(
   workspaceRoot: string,
   modelOverride?: string,
+  reasoningEffortOverride?: ReasoningEffort,
 ): Promise<AgentSession> {
   const client = await getCopilotClient();
   // Mutable callbacks ref so per-turn callers can swap their log destination
@@ -489,8 +491,10 @@ export async function createAgentSession(
     toolCount: 0,
   };
   const model = modelOverride && modelOverride.trim() ? modelOverride.trim() : DEFAULT_MODEL;
+  const reasoningEffort = reasoningEffortOverride ?? deriveReasoningEffort(model);
   const session = await client.createSession({
     model,
+    ...(reasoningEffort ? { reasoningEffort } : {}),
     workingDirectory: workspaceRoot,
     enableConfigDiscovery: true, // auto-load .mcp.json + skills from target repo
     onPermissionRequest: approveAll,

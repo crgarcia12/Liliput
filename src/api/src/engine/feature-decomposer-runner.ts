@@ -23,6 +23,7 @@ import {
   type DecomposeInput,
   type Decomposition,
 } from './feature-decomposer.js';
+import { deriveReasoningEffort, type ReasoningEffort } from '../../../shared/types/index.js';
 
 const DEFAULT_MODEL = process.env['COPILOT_MODEL'] ?? 'claude-sonnet-4';
 const DEFAULT_TIMEOUT_MS = parseInt(
@@ -31,7 +32,7 @@ const DEFAULT_TIMEOUT_MS = parseInt(
 );
 
 export interface DecomposerRunner {
-  (input: DecomposeInput, modelOverride?: string): Promise<Decomposition | null>;
+  (input: DecomposeInput, modelOverride?: string, reasoningEffortOverride?: ReasoningEffort): Promise<Decomposition | null>;
 }
 
 /**
@@ -45,13 +46,16 @@ export interface DecomposerRunner {
 export async function runFeatureDecomposer(
   input: DecomposeInput,
   modelOverride?: string,
+  reasoningEffortOverride?: ReasoningEffort,
 ): Promise<Decomposition | null> {
   const prompt = buildDecompositionPrompt(input);
   const model = modelOverride && modelOverride.trim() ? modelOverride.trim() : DEFAULT_MODEL;
+  const reasoningEffort = reasoningEffortOverride ?? deriveReasoningEffort(model);
   try {
     const client = await getCopilotClient();
     const session = await client.createSession({
       model,
+      ...(reasoningEffort ? { reasoningEffort } : {}),
       onPermissionRequest: approveAll,
     });
     try {

@@ -43,6 +43,8 @@ export interface BootstrapInput {
   initialBranch?: string;
   /** Optional model id for the resulting task — passes through to taskStore. */
   model?: string;
+  /** Optional reasoning-effort hint for the resulting task. Auto-derived from model id when missing. */
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
 }
 
 export interface BootstrapResult {
@@ -255,6 +257,7 @@ export async function bootstrapProject(
     baseBranch: created.defaultBranch,
     workstreamId: workstream.id,
     ...(input.model ? { model: input.model } : {}),
+    ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
   });
 
   deps.taskStore.addChatMessage(
@@ -269,9 +272,12 @@ export async function bootstrapProject(
       `⚠️ Bootstrap completed with ${warnings.length} warning(s):\n- ${warnings.join('\n- ')}`,
     );
   }
-  // The description seed — sent as the operator's first prompt. The agent
-  // loop picks this up exactly as if Gulliver had typed it into the chat.
-  deps.taskStore.addChatMessage(task.id, 'gulliver', input.description.trim());
+  // Note: we deliberately do NOT pre-seed the operator's description as a
+  // `gulliver` chat message here. The spec generator only kicks off via the
+  // `POST /api/tasks/:id/chat` route (it transitions clarifying -> specifying
+  // and starts the LLM run). The frontend is responsible for calling that
+  // endpoint with `input.description` immediately after this returns, which
+  // mirrors the existing-repo flow.
 
   const persisted = deps.taskStore.getTask(task.id) ?? task;
 
