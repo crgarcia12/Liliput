@@ -35,6 +35,11 @@ export default function Home() {
   const [commitMode, setCommitMode] = useState<'pr' | 'direct'>('pr');
   const [modelOptions, setModelOptions] = useState<readonly ModelOption[]>([]);
   const [model, setModel] = useState<string>('');
+  // Greenfield ("Create new project") state.
+  const [projectMode, setProjectMode] = useState<'existing' | 'create'>('existing');
+  const [newRepoName, setNewRepoName] = useState('');
+  const [newRepoVisibility, setNewRepoVisibility] = useState<'public' | 'private'>('private');
+  const [nameCheck, setNameCheck] = useState<{ available?: boolean; reason?: string; loading?: boolean }>({});
 
   // Fetch the curated Copilot SDK model list once on mount so the dropdown
   // and the persisted default both come from the server's source of truth.
@@ -81,6 +86,26 @@ export default function Home() {
     setIsWorking(hasWorking);
   }, [agentEvents]);
 
+  // Debounced live name availability check for greenfield mode.
+  useEffect(() => {
+    if (projectMode !== 'create') return;
+    const trimmed = newRepoName.trim();
+    if (!trimmed) {
+      setNameCheck({});
+      return;
+    }
+    setNameCheck({ loading: true });
+    const handle = setTimeout(() => {
+      fetch(`/api/projects/check-name?name=${encodeURIComponent(trimmed)}`)
+        .then((r) => r.json())
+        .then((data: { available: boolean; reason?: string }) => {
+          setNameCheck({ available: data.available, ...(data.reason ? { reason: data.reason } : {}) });
+        })
+        .catch(() => setNameCheck({}));
+    }, 400);
+    return () => clearTimeout(handle);
+  }, [newRepoName, projectMode]);
+
   const handleSend = useCallback(
     async (message: string) => {
       // Add user message locally
@@ -95,9 +120,33 @@ export default function Home() {
 
       try {
         if (!currentTask) {
-          // First message creates a task — then we redirect to /task/<id>
-          // so the user lands on the live activity / spec / chat view.
           setIsWorking(true);
+
+          // Greenfield path: create a brand-new GitHub repo + bootstrap.
+          if (projectMode === 'create') {
+            const trimmedName = newRepoName.trim();
+            if (!trimmedName) throw new Error('Project name is required.');
+            const res = await fetch('/api/projects', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                name: trimmedName,
+                description: message,
+                visibility: newRepoVisibility,
+                ...(model ? { model } : {}),
+              }),
+            });
+            if (!res.ok) {
+              const body = (await res.json().catch(() => ({}))) as { error?: string };
+              throw new Error(body.error ?? `Failed to create project (${res.status})`);
+            }
+            const data = (await res.json()) as { task: Task };
+            setCurrentTask(data.task);
+            router.push(`/task/${data.task.id}`);
+            return;
+          }
+
+          // Existing-repo path (unchanged).
           const task = await createTask(message, message, {
             repository: targetRepo.trim() || undefined,
             baseBranch: baseBranch.trim() || 'main',
@@ -106,7 +155,6 @@ export default function Home() {
           });
           setCurrentTask(task);
 
-          // Send the same message as a chat so the spec generator kicks off
           try {
             await sendMessage(task.id, message);
           } catch {
@@ -130,7 +178,7 @@ export default function Home() {
         setIsWorking(false);
       }
     },
-    [currentTask, createTask, sendMessage, targetRepo, baseBranch, commitMode, model, router]
+    [currentTask, createTask, sendMessage, targetRepo, baseBranch, commitMode, model, router, projectMode, newRepoName, newRepoVisibility]
   );
 
   const activeCount = agents.filter((a) => a.status === 'working').length;
@@ -172,36 +220,93 @@ export default function Home() {
       {/* Main content */}
       {!currentTask && (
         <div className="px-6 py-3 border-b border-[#1a1a2e] bg-[#0d0d14] flex flex-wrap items-center gap-3 text-xs">
-          <label className="flex items-center gap-2">
-            <span className="text-gray-400">Target repo:</span>
-            <input
-              type="text"
-              value={targetRepo}
-              onChange={(e) => setTargetRepo(e.target.value)}
-              placeholder="owner/repo (e.g. crgarcia12/Liliput)"
-              className="bg-[#050510] border border-[#1a1a2e] rounded px-2 py-1 w-72 text-gray-200 focus:outline-none focus:border-cyan-500"
-            />
-          </label>
-          <label className="flex items-center gap-2">
-            <span className="text-gray-400">Base:</span>
-            <input
-              type="text"
-              value={baseBranch}
-              onChange={(e) => setBaseBranch(e.target.value)}
-              className="bg-[#050510] border border-[#1a1a2e] rounded px-2 py-1 w-24 text-gray-200 focus:outline-none focus:border-cyan-500"
-            />
-          </label>
-          <label className="flex items-center gap-2">
-            <span className="text-gray-400">Commit mode:</span>
-            <select
-              value={commitMode}
-              onChange={(e) => setCommitMode(e.target.value as 'pr' | 'direct')}
-              className="bg-[#050510] border border-[#1a1a2e] rounded px-2 py-1 text-gray-200 focus:outline-none focus:border-cyan-500"
-            >
-              <option value="pr">Pull request</option>
-              <option value="direct">Direct (auto-merge)</option>
-            </select>
-          </label>
+          <div className="flex items-center gap-3 mr-4 pr-4 border-r border-[#1a1a2e]">
+            <label className="flex items-center gap-1 cursor-pointer">
+              <input
+                type="radio"
+                name="projectMode"
+                value="existing"
+                checked={projectMode === 'existing'}
+                onChange={() => setProjectMode('existing')}
+              />
+              <span className="text-gray-300">Use existing repo</span>
+            </label>
+            <label className="flex items-center gap-1 cursor-pointer">
+              <input
+                type="radio"
+                name="projectMode"
+                value="create"
+                checked={projectMode === 'create'}
+                onChange={() => setProjectMode('create')}
+              />
+              <span className="text-gray-300">Create new project</span>
+            </label>
+          </div>
+          {projectMode === 'existing' ? (
+            <>
+              <label className="flex items-center gap-2">
+                <span className="text-gray-400">Target repo:</span>
+                <input
+                  type="text"
+                  value={targetRepo}
+                  onChange={(e) => setTargetRepo(e.target.value)}
+                  placeholder="owner/repo (e.g. crgarcia12/Liliput)"
+                  className="bg-[#050510] border border-[#1a1a2e] rounded px-2 py-1 w-72 text-gray-200 focus:outline-none focus:border-cyan-500"
+                />
+              </label>
+              <label className="flex items-center gap-2">
+                <span className="text-gray-400">Base:</span>
+                <input
+                  type="text"
+                  value={baseBranch}
+                  onChange={(e) => setBaseBranch(e.target.value)}
+                  className="bg-[#050510] border border-[#1a1a2e] rounded px-2 py-1 w-24 text-gray-200 focus:outline-none focus:border-cyan-500"
+                />
+              </label>
+              <label className="flex items-center gap-2">
+                <span className="text-gray-400">Commit mode:</span>
+                <select
+                  value={commitMode}
+                  onChange={(e) => setCommitMode(e.target.value as 'pr' | 'direct')}
+                  className="bg-[#050510] border border-[#1a1a2e] rounded px-2 py-1 text-gray-200 focus:outline-none focus:border-cyan-500"
+                >
+                  <option value="pr">Pull request</option>
+                  <option value="direct">Direct (auto-merge)</option>
+                </select>
+              </label>
+            </>
+          ) : (
+            <>
+              <label className="flex items-center gap-2">
+                <span className="text-gray-400">New repo name:</span>
+                <input
+                  type="text"
+                  value={newRepoName}
+                  onChange={(e) => setNewRepoName(e.target.value)}
+                  placeholder="my-new-app"
+                  className="bg-[#050510] border border-[#1a1a2e] rounded px-2 py-1 w-56 text-gray-200 focus:outline-none focus:border-cyan-500"
+                />
+                {nameCheck.loading && <span className="text-gray-500">checking…</span>}
+                {!nameCheck.loading && nameCheck.available === true && (
+                  <span className="text-green-400">✓ available</span>
+                )}
+                {!nameCheck.loading && nameCheck.available === false && (
+                  <span className="text-red-400" title={nameCheck.reason}>✗ {nameCheck.reason ?? 'unavailable'}</span>
+                )}
+              </label>
+              <label className="flex items-center gap-2">
+                <span className="text-gray-400">Visibility:</span>
+                <select
+                  value={newRepoVisibility}
+                  onChange={(e) => setNewRepoVisibility(e.target.value as 'public' | 'private')}
+                  className="bg-[#050510] border border-[#1a1a2e] rounded px-2 py-1 text-gray-200 focus:outline-none focus:border-cyan-500"
+                >
+                  <option value="private">Private</option>
+                  <option value="public">Public</option>
+                </select>
+              </label>
+            </>
+          )}
           <label className="flex items-center gap-2">
             <span className="text-gray-400">Model:</span>
             <select
@@ -219,7 +324,9 @@ export default function Home() {
             </select>
           </label>
           <span className="text-gray-600 ml-auto">
-            Leave repo empty to use the default ({process.env.NEXT_PUBLIC_DEFAULT_REPO || 'configured server-side'})
+            {projectMode === 'create'
+              ? 'Creates a new GitHub repo under your account, then runs spec2cloud init.'
+              : `Leave repo empty to use the default (${process.env.NEXT_PUBLIC_DEFAULT_REPO || 'configured server-side'})`}
           </span>
         </div>
       )}
