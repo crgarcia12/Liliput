@@ -2274,6 +2274,37 @@ function buildResurrectionRecap(
   return lines.join('\n').trim();
 }
 
+/**
+ * "Pure rebuild command" detection. Returns true when the user's chat
+ * message is essentially a deploy directive with no other actionable
+ * content (e.g. "rebuild", "redeploy now", "go ahead and rebuild",
+ * "rebuild and deploy"). When this fires, iterateTask short-circuits the
+ * agent turn entirely and goes straight to marker → commit → build →
+ * deploy. The agent has no veto.
+ *
+ * We deliberately keep this conservative: a message like "rebuild the
+ * login form" includes "rebuild" but is NOT a deploy directive, so it
+ * runs through the normal agent turn.
+ */
+export function isPureRebuildCommand(message: string): boolean {
+  const m = message.trim().replace(/[.!?]+$/, '').toLowerCase();
+  if (!m || m.length > 120) return false;
+  // Optional polite/imperative prefixes.
+  const prefix =
+    '(?:please\\s+|just\\s+|go\\s+ahead\\s+(?:and\\s+)?|can\\s+you\\s+(?:please\\s+)?|i\\s+want\\s+(?:you\\s+)?(?:to\\s+)?)?';
+  const verb =
+    '(?:re-?build|re-?deploy|deploy|build|push|ship\\s+to\\s+dev)';
+  // Optional second verb joined by and/&/then.
+  const secondVerb =
+    `(?:\\s+(?:and|&|then|,)\\s+${verb})?`;
+  // Optional trailing modifiers like "now", "again", "please", "the app",
+  // "the preview", "it".
+  const suffix =
+    '(?:\\s+(?:it|the\\s+(?:app|preview|image|build|task)|now|again|please|the\\s+container|to\\s+dev))*';
+  const re = new RegExp(`^${prefix}${verb}${secondVerb}${suffix}$`, 'i');
+  return re.test(m);
+}
+
 async function runIteration(io: SocketServer, taskId: string, message: string): Promise<void> {
   const task = store.getTask(taskId);
   if (!task) throw new Error('Task not found');
@@ -2300,6 +2331,47 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
     taskDescription: task.description,
     spec: task.spec,
   });
+
+  // Short-circuit: if the user's message is a pure rebuild/redeploy command,
+  // skip the agent turn entirely. The agent has no veto over a direct
+  // "rebuild" instruction — that's an operator command, not an editing task.
+  // We write a marker file so the SHA is unique (unique image tag → real
+  // rollout), then drop straight into the commit + build + deploy path.
+  const pureRebuild = isPureRebuildCommand(message);
+  if (pureRebuild) {
+    logPhase(
+      io,
+      taskId,
+      coder,
+      'info',
+      `Pure rebuild command detected (${JSON.stringify(message.substring(0, 60))}) — skipping agent turn, going straight to build+deploy.`,
+    );
+    chatStatus(io, taskId, `🔨 Skipping the agent turn — you asked to rebuild, so I'm going straight to build + redeploy.`);
+    const ackMsg = store.addChatMessage(
+      taskId,
+      'liliput',
+      `🔨 Direct rebuild requested. Skipping the agent turn and forcing a fresh build + redeploy of the current commit.`,
+    );
+    if (ackMsg) io.to(`task:${taskId}`).emit('chat:message', ackMsg);
+    try {
+      const markerPath = path.join(live.repoHandle.cwd, '.liliput-rebuild');
+      const stamp = new Date().toISOString();
+      await fs.writeFile(
+        markerPath,
+        `# Liliput rebuild marker — touched ${stamp} on operator request.\n` +
+          `# This file exists only to give git a unique commit so the dev\n` +
+          `# preview gets a fresh image tag and a real rollout.\n`,
+        'utf8',
+      );
+      logPhase(io, taskId, coder, 'info', `Wrote .liliput-rebuild marker (${stamp})`);
+    } catch (markerErr) {
+      const m = markerErr instanceof Error ? markerErr.message : String(markerErr);
+      logPhase(io, taskId, coder, 'warn', `Could not write rebuild marker: ${m}`);
+    }
+    completePhase(io, taskId, coder);
+    await runRebuildOnly(io, taskId, live, message);
+    return;
+  }
 
   chatStatus(io, taskId, `🛠️  Coder Liliputian is reading your message and editing files — this can take a few minutes…`);
   logPhase(io, taskId, coder, 'info', `Iteration: ${message.substring(0, 200)}`);
@@ -2567,6 +2639,164 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
 
   // Flip back to 'review' after validate (loop already posted the appropriate
   // healthy/exhausted chat message).
+  setTaskStatus(io, taskId, 'review', { devUrl, devNamespace: live.namespace });
+}
+
+/**
+ * Direct rebuild path — used when the user issues a pure rebuild command
+ * ("rebuild", "redeploy now", "go ahead and rebuild"). Skips the agent
+ * turn entirely and runs commit + push + build + deploy + validate
+ * against the current workspace state. Caller is expected to have already
+ * written the .liliput-rebuild marker so the working tree is dirty.
+ */
+async function runRebuildOnly(
+  io: SocketServer,
+  taskId: string,
+  live: LiveSession,
+  message: string,
+): Promise<void> {
+  const task = store.getTask(taskId);
+  if (!task) throw new Error('Task not found');
+
+  const builder = spawnPhase(io, taskId, 'builder', 'Builder Liliputian');
+  if (!builder) throw new Error('Failed to register builder agent');
+
+  chatStatus(io, taskId, `📦 Committing rebuild marker & building image…`);
+  logPhase(io, taskId, builder, 'info', 'Committing rebuild marker…');
+  let commitFixer: string | undefined;
+  const sha = await runGitOpWithFixer<string>({
+    agentSession: live.agentSession,
+    op: () =>
+      git.commitAll(
+        live.repoHandle,
+        `iter(rebuild): ${truncate(message, 60)}\n\nDirect rebuild requested by user.\n\nLiliput rebuild on task ${taskId}.`,
+      ),
+    describe: 'git commit',
+    cwd: live.repoHandle.cwd,
+    branch: live.repoHandle.branch,
+    repo: live.repo,
+    recoveryCheck: async () => {
+      if (await git.isWorkingTreeClean(live.repoHandle)) {
+        const head = await git.headSha(live.repoHandle);
+        return { recovered: true, result: head };
+      }
+      return { recovered: false };
+    },
+    onLog: (level, msg, cmd, out) =>
+      logPhase(io, taskId, commitFixer ?? builder, level, msg, cmd, out),
+    onFixerTurnStart: () => {
+      commitFixer = spawnPhase(io, taskId, 'fixer', 'Fixer Liliputian (git-commit)');
+    },
+    onFixerTurnEnd: () => {
+      if (commitFixer) {
+        completePhase(io, taskId, commitFixer);
+        commitFixer = undefined;
+      }
+    },
+  });
+  store.updateTask(taskId, { commitSha: sha });
+  logPhase(io, taskId, builder, 'info', `Commit ${sha.substring(0, 7)} ready`);
+
+  logPhase(io, taskId, builder, 'info', 'Pushing branch…', `git push origin ${live.branch}`);
+  let pushFixer: string | undefined;
+  await runGitOpWithFixer<void>({
+    agentSession: live.agentSession,
+    op: () => git.push(live.repoHandle),
+    describe: `git push origin ${live.branch}`,
+    cwd: live.repoHandle.cwd,
+    branch: live.repoHandle.branch,
+    repo: live.repo,
+    recoveryCheck: async () => {
+      if (await git.isBranchUpToDateWithRemote(live.repoHandle)) {
+        return { recovered: true, result: undefined as void };
+      }
+      return { recovered: false };
+    },
+    onLog: (level, msg, cmd, out) =>
+      logPhase(io, taskId, pushFixer ?? builder, level, msg, cmd, out),
+    onFixerTurnStart: () => {
+      pushFixer = spawnPhase(io, taskId, 'fixer', 'Fixer Liliputian (git-push)');
+    },
+    onFixerTurnEnd: () => {
+      if (pushFixer) {
+        completePhase(io, taskId, pushFixer);
+        pushFixer = undefined;
+      }
+    },
+  });
+  logPhase(io, taskId, builder, 'info', 'Branch pushed.');
+
+  if (!ACR_NAME) {
+    failPhase(io, taskId, builder, 'ACR_NAME env var not set — cannot rebuild image.');
+    throw new Error('ACR_NAME not configured');
+  }
+
+  const buildOutcome = await buildWithFixer({
+    io,
+    taskId,
+    builderAgentId: builder,
+    agentSession: live.agentSession,
+    handle: live.repoHandle,
+    branch: live.branch,
+    imageName: live.imageName,
+    dockerfile: live.dockerfile,
+    port: live.port,
+    initialSha: sha,
+  });
+  store.updateTask(taskId, { imageRef: buildOutcome.imageRef, commitSha: buildOutcome.sha });
+  completePhase(io, taskId, builder);
+
+  chatStatus(io, taskId, `🚀 Image \`${buildOutcome.imageRef.split('/').pop()}\` built. Rolling preview deployment…`);
+
+  setTaskStatus(io, taskId, 'deploying');
+  const deployer = spawnPhase(io, taskId, 'deployer', 'Deployer Liliputian');
+  if (!deployer) throw new Error('Failed to register deployer agent');
+
+  const deployOutcome = await deployWithFixer({
+    io,
+    taskId,
+    deployerAgentId: deployer,
+    agentSession: live.agentSession,
+    handle: live.repoHandle,
+    branch: live.branch,
+    imageName: live.imageName,
+    dockerfile: live.dockerfile,
+    port: live.port,
+    namespace: live.namespace,
+    pathPrefix: live.pathPrefix,
+    initialImageRef: buildOutcome.imageRef,
+    initialSha: buildOutcome.sha,
+  });
+  store.updateTask(taskId, { imageRef: deployOutcome.imageRef, commitSha: deployOutcome.sha });
+  completePhase(io, taskId, deployer);
+
+  const devUrl = `${PUBLIC_BASE_URL}${live.pathPrefix}/`;
+  store.updateTask(taskId, { devUrl, devNamespace: live.namespace });
+
+  const ackMsg = store.addChatMessage(
+    taskId,
+    'liliput',
+    `🔨 Rebuild applied — validating the new preview…\n\n• Commit \`${sha.substring(0, 7)}\`\n` +
+      `• **Preview (validating):** ${devUrl}\n` +
+      (task.pullRequestUrl ? `• **PR:** ${task.pullRequestUrl}\n` : ''),
+  );
+  if (ackMsg) io.to(`task:${taskId}`).emit('chat:message', ackMsg);
+
+  await validateAndHealLoop({
+    io,
+    taskId,
+    agentSession: live.agentSession,
+    handle: live.repoHandle,
+    imageName: live.imageName,
+    dockerfile: live.dockerfile,
+    port: live.port,
+    namespace: live.namespace,
+    pathPrefix: live.pathPrefix,
+    devUrl,
+    initialImageRef: deployOutcome.imageRef,
+    initialSha: deployOutcome.sha,
+  });
+
   setTaskStatus(io, taskId, 'review', { devUrl, devNamespace: live.namespace });
 }
 
