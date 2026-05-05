@@ -17,6 +17,8 @@
  */
 
 import type { Server as SocketServer } from 'socket.io';
+import { promises as fs } from 'fs';
+import * as path from 'path';
 import type { AgentRole, Task } from '../../../shared/types/index.js';
 import * as store from '../stores/task-store.js';
 import { logger } from '../logger.js';
@@ -2339,26 +2341,73 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   });
 
   const changed = await git.changedFiles(live.repoHandle);
+  // Force-rebuild detection: user explicitly asked for a rebuild/redeploy in
+  // their chat message. Even if the agent didn't make edits, we re-trigger
+  // build+deploy from current HEAD so they can test the latest committed
+  // state. Without this, the user gets stuck in a "agent says it can't, but
+  // also doesn't edit anything" loop.
+  const wantsRebuild = /\b(re-?build|re-?deploy|deploy\s+(again|now)|build\s+(again|now)|force\s+(re)?build)\b/i.test(
+    message,
+  );
   logPhase(
     io,
     taskId,
     coder,
     'info',
-    `Iteration: ${result.toolCallCount} tool calls, ${changed.length} file(s) changed`,
+    `Iteration: ${result.toolCallCount} tool calls, ${changed.length} file(s) changed${wantsRebuild ? ' [user requested rebuild]' : ''}`,
     undefined,
     result.summary,
   );
-  if (changed.length === 0) {
+  if (changed.length === 0 && !wantsRebuild) {
     logPhase(io, taskId, coder, 'info', 'No file changes this turn — staying on previous commit.');
     completePhase(io, taskId, coder);
     setTaskStatus(io, taskId, 'review');
     const sysMsg = store.addChatMessage(
       taskId,
       'liliput',
-      `Done — but the agent didn't change any files this turn. Summary:\n${result.summary}`,
+      `Done — but the agent didn't change any files this turn. Summary:\n${result.summary}\n\n💡 If you want me to rebuild + redeploy the current commit anyway, ask explicitly (e.g. "rebuild and redeploy now").`,
     );
     if (sysMsg) io.to(`task:${taskId}`).emit('chat:message', sysMsg);
     return;
+  }
+  if (changed.length === 0 && wantsRebuild) {
+    logPhase(
+      io,
+      taskId,
+      coder,
+      'info',
+      'No file changes, but user requested rebuild — forcing rebuild from current HEAD.',
+    );
+    // Write a rebuild marker so the commit has real content (unique SHA →
+    // unique image tag → real rollout). Without this the rebuild would
+    // collide on the same image and AKS would no-op the rollout.
+    try {
+      const markerPath = path.join(live.repoHandle.cwd, '.liliput-rebuild');
+      const stamp = new Date().toISOString();
+      await fs.writeFile(
+        markerPath,
+        `# Liliput rebuild marker — touched ${stamp} on operator request.\n` +
+          `# This file exists only to give git a unique commit so the dev\n` +
+          `# preview gets a fresh image tag and a real rollout.\n`,
+        'utf8',
+      );
+      logPhase(
+        io,
+        taskId,
+        coder,
+        'info',
+        `Wrote .liliput-rebuild marker (${stamp})`,
+      );
+    } catch (markerErr) {
+      const m = markerErr instanceof Error ? markerErr.message : String(markerErr);
+      logPhase(io, taskId, coder, 'warn', `Could not write rebuild marker: ${m}`);
+    }
+    const forceMsg = store.addChatMessage(
+      taskId,
+      'liliput',
+      `🔨 No code changes this turn — but you asked to rebuild, so I'm forcing a rebuild + redeploy from the current commit.`,
+    );
+    if (forceMsg) io.to(`task:${taskId}`).emit('chat:message', forceMsg);
   }
 
   // Coder is done — mark it completed BEFORE spawning the builder so the UI
