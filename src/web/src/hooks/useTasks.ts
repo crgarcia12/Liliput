@@ -15,6 +15,7 @@ interface CreateTaskOptions {
   repository?: string;
   baseBranch?: string;
   commitMode?: CommitMode;
+  model?: string;
 }
 
 interface UseTasksReturn {
@@ -48,6 +49,7 @@ export function useTasks(): UseTasksReturn {
         repository: options?.repository,
         baseBranch: options?.baseBranch,
         commitMode: options?.commitMode,
+        model: options?.model,
       };
       const data = await apiRequest<TaskDetailResponse>('/api/tasks', {
         method: 'POST',

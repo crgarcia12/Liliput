@@ -32,6 +32,9 @@ export interface SpecGeneratorContext {
   baseBranch?: string;
   /** Stable id used to derive the temp clone dir. */
   taskId?: string;
+  /** Optional Copilot SDK model id to use for this spec generation. Falls
+   *  back to the server default (`COPILOT_MODEL` env or `gpt-5`) when missing. */
+  model?: string;
   /** Optional progress hook — called as the generator advances through stages.
    *  Use this to surface what's happening to users (e.g. via socket events). */
   onProgress?: SpecProgressHandler;
@@ -197,12 +200,13 @@ export async function generateSpec(
     }
   }
   const prompt = buildPrompt(title, description, repoBlob);
+  const model = context?.model && context.model.trim() ? context.model.trim() : DEFAULT_MODEL;
 
   try {
-    progress('connecting-llm', `model: ${DEFAULT_MODEL}`);
+    progress('connecting-llm', `model: ${model}`);
     const client = await getCopilotClient();
     const session = await client.createSession({
-      model: DEFAULT_MODEL,
+      model,
       onPermissionRequest: approveAll,
     });
 
@@ -216,7 +220,7 @@ export async function generateSpec(
         return fallbackSpec(title, description, 'empty LLM response');
       }
       recordAuthSuccess();
-      logger.info({ model: DEFAULT_MODEL, chars: content.length }, 'Spec generated via Copilot SDK');
+      logger.info({ model, chars: content.length }, 'Spec generated via Copilot SDK');
       progress('spec-ready', `${content.length} chars`);
       return stripCodeFence(content);
     } finally {

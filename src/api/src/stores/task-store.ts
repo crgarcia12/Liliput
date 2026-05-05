@@ -144,7 +144,7 @@ export function createTask(
   title: string,
   description: string,
   repository?: string,
-  options: { baseBranch?: string; commitMode?: CommitMode; workstreamId?: string } = {},
+  options: { baseBranch?: string; commitMode?: CommitMode; workstreamId?: string; model?: string } = {},
 ): Task {
   const ts = now();
   const task: Task = {
@@ -156,6 +156,7 @@ export function createTask(
     baseBranch: options.baseBranch ?? 'main',
     commitMode: options.commitMode ?? 'pr',
     ...(options.workstreamId ? { workstreamId: options.workstreamId } : {}),
+    ...(options.model && options.model.trim() ? { model: options.model.trim() } : {}),
     agents: [],
     chatHistory: [],
     createdAt: ts,

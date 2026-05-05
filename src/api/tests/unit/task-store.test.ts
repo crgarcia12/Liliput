@@ -30,6 +30,22 @@ describe('TaskStore — Tasks', () => {
     expect(task.createdAt).toBeDefined();
   });
 
+  it('should persist optional model when provided', () => {
+    const task = createTask('T', 'D', undefined, { model: 'gpt-5' });
+    expect(task.model).toBe('gpt-5');
+    expect(getTask(task.id)?.model).toBe('gpt-5');
+  });
+
+  it('should omit model when not provided', () => {
+    const task = createTask('T', 'D');
+    expect(task.model).toBeUndefined();
+  });
+
+  it('should trim whitespace-only model and treat as omitted', () => {
+    const task = createTask('T', 'D', undefined, { model: '   ' });
+    expect(task.model).toBeUndefined();
+  });
+
   it('should get a task by id', () => {
     const task = createTask('T', 'D');
     const found = getTask(task.id);

@@ -1,13 +1,13 @@
 'use client';
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import Terminal from '../components/Terminal';
 import AgentPanel from '../components/AgentPanel';
 import { useSocket } from '../hooks/useSocket';
 import { useTasks } from '../hooks/useTasks';
-import type { ChatMessage, Agent, Task } from '@shared/types';
+import type { ChatMessage, Agent, Task, ModelOption, ModelsResponse } from '@shared/types';
 
 const LiliputIsland = dynamic(() => import('../components/LiliputIsland'), {
   ssr: false,
@@ -33,6 +33,27 @@ export default function Home() {
   const [targetRepo, setTargetRepo] = useState('');
   const [baseBranch, setBaseBranch] = useState('main');
   const [commitMode, setCommitMode] = useState<'pr' | 'direct'>('pr');
+  const [modelOptions, setModelOptions] = useState<readonly ModelOption[]>([]);
+  const [model, setModel] = useState<string>('');
+
+  // Fetch the curated Copilot SDK model list once on mount so the dropdown
+  // and the persisted default both come from the server's source of truth.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/models')
+      .then((r) => (r.ok ? (r.json() as Promise<ModelsResponse>) : null))
+      .then((data) => {
+        if (cancelled || !data) return;
+        setModelOptions(data.options);
+        setModel(data.default);
+      })
+      .catch(() => {
+        // Non-fatal: dropdown stays empty, server picks its default.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Merge local + socket messages
   const allMessages = useMemo(
@@ -81,6 +102,7 @@ export default function Home() {
             repository: targetRepo.trim() || undefined,
             baseBranch: baseBranch.trim() || 'main',
             commitMode,
+            ...(model ? { model } : {}),
           });
           setCurrentTask(task);
 
@@ -108,7 +130,7 @@ export default function Home() {
         setIsWorking(false);
       }
     },
-    [currentTask, createTask, sendMessage, targetRepo, baseBranch, commitMode, router]
+    [currentTask, createTask, sendMessage, targetRepo, baseBranch, commitMode, model, router]
   );
 
   const activeCount = agents.filter((a) => a.status === 'working').length;
@@ -178,6 +200,22 @@ export default function Home() {
             >
               <option value="pr">Pull request</option>
               <option value="direct">Direct (auto-merge)</option>
+            </select>
+          </label>
+          <label className="flex items-center gap-2">
+            <span className="text-gray-400">Model:</span>
+            <select
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              className="bg-[#050510] border border-[#1a1a2e] rounded px-2 py-1 text-gray-200 focus:outline-none focus:border-cyan-500"
+              disabled={modelOptions.length === 0}
+            >
+              {modelOptions.length === 0 && <option value="">(loading…)</option>}
+              {modelOptions.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
             </select>
           </label>
           <span className="text-gray-600 ml-auto">

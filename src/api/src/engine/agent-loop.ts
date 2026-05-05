@@ -29,7 +29,7 @@ import { getCopilotClient } from './copilot-client.js';
 import { buildDeployContract, type DeployContractContext } from './liliput-deploy-contract.js';
 import { logger } from '../logger.js';
 
-const MODEL = process.env['COPILOT_MODEL'] ?? 'claude-sonnet-4';
+const DEFAULT_MODEL = process.env['COPILOT_MODEL'] ?? 'gpt-5';
 // Default: 15 minutes for a single turn. Bigger repos with multi-file changes
 // can take 8-10+ minutes once the agent is reading files itself.
 const TIMEOUT_MS = parseInt(process.env['AGENT_LOOP_TIMEOUT_MS'] ?? '900000', 10);
@@ -83,6 +83,8 @@ interface TurnCallbacks {
  */
 export interface AgentSession {
   workspaceRoot: string;
+  /** Model id used to create this SDK session (e.g. "gpt-5", "claude-sonnet-4.5"). */
+  model: string;
   /** @internal */
   _session: CopilotSession;
   /** @internal mutable so callers can swap log/event callbacks per turn. */
@@ -474,7 +476,10 @@ const noEvent: ToolEventFn = () => {};
  * The session is left connected so subsequent {@link runAgentTurn} calls
  * accumulate conversation history.
  */
-export async function createAgentSession(workspaceRoot: string): Promise<AgentSession> {
+export async function createAgentSession(
+  workspaceRoot: string,
+  modelOverride?: string,
+): Promise<AgentSession> {
   const client = await getCopilotClient();
   // Mutable callbacks ref so per-turn callers can swap their log destination
   // without recreating the session (and losing conversation memory).
@@ -483,14 +488,15 @@ export async function createAgentSession(workspaceRoot: string): Promise<AgentSe
     toolEvent: noEvent,
     toolCount: 0,
   };
+  const model = modelOverride && modelOverride.trim() ? modelOverride.trim() : DEFAULT_MODEL;
   const session = await client.createSession({
-    model: MODEL,
+    model,
     workingDirectory: workspaceRoot,
     enableConfigDiscovery: true, // auto-load .mcp.json + skills from target repo
     onPermissionRequest: approveAll,
     onEvent: makeEventHandler(callbacks),
   });
-  return { workspaceRoot, _session: session, _callbacks: callbacks };
+  return { workspaceRoot, _session: session, _callbacks: callbacks, model };
 }
 
 /**
