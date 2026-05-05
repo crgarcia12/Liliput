@@ -2,7 +2,8 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import type { Server as SocketServer } from 'socket.io';
 import type { CreateTaskRequest, ChatRequest, ModelsResponse } from '../../../shared/types/index.js';
-import { MODEL_OPTIONS, DEFAULT_MODEL_ID } from '../../../shared/types/index.js';
+import { DEFAULT_MODEL_ID } from '../../../shared/types/index.js';
+import { listAvailableModels } from '../engine/copilot-client.js';
 import * as store from '../stores/task-store.js';
 import * as wsStore from '../stores/workstream-store.js';
 import { generateSpec as defaultGenerateSpec, type SpecGenerator } from '../engine/spec-generator.js';
@@ -88,15 +89,20 @@ export function createTasksRouter(
         return;
       }
 
-      // Validate model id against the curated list (if provided). Reject
+      // Validate model id against the live SDK list (if provided). Reject
       // unknown ids loudly so typos don't silently fall through to a SDK
-      // session that may then take 30s to fail.
-      if (model && !MODEL_OPTIONS.some((m) => m.id === model)) {
-        res.status(400).json({
-          error: `Unknown model: ${model}. Allowed: ${MODEL_OPTIONS.map((m) => m.id).join(', ')}`,
-          field: 'model',
-        });
-        return;
+      // session that may then take 30s to fail. We re-fetch (cached for 5min)
+      // from `client.listModels()` so this stays accurate as Copilot ships new
+      // models — the curated static list is only a fallback.
+      if (model) {
+        const { models } = await listAvailableModels();
+        if (!models.some((m) => m.id === model)) {
+          res.status(400).json({
+            error: `Unknown model: ${model}. Allowed: ${models.map((m) => m.id).join(', ')}`,
+            field: 'model',
+          });
+          return;
+        }
       }
 
       // Fail loudly on typoed / inaccessible repos. Without this an invalid
@@ -155,13 +161,23 @@ export function createTasksRouter(
     }
   });
 
-  // GET /api/models — list available Copilot SDK models for the picker
-  router.get('/api/models', (_req: Request, res: Response) => {
-    const body: ModelsResponse = {
-      options: MODEL_OPTIONS,
-      default: DEFAULT_MODEL_ID,
-    };
-    res.json(body);
+  // GET /api/models — list available Copilot SDK models for the picker.
+  // Pulled from `client.listModels()` (5-min cache). Falls back to a small
+  // static list when the SDK is unreachable.
+  router.get('/api/models', async (_req: Request, res: Response) => {
+    try {
+      const { models, source } = await listAvailableModels();
+      const body: ModelsResponse & { source: string } = {
+        options: models,
+        default: models.some((m) => m.id === DEFAULT_MODEL_ID) ? DEFAULT_MODEL_ID : (models[0]?.id ?? DEFAULT_MODEL_ID),
+        source,
+      };
+      res.json(body);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error({ err: message }, 'Failed to list models');
+      res.status(500).json({ error: 'Failed to list models', details: message });
+    }
   });
 
   // GET /api/tasks — list all tasks
@@ -380,7 +396,7 @@ export function createTasksRouter(
   // Only takes effect on the NEXT agent turn (we don't kill the in-flight SDK
   // session — that would lose context and is rarely what the operator wants).
   // Allowed in any non-terminal status; rejected on `deleting`.
-  router.patch('/api/tasks/:id/model', (req: Request, res: Response) => {
+  router.patch('/api/tasks/:id/model', async (req: Request, res: Response) => {
     try {
       const task = store.getTask(req.params['id'] as string);
       if (!task || task.status === 'deleting') {
@@ -393,9 +409,10 @@ export function createTasksRouter(
         return;
       }
       const trimmed = model.trim();
-      if (!MODEL_OPTIONS.some((m) => m.id === trimmed)) {
+      const { models } = await listAvailableModels();
+      if (!models.some((m) => m.id === trimmed)) {
         res.status(400).json({
-          error: `Unknown model: ${trimmed}. Allowed: ${MODEL_OPTIONS.map((m) => m.id).join(', ')}`,
+          error: `Unknown model: ${trimmed}. Allowed: ${models.map((m) => m.id).join(', ')}`,
           field: 'model',
         });
         return;

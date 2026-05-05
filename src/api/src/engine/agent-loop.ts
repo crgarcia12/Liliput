@@ -29,7 +29,7 @@ import { getCopilotClient } from './copilot-client.js';
 import { buildDeployContract, type DeployContractContext } from './liliput-deploy-contract.js';
 import { logger } from '../logger.js';
 
-const DEFAULT_MODEL = process.env['COPILOT_MODEL'] ?? 'gpt-5';
+const DEFAULT_MODEL = process.env['COPILOT_MODEL'] ?? 'claude-sonnet-4';
 // Default: 15 minutes for a single turn. Bigger repos with multi-file changes
 // can take 8-10+ minutes once the agent is reading files itself.
 const TIMEOUT_MS = parseInt(process.env['AGENT_LOOP_TIMEOUT_MS'] ?? '900000', 10);
