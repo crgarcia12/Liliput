@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { ChatMessage, ChatRole } from '@shared/types';
+import AutoGrowTextarea from './AutoGrowTextarea';
 
 interface TerminalProps {
   messages: ChatMessage[];
@@ -40,7 +41,7 @@ function getRoleStyle(role: ChatRole): { color: string; prefix: string } {
 export default function Terminal({ messages, onSend, isWorking = false }: TerminalProps) {
   const [input, setInput] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const allMessages = [WELCOME_MESSAGE, ...messages];
 
@@ -50,12 +51,16 @@ export default function Terminal({ messages, onSend, isWorking = false }: Termin
     }
   }, [allMessages.length]);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = input.trim();
+  const submit = (raw: string) => {
+    const trimmed = raw.trim();
     if (!trimmed) return;
     onSend(trimmed);
     setInput('');
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    submit(input);
   };
 
   const handleContainerClick = () => {
@@ -112,15 +117,16 @@ export default function Terminal({ messages, onSend, isWorking = false }: Termin
       </div>
 
       {/* Input */}
-      <form onSubmit={handleSubmit} className="flex items-center border-t border-[#1a1a2e] bg-[#0d0d14]">
-        <span className="text-green-400 pl-4 text-sm font-mono">gulliver&gt;&nbsp;</span>
-        <input
+      <form onSubmit={handleSubmit} className="flex items-start border-t border-[#1a1a2e] bg-[#0d0d14]">
+        <span className="text-green-400 pl-4 pt-3 text-sm font-mono shrink-0">gulliver&gt;&nbsp;</span>
+        <AutoGrowTextarea
           ref={inputRef}
-          type="text"
           value={input}
-          onChange={(e) => setInput(e.target.value)}
-          className="flex-1 bg-transparent text-gray-200 text-sm font-mono py-3 pr-4 outline-none placeholder-gray-600"
-          placeholder="Tell me what to build..."
+          onValueChange={setInput}
+          onSubmit={submit}
+          maxHeightPx={240}
+          className="flex-1 resize-none bg-transparent text-gray-200 text-sm font-mono py-3 pr-4 outline-none placeholder-gray-600 leading-5"
+          placeholder="Tell me what to build... (Shift+Enter for newline)"
           autoFocus
         />
       </form>
