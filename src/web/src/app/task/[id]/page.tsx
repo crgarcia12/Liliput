@@ -9,7 +9,7 @@ import ActivityLog from '../../../components/ActivityLog';
 import PhaseStepper from '../../../components/PhaseStepper';
 import { useSocket } from '../../../hooks/useSocket';
 import { useTasks } from '../../../hooks/useTasks';
-import type { Task, ChatMessage, Agent } from '@shared/types';
+import type { Task, ChatMessage, Agent, ModelOption, ModelsResponse } from '@shared/types';
 
 const LiliputIsland = dynamic(() => import('../../../components/LiliputIsland'), {
   ssr: false,
@@ -28,7 +28,7 @@ export default function TaskPage() {
 
   const { connected, agentEvents, chatMessages: socketMessages, activity, joinTask, leaveTask } =
     useSocket();
-  const { getTask, sendMessage, shipTask, discardTask } = useTasks();
+  const { getTask, sendMessage, shipTask, discardTask, setTaskModel } = useTasks();
 
   const [task, setTask] = useState<Task | null>(null);
   const [localMessages, setLocalMessages] = useState<ChatMessage[]>([]);
@@ -36,6 +36,26 @@ export default function TaskPage() {
   const [error, setError] = useState<string | null>(null);
   const [actionPending, setActionPending] = useState<'ship' | 'discard' | 'approve' | null>(null);
   const [showSpec, setShowSpec] = useState(true);
+  const [modelOptions, setModelOptions] = useState<readonly ModelOption[]>([]);
+  const [modelDefault, setModelDefault] = useState<string>('');
+  const [modelPending, setModelPending] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/models')
+      .then((r) => (r.ok ? (r.json() as Promise<ModelsResponse>) : null))
+      .then((data) => {
+        if (cancelled || !data) return;
+        setModelOptions(data.options);
+        setModelDefault(data.default);
+      })
+      .catch(() => {
+        // Non-fatal — picker just stays hidden
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Only swap task / chat state when something the user can see has actually
   // changed. Without this, the 4s poll + activity-event refetch (which fires
@@ -291,6 +311,36 @@ export default function TaskPage() {
             <span className="text-xs text-gray-500 font-mono truncate">
               📦 {task.repository}@{task.baseBranch ?? 'main'}
             </span>
+          )}
+          {task && task.status !== 'completed' && task.status !== 'deleting' && modelOptions.length > 0 && (
+            <label className="flex items-center gap-1 text-xs">
+              <span className="text-gray-500">🧠</span>
+              <select
+                value={task.model ?? modelDefault}
+                disabled={modelPending}
+                onChange={async (e) => {
+                  const next = e.target.value;
+                  if (!task || next === (task.model ?? modelDefault)) return;
+                  setModelPending(true);
+                  try {
+                    const updated = await setTaskModel(task.id, next);
+                    setTask(updated);
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : 'Failed to switch model');
+                  } finally {
+                    setModelPending(false);
+                  }
+                }}
+                className="bg-[#050510] border border-[#1a1a2e] rounded px-1.5 py-0.5 text-gray-300 focus:outline-none focus:border-cyan-500 disabled:opacity-50"
+                title="Copilot SDK model — applies on next agent turn"
+              >
+                {modelOptions.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </label>
           )}
           {task?.devUrl && (
             <a

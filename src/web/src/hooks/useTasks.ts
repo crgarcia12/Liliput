@@ -26,6 +26,7 @@ interface UseTasksReturn {
   approveSpec: (taskId: string) => Promise<void>;
   shipTask: (taskId: string) => Promise<Task>;
   discardTask: (taskId: string) => Promise<Task>;
+  setTaskModel: (taskId: string, model: string) => Promise<Task>;
 }
 
 async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {
@@ -97,6 +98,14 @@ export function useTasks(): UseTasksReturn {
     return data.task;
   }, []);
 
-  return { createTask, getTasks, getTask, sendMessage, approveSpec, shipTask, discardTask };
+  const setTaskModel = useCallback(async (taskId: string, model: string): Promise<Task> => {
+    const data = await apiRequest<TaskDetailResponse>(`/api/tasks/${taskId}/model`, {
+      method: 'PATCH',
+      body: JSON.stringify({ model }),
+    });
+    return data.task;
+  }, []);
+
+  return { createTask, getTasks, getTask, sendMessage, approveSpec, shipTask, discardTask, setTaskModel };
 }
 

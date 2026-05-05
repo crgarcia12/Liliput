@@ -132,6 +132,54 @@ describe('GET /api/models', () => {
   });
 });
 
+describe('PATCH /api/tasks/:id/model', () => {
+  it('should switch a live task to a valid model and emit a system chat message', async () => {
+    const { app } = buildApp();
+    const created = await request(app)
+      .post('/api/tasks')
+      .send({ title: 'T', description: 'D', model: 'claude-sonnet-4' });
+    expect(created.status).toBe(201);
+    const id = created.body.task.id as string;
+
+    const res = await request(app)
+      .patch(`/api/tasks/${id}/model`)
+      .send({ model: 'gpt-5-mini' });
+    expect(res.status).toBe(200);
+    expect(res.body.task.model).toBe('gpt-5-mini');
+    // System message about the switch should be appended
+    const last = res.body.task.chatHistory[res.body.task.chatHistory.length - 1];
+    expect(last.role).toBe('system');
+    expect(last.content).toContain('gpt-5-mini');
+  });
+
+  it('should reject unknown models with 400', async () => {
+    const { app } = buildApp();
+    const created = await request(app).post('/api/tasks').send({ title: 'T', description: 'D' });
+    const id = created.body.task.id as string;
+    const res = await request(app)
+      .patch(`/api/tasks/${id}/model`)
+      .send({ model: 'made-up-llm' });
+    expect(res.status).toBe(400);
+    expect(res.body.field).toBe('model');
+  });
+
+  it('should 404 when the task does not exist', async () => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .patch('/api/tasks/nonexistent/model')
+      .send({ model: 'gpt-5' });
+    expect(res.status).toBe(404);
+  });
+
+  it('should 400 when model is missing from the body', async () => {
+    const { app } = buildApp();
+    const created = await request(app).post('/api/tasks').send({ title: 'T', description: 'D' });
+    const id = created.body.task.id as string;
+    const res = await request(app).patch(`/api/tasks/${id}/model`).send({});
+    expect(res.status).toBe(400);
+  });
+});
+
 describe('GET /api/tasks', () => {
   it('should list tasks', async () => {
     const { app } = buildApp();
