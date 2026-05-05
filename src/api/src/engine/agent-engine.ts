@@ -2281,7 +2281,7 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   completePhase(io, taskId, deployer);
 
   const devUrl = `${PUBLIC_BASE_URL}${live.pathPrefix}/`;
-  setTaskStatus(io, taskId, 'review', { devUrl });
+  setTaskStatus(io, taskId, 'review', { devUrl, devNamespace: live.namespace });
 
   const liliputMsg = store.addChatMessage(
     taskId,
