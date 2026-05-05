@@ -47,6 +47,8 @@ import { syncRoutes, type DevRoute } from './nginx-patcher.js';
 import { openPullRequest, markPullRequestReady, closePullRequest } from './github-pr.js';
 import { pathPrefixFor, writeContractIntoWorkspace } from './liliput-deploy-contract.js';
 import { writeAcceptanceFeature } from './acceptance-feature-writer.js';
+import { gateVerdict } from './autopilot.js';
+import { latestVerdictForTask } from '../stores/verdict-store.js';
 
 const ACR_NAME = process.env['ACR_NAME'] ?? '';
 const PUBLIC_BASE_URL = process.env['LILIPUT_PUBLIC_URL'] ?? 'http://4.165.50.135';
@@ -62,6 +64,58 @@ const MAX_DEPLOY_FIX_ATTEMPTS = parseInt(process.env['MAX_DEPLOY_FIX_ATTEMPTS'] 
 const MAX_VALIDATE_ATTEMPTS = parseInt(process.env['MAX_VALIDATE_ATTEMPTS'] ?? '30', 10);
 /** How long to wait between probes for the very first validation (lets app boot). */
 const VALIDATE_INITIAL_SETTLE_MS = parseInt(process.env['VALIDATE_INITIAL_SETTLE_MS'] ?? '8000', 10);
+
+/**
+ * Shadow autopilot gate. Logs (does NOT enforce) what `gateVerdict` would
+ * decide given the agent's most recent VERDICT and the current pipeline
+ * outcome. Pure observability — when this consistently agrees with the
+ * existing bounded-loop decisions, we'll flip it to enforcing in the
+ * mega-prompt PR.
+ */
+function shadowGateLog(
+  taskId: string,
+  outcome: { deployHealthy: boolean; exitReason: 'healthy' | 'exhausted' },
+): void {
+  try {
+    const v = latestVerdictForTask(taskId);
+    if (!v) {
+      logger.info(
+        { taskId, exitReason: outcome.exitReason, deployHealthy: outcome.deployHealthy },
+        'autopilot/shadow-gate: no verdict on file',
+      );
+      return;
+    }
+    const reject = gateVerdict({
+      verdict: { status: v.status, reason: v.reason ?? '', raw: v.raw ?? '' },
+      objective: {
+        // We do not run unit tests in the validate loop itself; checksRan.tests=false
+        // means the gate will reject on a 'done' verdict here, which is correct
+        // strict behaviour. The mega-prompt PR will pipe real test outcomes in.
+        testsExitCode: null,
+        deployHealthy: outcome.deployHealthy,
+        gherkinAllPassed: false,
+        checksRan: { tests: false, deploy: true, gherkin: false },
+      },
+    });
+    logger.info(
+      {
+        taskId,
+        verdict: v.status,
+        verdictReason: v.reason,
+        exitReason: outcome.exitReason,
+        deployHealthy: outcome.deployHealthy,
+        wouldAccept: reject === null,
+        rejectReason: reject,
+      },
+      'autopilot/shadow-gate decision',
+    );
+  } catch (err) {
+    logger.warn(
+      { taskId, err: err instanceof Error ? err.message : String(err) },
+      'autopilot/shadow-gate failed (non-fatal)',
+    );
+  }
+}
 
 interface DevEnvRecord {
   taskId: string;
@@ -1179,6 +1233,7 @@ async function validateAndHealLoop(ctx: ValidateContext): Promise<ValidateOutcom
     if (result.healthy) {
       logPhase(io, taskId, tester, 'info', `✅ Healthy: ${result.summary}`);
       logger.info({ taskId, attempt, http: result.httpStatus }, 'validate probe healthy');
+      shadowGateLog(taskId, { deployHealthy: true, exitReason: 'healthy' });
       completePhase(io, taskId, tester);
       const okMsg = store.addChatMessage(
         taskId,
@@ -1211,6 +1266,7 @@ async function validateAndHealLoop(ctx: ValidateContext): Promise<ValidateOutcom
         'warn',
         `Exhausted ${MAX_VALIDATE_ATTEMPTS} validation attempts — stopping the heal loop. Chat to retry.`,
       );
+      shadowGateLog(taskId, { deployHealthy: false, exitReason: 'exhausted' });
       completePhase(io, taskId, tester);
       const stuckMsg = store.addChatMessage(
         taskId,
