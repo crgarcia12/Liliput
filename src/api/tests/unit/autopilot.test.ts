@@ -113,7 +113,19 @@ describe('gateVerdict', () => {
         checksRan: { tests: false, deploy: true, gherkin: true },
       },
     });
-    expect(r).toContain('tests were never run');
+    // Tests-not-run is now allowed (deploy is the ground truth).
+    expect(r).toBeNull();
+  });
+
+  it('rejects done when deploy never verified', () => {
+    const r = gateVerdict({
+      verdict: { status: 'done', reason: 'ok', raw: 'VERDICT: done' },
+      objective: {
+        ...allGood,
+        checksRan: { tests: true, deploy: false, gherkin: true },
+      },
+    });
+    expect(r).toContain('deploy was never verified');
   });
 
   it('passes through blocked verdicts without gating', () => {

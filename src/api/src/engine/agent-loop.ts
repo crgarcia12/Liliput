@@ -116,6 +116,13 @@ export interface RunAgentTurnOptions {
    * Useful for ops turns that need longer than 15 minutes for build+fix loops.
    */
   timeoutMs?: number;
+  /**
+   * Optional recap of prior conversation. Used after a session resurrection
+   * (the SDK lost its memory due to pod restart) to restore continuity. The
+   * agent gets a `## Recap of previous session` block before the new
+   * instruction so it knows what was already discussed/attempted.
+   */
+  recap?: string;
   onLog?: LogFn;
   onToolEvent?: ToolEventFn;
 }
@@ -245,8 +252,23 @@ function buildFollowUpPrompt(opts: RunAgentTurnOptions): string {
         '',
       ].join('\n')
     : '';
+  const recapBlock = opts.recap
+    ? [
+        '## Recap of previous session',
+        '',
+        'Your SDK session was reset (likely a pod restart) so you have no in-memory',
+        'history of our previous conversation. Below is a transcript of the last',
+        'messages exchanged before the reset. Treat this as your memory:',
+        '',
+        opts.recap,
+        '',
+        '---',
+        '',
+      ].join('\n')
+    : '';
   return [
     contractBlock,
+    recapBlock,
     'Follow-up instruction from the user. The previous turn already produced a',
     'commit and a draft PR; new edits will be appended to the same branch.',
     'Continue editing the same workspace. Do not commit or push — Liliput handles git.',

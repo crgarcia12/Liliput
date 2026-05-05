@@ -143,6 +143,21 @@ export interface VerdictGateInput {
   };
 }
 
+/**
+ * Server-side gate. The agent's `VERDICT: done` claim is REJECTED unless the
+ * **deploy is healthy** (the only hard requirement — a "done" claim without a
+ * working preview is fraudulent). Test signals are softer:
+ *
+ *  - tests RAN and FAILED → reject
+ *  - tests NEVER RAN → allow but caller should log a warning (we want the
+ *    autopilot loop to deploy and validate even when the agent skipped unit
+ *    tests; the live preview probe is the ultimate truth)
+ *  - gherkin RAN and FAILED → reject
+ *  - gherkin NEVER RAN → allow (specs without acceptance.feature are common)
+ *
+ * If the deploy itself was never run (e.g. agent claimed done before pushing),
+ * that's also a hard reject.
+ */
 export function gateVerdict(input: VerdictGateInput): string | null {
   const { verdict, objective } = input;
   if (verdict.status !== 'done') return null; // blocked/continue don't need gating
@@ -152,9 +167,8 @@ export function gateVerdict(input: VerdictGateInput): string | null {
     failures.push(
       `tests are red (exit code ${objective.testsExitCode ?? 'unknown'})`,
     );
-  } else if (!objective.checksRan.tests) {
-    failures.push('tests were never run — cannot accept "done"');
   }
+  // tests never run is allowed — the live deploy probe is the ground truth.
   if (objective.checksRan.deploy && !objective.deployHealthy) {
     failures.push('deploy is not healthy');
   } else if (!objective.checksRan.deploy) {
