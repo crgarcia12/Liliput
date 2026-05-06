@@ -8,7 +8,7 @@ import {
   getAuthStatus,
 } from './auth-status.js';
 import { extractRepoContext, type ProgressStage as RepoStage } from './repo-context.js';
-import { deriveReasoningEffort } from '../../../shared/types/index.js';
+import { effectiveReasoningEffort, deriveReasoningEffort } from '../../../shared/types/index.js';
 import { logger } from '../logger.js';
 
 const DEFAULT_MODEL = process.env['COPILOT_MODEL'] ?? 'claude-sonnet-4';
@@ -207,7 +207,7 @@ export async function generateSpec(
   }
   const prompt = buildPrompt(title, description, repoBlob);
   const model = context?.model && context.model.trim() ? context.model.trim() : DEFAULT_MODEL;
-  const reasoningEffort = context?.reasoningEffort ?? deriveReasoningEffort(model);
+  const reasoningEffort = effectiveReasoningEffort(model, context?.reasoningEffort);
 
   try {
     progress('connecting-llm', `model: ${model}`);
