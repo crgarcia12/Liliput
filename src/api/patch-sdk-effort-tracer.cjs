@@ -23,20 +23,38 @@ if (src.indexOf('[effort-trace-sdk-patch]') !== -1) {
 }
 
 // Build replacement: `o=...,_trace=IIFE(),s=...`. The IIFE writes a JSON
-// line to stderr with the reasoning_effort value about to be used.
+// line to stderr with the reasoning_effort value about to be used AND
+// applies a force-override from /tmp/liliput-current-effort if present.
+//
+// Why the file override: the SDK's setModel(...,{reasoningEffort}) is
+// silently no-op'd by an internal validator for some model families
+// (e.g. claude-opus-4.7-high). The force-override is the bulletproof
+// last line of defense. The orchestrator writes the per-task effort to
+// /tmp/liliput-current-effort right before each turn.
+//
 // "\n" below is a real 2-char escape inside the source we're WRITING — when
 // node parses the patched app.js, "\n" will be a single newline char.
 const trace =
-  '(function(){try{process.stderr.write(JSON.stringify({' +
-  'level:30,' +
-  'time:Date.now(),' +
-  'pid:process.pid,' +
-  'proc:"sdk-patch",' +
-  'reasoning_effort:o,' +
-  'defaultReasoningEffort:this.clientOptions&&this.clientOptions.defaultReasoningEffort,' +
-  'clientOptionsModel:this.clientOptions&&this.clientOptions.model,' +
-  'msg:"[effort-trace-sdk-patch] getCompletionOptions"' +
-  '})+"\\n")}catch(_){}return 0}).call(this)';
+  '(function(){' +
+    'try{' +
+      'var _fs=require("fs");' +
+      'try{' +
+        'var _f=_fs.readFileSync("/tmp/liliput-current-effort","utf8").trim();' +
+        'if(_f)o=_f;' +
+      '}catch(_){}' +
+      'process.stderr.write(JSON.stringify({' +
+        'level:30,' +
+        'time:Date.now(),' +
+        'pid:process.pid,' +
+        'proc:"sdk-patch",' +
+        'reasoning_effort:o,' +
+        'defaultReasoningEffort:this.clientOptions&&this.clientOptions.defaultReasoningEffort,' +
+        'clientOptionsModel:this.clientOptions&&this.clientOptions.model,' +
+        'msg:"[effort-trace-sdk-patch] getCompletionOptions"' +
+      '})+"\\n");' +
+    '}catch(_){}' +
+    'return 0;' +
+  '}).call(this)';
 
 const replacement =
   'o=r?.reasoningEffort??this.clientOptions.defaultReasoningEffort,_trace=' +
