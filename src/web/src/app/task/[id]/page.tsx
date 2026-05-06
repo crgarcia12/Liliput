@@ -28,7 +28,7 @@ export default function TaskPage() {
 
   const { connected, agentEvents, chatMessages: socketMessages, activity, joinTask, leaveTask } =
     useSocket();
-  const { getTask, sendMessage, shipTask, discardTask, setTaskModel } = useTasks();
+  const { getTask, sendMessage, shipTask, discardTask, setTaskModel, setTaskReasoningEffort } = useTasks();
 
   const [task, setTask] = useState<Task | null>(null);
   const [localMessages, setLocalMessages] = useState<ChatMessage[]>([]);
@@ -39,6 +39,7 @@ export default function TaskPage() {
   const [modelOptions, setModelOptions] = useState<readonly ModelOption[]>([]);
   const [modelDefault, setModelDefault] = useState<string>('');
   const [modelPending, setModelPending] = useState(false);
+  const [reasoningPending, setReasoningPending] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -339,6 +340,36 @@ export default function TaskPage() {
                     {m.label}
                   </option>
                 ))}
+              </select>
+            </label>
+          )}
+          {task && task.status !== 'completed' && task.status !== 'deleting' && (
+            <label className="flex items-center gap-1 text-xs">
+              <span className="text-gray-500">⚙</span>
+              <select
+                value={task.reasoningEffort ?? ''}
+                disabled={reasoningPending}
+                onChange={async (e) => {
+                  const next = e.target.value as '' | 'low' | 'medium' | 'high' | 'xhigh';
+                  if (!task || next === (task.reasoningEffort ?? '')) return;
+                  setReasoningPending(true);
+                  try {
+                    const updated = await setTaskReasoningEffort(task.id, next);
+                    setTask(updated);
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : 'Failed to switch reasoning effort');
+                  } finally {
+                    setReasoningPending(false);
+                  }
+                }}
+                className="bg-[#050510] border border-[#1a1a2e] rounded px-1.5 py-0.5 text-gray-300 focus:outline-none focus:border-cyan-500 disabled:opacity-50"
+                title="Reasoning effort — applies on next agent turn. Some models (e.g. claude-opus-4.7-xhigh) only accept ONE value; auto picks it from the model id suffix."
+              >
+                <option value="">auto</option>
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+                <option value="xhigh">xhigh</option>
               </select>
             </label>
           )}

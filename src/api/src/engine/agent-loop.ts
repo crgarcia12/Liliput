@@ -500,6 +500,20 @@ export async function createAgentSession(
     onPermissionRequest: approveAll,
     onEvent: makeEventHandler(callbacks),
   });
+  // Belt-and-suspenders: some models (e.g. claude-opus-4.7-xhigh) reject the
+  // SDK's per-request default reasoning_effort="medium" even when we passed
+  // the correct value to createSession. Re-issue it via the documented
+  // setModel switcher so the per-turn CAPI call carries the right value.
+  if (reasoningEffort) {
+    try {
+      await session.setModel(model, { reasoningEffort });
+    } catch (err) {
+      logger.warn(
+        { err: err instanceof Error ? err.message : String(err), model, reasoningEffort },
+        'agent-loop: setModel(reasoningEffort) failed — continuing with createSession value',
+      );
+    }
+  }
   return { workspaceRoot, _session: session, _callbacks: callbacks, model };
 }
 

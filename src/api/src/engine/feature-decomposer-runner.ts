@@ -58,6 +58,16 @@ export async function runFeatureDecomposer(
       ...(reasoningEffort ? { reasoningEffort } : {}),
       onPermissionRequest: approveAll,
     });
+    if (reasoningEffort) {
+      try {
+        await session.setModel(model, { reasoningEffort });
+      } catch (err) {
+        logger.warn(
+          { err: err instanceof Error ? err.message : String(err), model, reasoningEffort },
+          'decomposer: setModel(reasoningEffort) failed — continuing',
+        );
+      }
+    }
     try {
       const result = await session.sendAndWait({ prompt }, DEFAULT_TIMEOUT_MS);
       const content = result?.data?.content?.trim();

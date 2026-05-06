@@ -28,6 +28,7 @@ interface UseTasksReturn {
   shipTask: (taskId: string) => Promise<Task>;
   discardTask: (taskId: string) => Promise<Task>;
   setTaskModel: (taskId: string, model: string) => Promise<Task>;
+  setTaskReasoningEffort: (taskId: string, reasoningEffort: '' | 'low' | 'medium' | 'high' | 'xhigh') => Promise<Task>;
 }
 
 async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {
@@ -108,6 +109,23 @@ export function useTasks(): UseTasksReturn {
     return data.task;
   }, []);
 
-  return { createTask, getTasks, getTask, sendMessage, approveSpec, shipTask, discardTask, setTaskModel };
+  const setTaskReasoningEffort = useCallback(
+    async (
+      taskId: string,
+      reasoningEffort: '' | 'low' | 'medium' | 'high' | 'xhigh',
+    ): Promise<Task> => {
+      const data = await apiRequest<TaskDetailResponse>(
+        `/api/tasks/${taskId}/reasoning-effort`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ reasoningEffort: reasoningEffort === '' ? null : reasoningEffort }),
+        },
+      );
+      return data.task;
+    },
+    [],
+  );
+
+  return { createTask, getTasks, getTask, sendMessage, approveSpec, shipTask, discardTask, setTaskModel, setTaskReasoningEffort };
 }
 
