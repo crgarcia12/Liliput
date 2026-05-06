@@ -634,12 +634,35 @@ interface BuildOutcome {
 }
 
 /**
+ * Detects errors that are transient infrastructure problems (not bugs in the
+ * user's code or Dockerfile) and should trigger a plain retry instead of the
+ * LLM fixer. The classic case is Docker Hub's anonymous-pull rate limit
+ * hitting an ACR Build agent that shares an IP with thousands of other
+ * tenants — nothing about the user's repo is wrong, the fixer can't help,
+ * and a different agent IP a minute later usually succeeds.
+ */
+function isTransientBuildError(msg: string): boolean {
+  const lower = msg.toLowerCase();
+  return (
+    lower.includes('toomanyrequests') ||
+    lower.includes('pull rate limit') ||
+    lower.includes('429 too many requests') ||
+    lower.includes('i/o timeout') ||
+    lower.includes('temporary failure resolving')
+  );
+}
+
+const TRANSIENT_BUILD_RETRIES = 3;
+const TRANSIENT_BUILD_BACKOFF_MS = 30_000;
+
+/**
  * Run `acrBuild` with fixer-driven recovery. On failure: spawn fixer,
  * commit/push any edits, retry. Returns the image ref of the successful build.
  */
 async function buildWithFixer(ctx: BuildContext): Promise<BuildOutcome> {
   let sha = ctx.initialSha;
   let lastErr: unknown;
+  let transientRetries = 0;
   for (let attempt = 1; attempt <= MAX_BUILD_FIX_ATTEMPTS + 1; attempt++) {
     const tag = sha.substring(0, 12);
     try {
@@ -679,6 +702,24 @@ async function buildWithFixer(ctx: BuildContext): Promise<BuildOutcome> {
         undefined,
         errMsg,
       );
+
+      // Transient infrastructure failure (e.g. Docker Hub rate limit on a
+      // shared ACR build agent IP). Retry with backoff WITHOUT involving the
+      // LLM fixer — there's nothing for it to fix.
+      if (isTransientBuildError(errMsg) && transientRetries < TRANSIENT_BUILD_RETRIES) {
+        transientRetries++;
+        logPhase(
+          ctx.io,
+          ctx.taskId,
+          ctx.builderAgentId,
+          'info',
+          `Transient build error detected (Docker Hub rate limit / network); retrying in ${Math.round(TRANSIENT_BUILD_BACKOFF_MS / 1000)}s without invoking the fixer (transient retry ${transientRetries}/${TRANSIENT_BUILD_RETRIES})`,
+        );
+        await new Promise<void>((resolve) => setTimeout(resolve, TRANSIENT_BUILD_BACKOFF_MS));
+        attempt--; // don't consume a fixer attempt for a transient retry
+        continue;
+      }
+
       if (attempt > MAX_BUILD_FIX_ATTEMPTS) break;
 
       // Spawn a fixer pseudo-agent so the user sees recovery in the UI.
