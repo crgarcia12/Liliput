@@ -5,7 +5,11 @@ const fs = require('fs');
 const path = require('path');
 
 const target = process.argv[2] || '/build/src/api/node_modules/@github/copilot/app.js';
-const needle = 'if(o)return{reasoning_effort:o,';
+// Inject inside the existing `let n=...,o=...,s=...;` declaration as an extra
+// binding `_trace=IIFE()`. This is a no-op for SDK semantics (extra unused
+// local) but lets us emit the actual reasoning_effort value to stderr right
+// before the request body is built.
+const needle = 'o=r?.reasoningEffort??this.clientOptions.defaultReasoningEffort,s=this.clientOptions';
 const src = fs.readFileSync(target, 'utf8');
 
 if (src.indexOf(needle) === -1) {
@@ -18,11 +22,12 @@ if (src.indexOf('[effort-trace-sdk-patch]') !== -1) {
   process.exit(0);
 }
 
-// The replacement is built as a JS string. The "\n" below is a real
-// 2-char escape inside the source we're WRITING — when node parses the
-// patched app.js, "\n" will mean a single newline char in the string literal.
+// Build replacement: `o=...,_trace=IIFE(),s=...`. The IIFE writes a JSON
+// line to stderr with the reasoning_effort value about to be used.
+// "\n" below is a real 2-char escape inside the source we're WRITING — when
+// node parses the patched app.js, "\n" will be a single newline char.
 const trace =
-  'try{process.stderr.write(JSON.stringify({' +
+  '(function(){try{process.stderr.write(JSON.stringify({' +
   'level:30,' +
   'time:Date.now(),' +
   'pid:process.pid,' +
@@ -31,9 +36,12 @@ const trace =
   'defaultReasoningEffort:this.clientOptions&&this.clientOptions.defaultReasoningEffort,' +
   'clientOptionsModel:this.clientOptions&&this.clientOptions.model,' +
   'msg:"[effort-trace-sdk-patch] getCompletionOptions"' +
-  '})+"\\n")}catch(_){}';
+  '})+"\\n")}catch(_){}return 0}).call(this)';
 
-const replacement = 'if(o){' + trace + 'return{reasoning_effort:o,';
+const replacement =
+  'o=r?.reasoningEffort??this.clientOptions.defaultReasoningEffort,_trace=' +
+  trace +
+  ',s=this.clientOptions';
 const patched = src.replace(needle, replacement);
 
 fs.writeFileSync(target, patched);
