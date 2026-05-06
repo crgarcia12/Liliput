@@ -273,6 +273,19 @@ export function deriveReasoningEffort(modelId: string | undefined): ReasoningEff
   return undefined;
 }
 
+/** Resolve the EFFECTIVE reasoning effort to send to the SDK, given a model
+ *  id and the user's explicit preference. Models with a fixed effort baked
+ *  into their id (e.g. `*-xhigh`) ALWAYS win over user input — sending any
+ *  other value to those models triggers a 400. Otherwise the user choice is
+ *  honored (or undefined → SDK default). */
+export function effectiveReasoningEffort(
+  modelId: string | undefined,
+  userChoice: ReasoningEffort | undefined,
+): ReasoningEffort | undefined {
+  const fixed = deriveReasoningEffort(modelId);
+  return fixed ?? userChoice;
+}
+
 export interface ModelsResponse {
   options: readonly ModelOption[];
   default: string;
