@@ -15,7 +15,7 @@ export function getCopilotClient(): Promise<CopilotClient> {
   if (!clientPromise) {
     clientPromise = (async () => {
       const client = new CopilotClient({
-        logLevel: (process.env['COPILOT_LOG_LEVEL'] as 'error' | 'info' | 'debug' | 'none' | 'warning' | 'all' | undefined) ?? 'warning',
+        logLevel: (process.env['COPILOT_LOG_LEVEL'] as 'error' | 'info' | 'debug' | 'none' | 'warning' | 'all' | undefined) ?? 'debug',
       });
       await client.start();
       logger.info('Copilot SDK client started');
