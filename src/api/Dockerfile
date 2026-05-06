@@ -51,6 +51,12 @@ RUN apt-get update \
 COPY --from=deps  /build/src/api/node_modules ./node_modules
 COPY --from=build /build/src/api/dist          ./dist
 COPY --from=build /build/src/api/package.json  ./
+COPY src/api/preload-effort-tracer.cjs         ./preload-effort-tracer.cjs
+
+# Load the fetch tracer in BOTH the parent process and any node subprocess
+# the SDK spawns (subprocess inherits parent env). This is the only way to
+# capture reasoning_effort on the wire — the SDK's CLI runs in a child proc.
+ENV NODE_OPTIONS="--require /app/preload-effort-tracer.cjs"
 
 USER node
 EXPOSE 8080
