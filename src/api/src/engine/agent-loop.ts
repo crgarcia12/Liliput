@@ -86,6 +86,8 @@ export interface AgentSession {
   workspaceRoot: string;
   /** Model id used to create this SDK session (e.g. "gpt-5", "claude-sonnet-4.5"). */
   model: string;
+  /** Reasoning effort currently active on this session (after createSession + setModel). */
+  reasoningEffort?: ReasoningEffort;
   /** @internal */
   _session: CopilotSession;
   /** @internal mutable so callers can swap log/event callbacks per turn. */
@@ -514,7 +516,44 @@ export async function createAgentSession(
       );
     }
   }
-  return { workspaceRoot, _session: session, _callbacks: callbacks, model };
+  return { workspaceRoot, _session: session, _callbacks: callbacks, model, ...(reasoningEffort ? { reasoningEffort } : {}) };
+}
+
+/**
+ * Apply a runtime model and/or reasoning-effort change to an existing session.
+ * Used when the user switches the model or reasoning dropdown on a live task —
+ * we don't want to throw away the cached session (and its conversation memory),
+ * but we do need the next sendAndWait to use the new values.
+ *
+ * No-op if neither value differs from what the session already has.
+ */
+export async function applyModelChange(
+  handle: AgentSession,
+  nextModel: string | undefined,
+  nextReasoningEffort?: ReasoningEffort,
+): Promise<void> {
+  const desiredModel = nextModel && nextModel.trim() ? nextModel.trim() : DEFAULT_MODEL;
+  const desiredEffort = nextReasoningEffort ?? deriveReasoningEffort(desiredModel);
+  if (desiredModel === handle.model && desiredEffort === handle.reasoningEffort) {
+    return;
+  }
+  try {
+    await handle._session.setModel(
+      desiredModel,
+      desiredEffort ? { reasoningEffort: desiredEffort } : {},
+    );
+    handle.model = desiredModel;
+    if (desiredEffort) {
+      handle.reasoningEffort = desiredEffort;
+    } else {
+      delete handle.reasoningEffort;
+    }
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err), desiredModel, desiredEffort },
+      'agent-loop: applyModelChange failed — session keeps previous values',
+    );
+  }
 }
 
 /**
