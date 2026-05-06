@@ -40,6 +40,18 @@ export function createProjectsRouter(deps: ProjectsRouterDeps = {}): Router {
   router.post('/api/projects', async (req: Request, res: Response) => {
     try {
       const body = (req.body ?? {}) as CreateProjectBody;
+      logger.info(
+        {
+          path: '/api/projects',
+          name: body.name,
+          visibility: body.visibility,
+          initialBranch: body.initialBranch,
+          model: body.model,
+          reasoningEffort: body.reasoningEffort,
+          hasDescription: !!body.description,
+        },
+        'POST /api/projects received',
+      );
       const result = await bootstrapProject(
         {
           name: (body.name ?? '').trim(),
