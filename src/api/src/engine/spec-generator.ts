@@ -217,6 +217,16 @@ export async function generateSpec(
       ...(reasoningEffort ? { reasoningEffort } : {}),
       onPermissionRequest: approveAll,
     });
+    if (reasoningEffort) {
+      try {
+        await session.setModel(model, { reasoningEffort });
+      } catch (err) {
+        logger.warn(
+          { err: err instanceof Error ? err.message : String(err), model, reasoningEffort },
+          'spec-generator: setModel(reasoningEffort) failed — continuing',
+        );
+      }
+    }
 
     try {
       progress('drafting', `prompt: ${prompt.length} chars`);
