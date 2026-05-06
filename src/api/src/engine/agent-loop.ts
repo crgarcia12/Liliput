@@ -25,12 +25,45 @@
 
 import { approveAll } from '@github/copilot-sdk';
 import type { CopilotSession, SessionEvent } from '@github/copilot-sdk';
+import { writeFileSync } from 'node:fs';
 import { getCopilotClient } from './copilot-client.js';
 import { deriveReasoningEffort, type ReasoningEffort } from '../../../shared/types/index.js';
 import { buildDeployContract, type DeployContractContext } from './liliput-deploy-contract.js';
 import { logger } from '../logger.js';
 
 const DEFAULT_MODEL = process.env['COPILOT_MODEL'] ?? 'claude-sonnet-4';
+
+/**
+ * Force-override channel for the SDK bundle patch.
+ *
+ * The SDK's `setModel(model, { reasoningEffort })` is silently no-op'd by an
+ * internal validator for some model families (e.g. claude-opus-4.7-high),
+ * leaving `clientOptions.defaultReasoningEffort` stuck at "medium" and
+ * causing CAPI 400s like `reasoning_effort "medium" is not supported by
+ * model claude-opus-4.7-high`.
+ *
+ * Our build-time SDK patch (`patch-sdk-effort-tracer.cjs`) reads this file
+ * inside `getCompletionOptions` and force-overrides the value of `o`
+ * (the about-to-be-sent reasoning_effort) if present. The file is written
+ * by the parent process before every SDK call that may issue a CAPI
+ * request. Both processes run on the same node so /tmp is shared.
+ *
+ * Concurrent tasks would race on this file. Liliput processes tasks
+ * serially per workstream today, so the race is only a concern if a future
+ * change adds parallel turns on the same SDK CLI subprocess.
+ */
+const FORCE_EFFORT_FILE = '/tmp/liliput-current-effort';
+
+function setForceEffort(effort: ReasoningEffort | undefined): void {
+  try {
+    writeFileSync(FORCE_EFFORT_FILE, effort ? `${effort}\n` : '');
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err), effort },
+      'agent-loop: failed to write force-effort file (SDK patch will fall back to in-process value)',
+    );
+  }
+}
 // Default: 15 minutes for a single turn. Bigger repos with multi-file changes
 // can take 8-10+ minutes once the agent is reading files itself.
 const TIMEOUT_MS = parseInt(process.env['AGENT_LOOP_TIMEOUT_MS'] ?? '900000', 10);
@@ -494,6 +527,7 @@ export async function createAgentSession(
   };
   const model = modelOverride && modelOverride.trim() ? modelOverride.trim() : DEFAULT_MODEL;
   const reasoningEffort = reasoningEffortOverride ?? deriveReasoningEffort(model);
+  setForceEffort(reasoningEffort);
   logger.info(
     {
       workspaceRoot,
@@ -566,6 +600,7 @@ export async function applyModelChange(
   if (desiredModel === handle.model && desiredEffort === handle.reasoningEffort) {
     return;
   }
+  setForceEffort(desiredEffort);
   const effortChanged = desiredEffort !== handle.reasoningEffort;
   if (effortChanged) {
     // Reasoning-effort change: dispose old session, create a new one. The
@@ -655,6 +690,10 @@ export async function runAgentTurn(
     : opts.isInitial
       ? buildInitialPrompt(opts)
       : buildFollowUpPrompt(opts);
+
+  // Re-assert force-override before every turn — another task may have
+  // overwritten the file between the session creation and now.
+  setForceEffort(handle.reasoningEffort);
 
   log('info', opts.isInitial ? 'Asking agent to plan and apply edits…' : 'Sending follow-up to agent…');
 
