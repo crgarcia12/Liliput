@@ -1,3 +1,8 @@
+import { installEffortTracer } from './engine/effort-tracer.js';
+// IMPORTANT: install the fetch wrapper before any other module imports the
+// Copilot SDK — the SDK captures globalThis.fetch at load time on some paths.
+installEffortTracer();
+
 import http from 'node:http';
 import { Server as SocketServer } from 'socket.io';
 import { createApp } from './app.js';

@@ -494,6 +494,16 @@ export async function createAgentSession(
   };
   const model = modelOverride && modelOverride.trim() ? modelOverride.trim() : DEFAULT_MODEL;
   const reasoningEffort = reasoningEffortOverride ?? deriveReasoningEffort(model);
+  logger.info(
+    {
+      workspaceRoot,
+      modelOverride,
+      reasoningEffortOverride,
+      resolvedModel: model,
+      resolvedEffort: reasoningEffort,
+    },
+    '[effort-trace] createAgentSession: about to call client.createSession',
+  );
   const session = await client.createSession({
     model,
     ...(reasoningEffort ? { reasoningEffort } : {}),
@@ -502,13 +512,25 @@ export async function createAgentSession(
     onPermissionRequest: approveAll,
     onEvent: makeEventHandler(callbacks),
   });
+  logger.info(
+    { resolvedModel: model, resolvedEffort: reasoningEffort },
+    '[effort-trace] createAgentSession: client.createSession returned',
+  );
   // Belt-and-suspenders: some models (e.g. claude-opus-4.7-xhigh) reject the
   // SDK's per-request default reasoning_effort="medium" even when we passed
   // the correct value to createSession. Re-issue it via the documented
   // setModel switcher so the per-turn CAPI call carries the right value.
   if (reasoningEffort) {
     try {
+      logger.info(
+        { model, reasoningEffort },
+        '[effort-trace] createAgentSession: calling session.setModel for belt-and-suspenders',
+      );
       await session.setModel(model, { reasoningEffort });
+      logger.info(
+        { model, reasoningEffort },
+        '[effort-trace] createAgentSession: session.setModel returned (note: SDK may silently no-op if validator rejects)',
+      );
     } catch (err) {
       logger.warn(
         { err: err instanceof Error ? err.message : String(err), model, reasoningEffort },
@@ -567,6 +589,10 @@ export async function applyModelChange(
       );
     }
     const client = await getCopilotClient();
+    logger.info(
+      { desiredModel, desiredEffort },
+      '[effort-trace] applyModelChange: recreating session with new effort',
+    );
     const session = await client.createSession({
       model: desiredModel,
       ...(desiredEffort ? { reasoningEffort: desiredEffort } : {}),
@@ -634,6 +660,14 @@ export async function runAgentTurn(
 
   let finalMessage = '';
   try {
+    logger.info(
+      {
+        cachedModel: handle.model,
+        cachedEffort: handle.reasoningEffort,
+        promptBytes: prompt.length,
+      },
+      '[effort-trace] runAgentTurn: about to sendAndWait (per-turn CAPI request will use cached model/effort)',
+    );
     const result = await handle._session.sendAndWait({ prompt }, opts.timeoutMs ?? TIMEOUT_MS);
     finalMessage = result?.data?.content?.trim() ?? '';
   } catch (err) {
