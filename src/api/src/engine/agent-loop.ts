@@ -26,7 +26,7 @@
 import { approveAll } from '@github/copilot-sdk';
 import type { CopilotSession, SessionEvent } from '@github/copilot-sdk';
 import { getCopilotClient } from './copilot-client.js';
-import { effectiveReasoningEffort, type ReasoningEffort } from '../../../shared/types/index.js';
+import { deriveReasoningEffort, type ReasoningEffort } from '../../../shared/types/index.js';
 import { buildDeployContract, type DeployContractContext } from './liliput-deploy-contract.js';
 import { logger } from '../logger.js';
 
@@ -493,7 +493,7 @@ export async function createAgentSession(
     toolCount: 0,
   };
   const model = modelOverride && modelOverride.trim() ? modelOverride.trim() : DEFAULT_MODEL;
-  const reasoningEffort = effectiveReasoningEffort(model, reasoningEffortOverride);
+  const reasoningEffort = reasoningEffortOverride ?? deriveReasoningEffort(model);
   const session = await client.createSession({
     model,
     ...(reasoningEffort ? { reasoningEffort } : {}),
@@ -533,7 +533,7 @@ export async function applyModelChange(
   nextReasoningEffort?: ReasoningEffort,
 ): Promise<void> {
   const desiredModel = nextModel && nextModel.trim() ? nextModel.trim() : DEFAULT_MODEL;
-  const desiredEffort = effectiveReasoningEffort(desiredModel, nextReasoningEffort);
+  const desiredEffort = nextReasoningEffort ?? deriveReasoningEffort(desiredModel);
   if (desiredModel === handle.model && desiredEffort === handle.reasoningEffort) {
     return;
   }
