@@ -78,6 +78,13 @@ export function installEffortTracer(): void {
   if (installed) return;
   installed = true;
 
+  // If the CJS preload already wrapped fetch, defer to it.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if ((globalThis as any).__effortTraceInstalled) {
+    logger.info('[effort-trace] CJS preload already installed fetch wrapper — skipping ESM install');
+    return;
+  }
+
   const originalFetch: typeof fetch = globalThis.fetch.bind(globalThis);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
