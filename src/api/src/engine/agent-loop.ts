@@ -521,9 +521,16 @@ export async function createAgentSession(
 
 /**
  * Apply a runtime model and/or reasoning-effort change to an existing session.
- * Used when the user switches the model or reasoning dropdown on a live task —
- * we don't want to throw away the cached session (and its conversation memory),
- * but we do need the next sendAndWait to use the new values.
+ *
+ * When ONLY the model changes, we use `setModel()` to keep the cached SDK
+ * session (and its conversation memory) alive.
+ *
+ * When the **reasoning effort** changes we DISPOSE the old session and
+ * create a fresh one. The agent CLI's session-level reasoning_effort is
+ * baked in at session create time; `setModel()` does not actually re-apply
+ * it on subsequent CAPI requests, so we end up sending stale values
+ * (e.g. "medium" when the model only accepts "high"). Losing chat memory
+ * is the lesser evil compared to the SDK 400-ing on every turn.
  *
  * No-op if neither value differs from what the session already has.
  */
@@ -537,21 +544,64 @@ export async function applyModelChange(
   if (desiredModel === handle.model && desiredEffort === handle.reasoningEffort) {
     return;
   }
-  try {
-    await handle._session.setModel(
-      desiredModel,
-      desiredEffort ? { reasoningEffort: desiredEffort } : {},
+  const effortChanged = desiredEffort !== handle.reasoningEffort;
+  if (effortChanged) {
+    // Reasoning-effort change: dispose old session, create a new one. The
+    // agent CLI's per-request reasoning_effort is fixed at session create
+    // time and cannot be reliably re-targeted via setModel.
+    logger.info(
+      {
+        previousModel: handle.model,
+        previousEffort: handle.reasoningEffort,
+        desiredModel,
+        desiredEffort,
+      },
+      'agent-loop: reasoning_effort changed — recreating SDK session (chat memory will reset)',
     );
+    try {
+      await handle._session.disconnect();
+    } catch (err) {
+      logger.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        'agent-loop: error disconnecting old session — proceeding to create new',
+      );
+    }
+    const client = await getCopilotClient();
+    const session = await client.createSession({
+      model: desiredModel,
+      ...(desiredEffort ? { reasoningEffort: desiredEffort } : {}),
+      workingDirectory: handle.workspaceRoot,
+      enableConfigDiscovery: true,
+      onPermissionRequest: approveAll,
+      onEvent: makeEventHandler(handle._callbacks),
+    });
+    if (desiredEffort) {
+      try {
+        await session.setModel(desiredModel, { reasoningEffort: desiredEffort });
+      } catch (err) {
+        logger.warn(
+          { err: err instanceof Error ? err.message : String(err), desiredModel, desiredEffort },
+          'agent-loop: post-recreate setModel failed — continuing with createSession value',
+        );
+      }
+    }
+    handle._session = session;
     handle.model = desiredModel;
     if (desiredEffort) {
       handle.reasoningEffort = desiredEffort;
     } else {
       delete handle.reasoningEffort;
     }
+    return;
+  }
+  // Model-only change → keep the session alive via setModel.
+  try {
+    await handle._session.setModel(desiredModel, {});
+    handle.model = desiredModel;
   } catch (err) {
     logger.warn(
-      { err: err instanceof Error ? err.message : String(err), desiredModel, desiredEffort },
-      'agent-loop: applyModelChange failed — session keeps previous values',
+      { err: err instanceof Error ? err.message : String(err), desiredModel },
+      'agent-loop: applyModelChange (model-only) failed — session keeps previous values',
     );
   }
 }
