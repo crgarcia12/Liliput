@@ -9,6 +9,11 @@ FROM mcr.microsoft.com/devcontainers/javascript-node:22-bookworm AS deps
 WORKDIR /build/src/api
 COPY src/api/package.json src/api/package-lock.json* ./
 RUN npm ci --omit=dev
+# Patch the bundled Copilot SDK CLI to emit a stderr line every time it
+# constructs a completion request body. This is the only reliable way to
+# observe what reasoning_effort actually goes on the wire — the SDK's
+# bundled undici is invisible to globalThis.fetch / node:https wrappers.
+RUN node -e "const f='/build/src/api/node_modules/@github/copilot/app.js';const fs=require('fs');let s=fs.readFileSync(f,'utf8');const needle='if(o)return{reasoning_effort:o,';if(!s.includes(needle)){console.error('SDK patch: needle not found — SDK version drift?');process.exit(1);}const replacement='if(o){try{process.stderr.write(JSON.stringify({level:30,time:Date.now(),pid:process.pid,proc:\"sdk-patch\",reasoning_effort:o,defaultReasoningEffort:this.clientOptions&&this.clientOptions.defaultReasoningEffort,clientOptionsModel:this.clientOptions&&this.clientOptions.model,msg:\"[effort-trace-sdk-patch] getCompletionOptions\"})+\"\\n\")}catch(_){}return{reasoning_effort:o,';s=s.replace(needle,replacement);fs.writeFileSync(f,s);console.log('SDK patched: getCompletionOptions tracer injected');"
 
 FROM mcr.microsoft.com/devcontainers/javascript-node:22-bookworm AS build
 WORKDIR /build/src/api
