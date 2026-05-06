@@ -24,6 +24,7 @@ import {
   type Decomposition,
 } from './feature-decomposer.js';
 import { deriveReasoningEffort, type ReasoningEffort } from '../../../shared/types/index.js';
+import { setForceEffort } from './force-effort.js';
 
 const DEFAULT_MODEL = process.env['COPILOT_MODEL'] ?? 'claude-sonnet-4';
 const DEFAULT_TIMEOUT_MS = parseInt(
@@ -51,6 +52,7 @@ export async function runFeatureDecomposer(
   const prompt = buildDecompositionPrompt(input);
   const model = modelOverride && modelOverride.trim() ? modelOverride.trim() : DEFAULT_MODEL;
   const reasoningEffort = reasoningEffortOverride ?? deriveReasoningEffort(model);
+  setForceEffort(reasoningEffort);
   try {
     const client = await getCopilotClient();
     const session = await client.createSession({

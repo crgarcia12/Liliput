@@ -9,6 +9,7 @@ import {
 } from './auth-status.js';
 import { extractRepoContext, type ProgressStage as RepoStage } from './repo-context.js';
 import { deriveReasoningEffort } from '../../../shared/types/index.js';
+import { setForceEffort } from './force-effort.js';
 import { logger } from '../logger.js';
 
 const DEFAULT_MODEL = process.env['COPILOT_MODEL'] ?? 'claude-sonnet-4';
@@ -208,6 +209,7 @@ export async function generateSpec(
   const prompt = buildPrompt(title, description, repoBlob);
   const model = context?.model && context.model.trim() ? context.model.trim() : DEFAULT_MODEL;
   const reasoningEffort = context?.reasoningEffort ?? deriveReasoningEffort(model);
+  setForceEffort(reasoningEffort);
 
   try {
     progress('connecting-llm', `model: ${model}`);
@@ -263,10 +265,12 @@ export async function generateSpec(
  */
 export async function probeAuth(): Promise<AuthStatus> {
   try {
+    const probeEffort = deriveReasoningEffort(DEFAULT_MODEL);
+    setForceEffort(probeEffort);
     const client = await getCopilotClient();
     const session = await client.createSession({
       model: DEFAULT_MODEL,
-      ...(deriveReasoningEffort(DEFAULT_MODEL) ? { reasoningEffort: deriveReasoningEffort(DEFAULT_MODEL)! } : {}),
+      ...(probeEffort ? { reasoningEffort: probeEffort } : {}),
       onPermissionRequest: approveAll,
     });
     try {
