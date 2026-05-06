@@ -84,6 +84,7 @@ export function buildDeployContract(ctx: DeployContractContext): string {
     `   - Plain HTML: edit \`<script src="...">\`/\`<link href="...">\` to start with \`${pathPrefix}/\`.`,
     `5. **API calls from the browser** must include the prefix too: \`fetch("${pathPrefix}/api/...")\` — same reason as #4.`,
     '6. **Honour `X-Forwarded-Prefix`** if you must generate self-links server-side. Otherwise ignore it for routing — nginx already stripped the path before you saw it.',
+    `7. **Base images: use \`mcr.microsoft.com/...\` not Docker Hub.** \`az acr build\` runs on shared agents that anonymously pull the base image from public registries; Docker Hub rate-limits those agents. Default to \`mcr.microsoft.com/azurelinux/base/nodejs:20\` for Node, \`mcr.microsoft.com/azurelinux/base/python:3.12\` for Python. If you need something specific, prefer any \`mcr.microsoft.com/*\` tag over its Docker Hub equivalent. (\`FROM node:20-alpine\` works most of the time but intermittently fails with \`toomanyrequests: pull rate limit\`.)`,
     '',
     '## How to verify',
     '',
