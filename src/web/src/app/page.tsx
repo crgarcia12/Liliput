@@ -178,12 +178,13 @@ export default function Home() {
         }
 
         await sendMessage(currentTask.id, message);
-      } catch {
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
         const errMsg: ChatMessage = {
           id: `err-${Date.now()}`,
           taskId: currentTask?.id || '',
           role: 'system',
-          content: 'Failed to send message. Is the API running?',
+          content: `❌ ${message}`,
           timestamp: new Date().toISOString(),
         };
         setLocalMessages((prev) => [...prev, errMsg]);

@@ -85,6 +85,20 @@ export function createTasksRouter(
     try {
       const { title, description, repository, baseBranch, commitMode, workstreamId, model, reasoningEffort } =
         req.body as CreateTaskRequest;
+      logger.info(
+        {
+          path: '/api/tasks',
+          repository,
+          baseBranch,
+          commitMode,
+          workstreamId,
+          model,
+          reasoningEffort,
+          hasTitle: !!title,
+          hasDescription: !!description,
+        },
+        'POST /api/tasks received',
+      );
       if (!title || !description) {
         res.status(400).json({ error: 'title and description are required' });
         return;
@@ -417,6 +431,10 @@ export function createTasksRouter(
         return;
       }
       const { model } = (req.body ?? {}) as { model?: string };
+      logger.info(
+        { taskId: task.id, currentModel: task.model ?? '', incomingBody: req.body, parsedModel: model },
+        'PATCH /api/tasks/:id/model received',
+      );
       if (!model || !model.trim()) {
         res.status(400).json({ error: 'model is required', field: 'model' });
         return;
@@ -461,6 +479,10 @@ export function createTasksRouter(
         return;
       }
       const { reasoningEffort } = (req.body ?? {}) as { reasoningEffort?: string | null };
+      logger.info(
+        { taskId: task.id, currentEffort: task.reasoningEffort ?? '', incomingBody: req.body, parsedEffort: reasoningEffort },
+        'PATCH /api/tasks/:id/reasoning-effort received',
+      );
       const ALLOWED = ['low', 'medium', 'high', 'xhigh'] as const;
       let next: 'low' | 'medium' | 'high' | 'xhigh' | undefined;
       if (reasoningEffort === null || reasoningEffort === '' || reasoningEffort === undefined) {
