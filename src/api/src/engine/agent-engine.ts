@@ -28,6 +28,7 @@ import {
   runAgentTurn,
   disposeAgentSession,
   abortAgentTurn,
+  applyModelChange,
   type AgentSession,
 } from './agent-loop.js';
 import { resolveDockerfile } from './dockerfile-detector.js';
@@ -2318,6 +2319,13 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
     }
     live = await resurrectLiveSession(io, taskId, task);
   }
+
+  // If the user changed the model or reasoning-effort dropdowns since the
+  // session was created (or resurrected), push the new values into the live
+  // SDK session before the next turn — otherwise the cached session keeps
+  // sending the old reasoning_effort and 400s on models like
+  // claude-opus-4.7-xhigh that only accept ONE specific value.
+  await applyModelChange(live.agentSession, task.model, task.reasoningEffort);
 
   setTaskStatus(io, taskId, 'building');
 
