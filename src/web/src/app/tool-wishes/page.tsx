@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import Link from 'next/link';
+import TopBar from '../../components/TopBar';
 
 interface ToolWishAggregate {
   tool: string;
@@ -39,23 +39,17 @@ export default function ToolWishesPage() {
   }, [refresh]);
 
   return (
-    <main className="min-h-screen bg-zinc-950 text-zinc-100 p-8">
-      <div className="max-w-5xl mx-auto">
-        <div className="flex items-center justify-between mb-6">
-          <div>
+    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+      <TopBar subtitle="Tool wishes" />
+      <main className="p-8">
+        <div className="max-w-5xl mx-auto">
+          <div className="mb-6">
             <h1 className="text-2xl font-bold">Tool wishes</h1>
             <p className="text-sm text-zinc-400 mt-1">
               CLIs the agents have asked for. Bake popular ones into the
               runtime image (<code className="text-zinc-300">src/api/Dockerfile</code>).
             </p>
           </div>
-          <Link
-            href="/requests"
-            className="text-sm text-blue-400 hover:text-blue-300"
-          >
-            ← back to requests
-          </Link>
-        </div>
 
         {error && (
           <div className="bg-red-500/10 border border-red-500/30 text-red-300 px-4 py-3 rounded mb-4">
@@ -107,7 +101,8 @@ export default function ToolWishesPage() {
             ))}
           </div>
         )}
-      </div>
-    </main>
+        </div>
+      </main>
+    </div>
   );
 }

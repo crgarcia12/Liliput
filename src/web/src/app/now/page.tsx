@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import TopBar from '../../components/TopBar';
 import { useTasks } from '../../hooks/useTasks';
 import PhaseStepper from '../../components/PhaseStepper';
 import type { Task } from '@shared/types';
@@ -79,27 +80,11 @@ export default function NowPage() {
     .sort((a, b) => elapsedMs(b) - elapsedMs(a));
 
   return (
-    <div className="min-h-screen bg-[#050510] text-gray-200 p-6">
-      <header className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <Link href="/" className="text-gray-500 hover:text-gray-300 text-sm">
-            ← Home
-          </Link>
-          <span className="text-gray-600">|</span>
-          <h1 className="text-xl font-bold">
-            <span className="text-cyan-400">⏱ Now</span>
-            <span className="text-gray-500 ml-2 text-sm font-normal">
-              ({active.length} active)
-            </span>
-          </h1>
-        </div>
-        <div className="flex items-center gap-3 text-xs">
-          <Link href="/requests" className="text-gray-400 hover:text-gray-200">
-            All requests →
-          </Link>
-        </div>
-      </header>
-
+    <div className="min-h-screen bg-[#050510] text-gray-200">
+      <TopBar
+        subtitle={`Now (${active.length} active)`}
+      />
+      <main className="p-6">
       {loading && <p className="text-gray-500">Loading…</p>}
       {error && (
         <p className="text-red-400 text-sm">Failed to load tasks: {error}</p>
@@ -165,6 +150,7 @@ export default function NowPage() {
           );
         })}
       </div>
+      </main>
     </div>
   );
 }

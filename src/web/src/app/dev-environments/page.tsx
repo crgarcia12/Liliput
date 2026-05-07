@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import Link from 'next/link';
+import TopBar from '../../components/TopBar';
 import { useTasks } from '../../hooks/useTasks';
 import { useSocket } from '../../hooks/useSocket';
 import type { Task, TaskStatus } from '@shared/types';
@@ -76,22 +77,7 @@ export default function DevEnvironmentsPage() {
 
   return (
     <div className="min-h-screen bg-[#050510] text-gray-200 font-mono">
-      <header className="flex items-center justify-between px-6 py-3 border-b border-[#1a1a2e] bg-[#0d0d14]">
-        <div className="flex items-center gap-3">
-          <span className="text-2xl">☁️</span>
-          <h1 className="text-lg font-bold tracking-tight">
-            <span className="text-cyan-400">Liliput</span>
-            <span className="text-gray-500 font-normal"> — Dev Environments</span>
-          </h1>
-        </div>
-        <div className="flex items-center gap-4 text-xs">
-          <Link href="/" className="text-gray-400 hover:text-cyan-300">🏰 Home</Link>
-          <Link href="/requests" className="text-gray-400 hover:text-cyan-300">📋 Requests</Link>
-          <span className={connected ? 'text-green-400' : 'text-red-400'}>
-            {connected ? '● Connected' : '○ Disconnected'}
-          </span>
-        </div>
-      </header>
+      <TopBar subtitle="Dev environments" connected={connected} />
 
       <main className="max-w-6xl mx-auto px-6 py-6 space-y-6">
         <section className="bg-[#0d0d14] border border-[#1a1a2e] rounded-lg p-4">

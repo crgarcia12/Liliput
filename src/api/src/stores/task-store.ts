@@ -229,6 +229,7 @@ export function updateTask(
       | 'workstreamId'
       | 'model'
       | 'reasoningEffort'
+      | 'title'
     >
   >,
 ): Task | undefined {
