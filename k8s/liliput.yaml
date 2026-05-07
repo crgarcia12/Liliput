@@ -287,8 +287,12 @@ kind: Service
 metadata:
   name: liliput-gateway
   namespace: __NS__
+  annotations:
+    service.beta.kubernetes.io/azure-load-balancer-resource-group: mc_crgar-liliput-rg_crgar-liliput-aks_swedencentral
+    service.beta.kubernetes.io/azure-pip-name: __PIP_NAME__
 spec:
   type: LoadBalancer
+  loadBalancerIP: __LB_IP__
   selector: { app: liliput-gateway }
   ports:
     - port: 80

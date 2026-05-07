@@ -237,7 +237,7 @@ export async function bootstrapProject(
     // committed — `writeContractIntoWorkspace` adds it to .git/info/exclude).
     try {
       const prefix = pathPrefixFor(created.fullName, created.defaultBranch);
-      const ingressHost = process.env['LILIPUT_INGRESS_HOST'] ?? '4.165.50.135';
+      const ingressHost = process.env['LILIPUT_INGRESS_HOST'] ?? 'liliput.crgarcia.com.ar';
       await writeContract(handle.cwd, {
         pathPrefix: prefix,
         port: 8080,

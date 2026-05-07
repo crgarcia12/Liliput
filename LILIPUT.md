@@ -24,7 +24,7 @@ Liliput will:
 5. **Deploy** it into a fresh `dev-<owner>-<repo>-<branch>` namespace in this
    cluster, behind the existing nginx gateway at:
 
-       http://4.165.50.135/dev/<owner>/<repo>/<branch>/
+       http://liliput.crgarcia.com.ar/dev/<owner>/<repo>/<branch>/
 
    (the gateway's ConfigMap is patched in-place; route is added/removed live).
 6. **Wait** for you to click **Ship** or **Discard** on the task page:
