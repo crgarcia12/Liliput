@@ -1,5 +1,5 @@
 import { approveAll } from '@github/copilot-sdk';
-import { getCopilotClient } from './copilot-client.js';
+import { getCopilotClient, isSdkConnectionClosed, resetCopilotClient } from './copilot-client.js';
 import {
   classifyError,
   recordAuthFailure,
@@ -254,6 +254,9 @@ export async function generateSpec(
     const { kind, message: humanMsg } = classifyError(err);
     recordAuthFailure(kind, humanMsg);
     logger.error({ err: message, kind }, 'Copilot SDK spec generation failed');
+    if (isSdkConnectionClosed(err)) {
+      void resetCopilotClient();
+    }
     progress('spec-failed', message);
     return fallbackSpec(title, description, message);
   }
@@ -289,6 +292,9 @@ export async function probeAuth(): Promise<AuthStatus> {
   } catch (err: unknown) {
     const { kind, message } = classifyError(err);
     recordAuthFailure(kind, message);
+    if (isSdkConnectionClosed(err)) {
+      void resetCopilotClient();
+    }
   }
   return getAuthStatus();
 }

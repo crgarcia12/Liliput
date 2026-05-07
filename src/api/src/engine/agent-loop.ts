@@ -25,7 +25,7 @@
 
 import { approveAll } from '@github/copilot-sdk';
 import type { CopilotSession, SessionEvent } from '@github/copilot-sdk';
-import { getCopilotClient } from './copilot-client.js';
+import { getCopilotClient, isSdkConnectionClosed, resetCopilotClient } from './copilot-client.js';
 import { deriveReasoningEffort, type ReasoningEffort } from '../../../shared/types/index.js';
 import { setForceEffort } from './force-effort.js';
 import { buildDeployContract, type DeployContractContext } from './liliput-deploy-contract.js';
@@ -679,6 +679,12 @@ export async function runAgentTurn(
     finalMessage = result?.data?.content?.trim() ?? '';
   } catch (err) {
     logger.error({ err: err instanceof Error ? err.message : String(err) }, 'SDK session turn failed');
+    if (isSdkConnectionClosed(err)) {
+      // The SDK's CLI subprocess died. Discard the singleton so the next
+      // call spawns a fresh one — otherwise every subsequent session will
+      // hit "Connection is closed" forever (the dead pipe never recovers).
+      void resetCopilotClient();
+    }
     throw err;
   }
 
