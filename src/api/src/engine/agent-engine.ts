@@ -44,6 +44,8 @@ import {
   devEnvName,
   sanitiseK8sName,
   deleteNamespace,
+  deleteDeployment,
+  deleteService,
   listDevPods,
   getPodLogs,
   type DevPodInfo,
@@ -153,6 +155,48 @@ interface DevEnvRecord {
   namespace: string;
 }
 const devEnvs = new Map<string, DevEnvRecord>();
+
+// ─── Dev-env lifecycle locking ─────────────────────────────────────────
+//
+// Stop / Start / Delete and the auto-resurrection from chat can interleave
+// with each other and with the build/deploy pipeline. We serialise per-task
+// lifecycle ops with an in-process mutex (chained Promise) and serialise
+// gateway nginx route writes with a global mutex so concurrent ops never
+// stamp on each other.
+//
+// Multi-pod safety: this is in-process only. The auto-resume path already
+// refuses to run when LILIPUT_REPLICA_COUNT > 1 (see index.ts); same single-
+// pod assumption applies here. Forward-compat: the tasks table has the
+// owner_pod_id + lease_expires_at columns — when we go multi-pod, gate
+// lifecycle ops on a SQLite compare-and-set against that lease.
+const taskLifecycleLocks = new Map<string, Promise<unknown>>();
+function withTaskLifecycleLock<T>(taskId: string, fn: () => Promise<T>): Promise<T> {
+  const prior = taskLifecycleLocks.get(taskId) ?? Promise.resolve();
+  const next = prior.then(fn, fn);
+  taskLifecycleLocks.set(
+    taskId,
+    next.catch(() => undefined),
+  );
+  // Best-effort cleanup so the map doesn't grow unbounded.
+  void next.finally(() => {
+    if (taskLifecycleLocks.get(taskId) === next.catch(() => undefined)) {
+      taskLifecycleLocks.delete(taskId);
+    }
+  });
+  return next;
+}
+
+let routesSyncChain: Promise<unknown> = Promise.resolve();
+function syncRoutesSerialized(): Promise<void> {
+  // Recompute activeRoutes() INSIDE the lock so we never serialise a stale
+  // snapshot taken before a prior write completed.
+  const next = routesSyncChain.then(
+    () => syncRoutes(activeRoutes()),
+    () => syncRoutes(activeRoutes()),
+  );
+  routesSyncChain = next.catch(() => undefined);
+  return next;
+}
 
 /**
  * Live per-task session state — kept in memory between iterations so the
@@ -310,6 +354,10 @@ export async function restoreDevRoutesFromStore(): Promise<{ restored: number }>
   let restored = 0;
   for (const task of store.getTasks()) {
     if (!task.devNamespace || !task.devUrl) continue;
+    // Skip envs the user explicitly stopped or deleted — restoring their
+    // nginx routes would bring back public 502s pointing at a Service we
+    // already removed. Missing devEnvState = legacy task = treat as active.
+    if (task.devEnvState === 'stopped' || task.devEnvState === 'deleted') continue;
     // devUrl was constructed as `${PUBLIC_BASE_URL}${pathPrefix}/` — strip
     // both ends back to the bare prefix.
     let pathPrefix = task.devUrl;
@@ -346,6 +394,177 @@ export async function restoreDevRoutesFromStore(): Promise<{ restored: number }>
     }
   }
   return { restored };
+}
+
+// ─── Dev-env lifecycle (Stop / Start / Delete) ─────────────────────────
+//
+// User-facing buttons on /dev-environments + auto-resurrect from chat.
+// All three are serialised per task via withTaskLifecycleLock and pushed
+// through syncRoutesSerialized so concurrent ops never corrupt nginx or
+// leave orphaned k8s resources.
+
+const ACTIVE_BUILD_STATUSES = new Set(['building', 'deploying', 'shipping']);
+
+/** Throws if the task is in the middle of a build/deploy/ship — those phases
+ *  actively mutate the dev env and racing them with stop/delete corrupts state. */
+function assertDevEnvMutable(task: Task): void {
+  if (ACTIVE_BUILD_STATUSES.has(task.status)) {
+    throw new Error(
+      `Cannot change dev environment while task is "${task.status}". Wait for it to settle.`,
+    );
+  }
+  if (hasInFlightAgent(task.id)) {
+    throw new Error(
+      'Cannot change dev environment while an agent turn is in flight.',
+    );
+  }
+}
+
+/** Reconstruct the public path-prefix from `task.devUrl`. Returns null if
+ *  the URL doesn't look like a `/dev/...` preview URL. */
+function pathPrefixFromTask(task: Task): string | null {
+  if (!task.devUrl) return null;
+  let p = task.devUrl;
+  if (p.startsWith(PUBLIC_BASE_URL)) p = p.slice(PUBLIC_BASE_URL.length);
+  else {
+    try { p = new URL(p).pathname; } catch { return null; }
+  }
+  p = p.replace(/\/+$/, '');
+  return p.startsWith('/dev/') ? p : null;
+}
+
+function emitDevEnvUpdate(io: SocketServer, task: Task): void {
+  io.to(`task:${task.id}`).emit('task:status', { taskId: task.id, status: task.status });
+  io.to(`task:${task.id}`).emit('task:dev-env', {
+    taskId: task.id,
+    devEnvState: task.devEnvState ?? 'active',
+    devUrl: task.devUrl ?? null,
+    devNamespace: task.devNamespace ?? null,
+  });
+}
+
+/**
+ * Stop a dev env: delete Deployment + Service, drop nginx route. Namespace
+ * and image are preserved so `start` is a fast redeploy.
+ */
+export async function stopDevEnvForTask(io: SocketServer, taskId: string): Promise<Task> {
+  return withTaskLifecycleLock(taskId, async () => {
+    const task = store.getTask(taskId);
+    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (!task.devNamespace) throw new Error('Task has no dev environment');
+    const currentState = task.devEnvState ?? 'active';
+    if (currentState !== 'active') {
+      throw new Error(`Dev environment is already "${currentState}".`);
+    }
+    assertDevEnvMutable(task);
+
+    chatStatus(io, taskId, '⏸ Stopping dev environment…');
+    try {
+      await deleteDeployment(task.devNamespace, 'app');
+      await deleteService(task.devNamespace, 'app');
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      logger.warn({ taskId, err: m }, 'stopDevEnv: k8s delete partial failure');
+    }
+    devEnvs.delete(taskId);
+    try { await syncRoutesSerialized(); } catch (err) {
+      logger.warn(
+        { taskId, err: err instanceof Error ? err.message : String(err) },
+        'stopDevEnv: gateway sync failed',
+      );
+    }
+    const updated = store.updateTask(taskId, { devEnvState: 'stopped' })!;
+    chatStatus(io, taskId, '⏸ Dev environment stopped. Send a chat message or click Start to bring it back.');
+    emitDevEnvUpdate(io, updated);
+    return updated;
+  });
+}
+
+/**
+ * Start (or resurrect) a dev env from cached metadata. Awaits deployment
+ * readiness so we don't flip state to `active` while pods are still pulling.
+ */
+export async function startDevEnvForTask(io: SocketServer, taskId: string): Promise<Task> {
+  return withTaskLifecycleLock(taskId, async () => {
+    const task = store.getTask(taskId);
+    if (!task) throw new Error(`Task ${taskId} not found`);
+    const currentState = task.devEnvState ?? 'active';
+    if (currentState === 'active') return task;
+    if (!task.imageRef) throw new Error('No cached image — chat will trigger a fresh build.');
+    if (!task.devNamespace) throw new Error('Dev environment metadata is missing.');
+    if (!task.devPort) throw new Error('Dev environment port is unknown — rebuild required.');
+    const pathPrefix = pathPrefixFromTask(task);
+    if (!pathPrefix) throw new Error('Dev environment URL is malformed — rebuild required.');
+    assertDevEnvMutable(task);
+
+    chatStatus(io, taskId, `♻ Recreating dev environment (${task.imageRef.split('/').pop()})…`);
+    try {
+      await ensureNamespace({ name: task.devNamespace, labels: { 'liliput.dev/task-id': taskId } });
+      await deployApp({
+        namespace: task.devNamespace,
+        appName: 'app',
+        image: task.imageRef,
+        port: task.devPort,
+        pathPrefix,
+      });
+      const ready = await waitDeploymentReady(task.devNamespace, 'app', 120_000);
+      if (!ready) {
+        logger.warn({ taskId }, 'startDevEnv: deployment not ready within 120s; continuing anyway');
+      }
+      devEnvs.set(taskId, {
+        taskId,
+        pathPrefix,
+        upstreamHost: `app.${task.devNamespace}.svc.cluster.local`,
+        upstreamPort: 80,
+        namespace: task.devNamespace,
+      });
+      await syncRoutesSerialized();
+      const updated = store.updateTask(taskId, { devEnvState: 'active' })!;
+      chatStatus(io, taskId, `✅ Dev environment is back at ${task.devUrl}`);
+      emitDevEnvUpdate(io, updated);
+      return updated;
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      logger.error({ taskId, err: m }, 'startDevEnv failed');
+      chatStatus(io, taskId, `⚠️ Failed to start dev environment: ${m}`);
+      throw err;
+    }
+  });
+}
+
+/**
+ * Delete a dev env: tear down the namespace and drop the nginx route.
+ * Preserves namespace name, image ref, port, and devUrl on the Task so
+ * a future Start (or chat message) can resurrect from the cached image.
+ */
+export async function deleteDevEnvForTask(io: SocketServer, taskId: string): Promise<Task> {
+  return withTaskLifecycleLock(taskId, async () => {
+    const task = store.getTask(taskId);
+    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (!task.devNamespace) throw new Error('Task has no dev environment');
+    const currentState = task.devEnvState ?? 'active';
+    if (currentState === 'deleted') return task;
+    assertDevEnvMutable(task);
+
+    chatStatus(io, taskId, '🗑 Deleting dev environment…');
+    try {
+      await deleteNamespace(task.devNamespace);
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      logger.warn({ taskId, err: m }, 'deleteDevEnv: namespace delete failed');
+    }
+    devEnvs.delete(taskId);
+    try { await syncRoutesSerialized(); } catch (err) {
+      logger.warn(
+        { taskId, err: err instanceof Error ? err.message : String(err) },
+        'deleteDevEnv: gateway sync failed',
+      );
+    }
+    const updated = store.updateTask(taskId, { devEnvState: 'deleted' })!;
+    chatStatus(io, taskId, '🗑 Dev environment deleted. Send a chat message or click Start to recreate it from the cached image.');
+    emitDevEnvUpdate(io, updated);
+    return updated;
+  });
 }
 
 /**
@@ -2171,6 +2390,8 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   store.updateTask(taskId, {
     devNamespace: namespace,
     devUrl,
+    devPort: df.port,
+    devEnvState: 'active',
     ...(prUrl ? { pullRequestUrl: prUrl } : {}),
     ...(prNumber !== undefined ? { pullRequestNumber: prNumber } : {}),
   });
@@ -2224,6 +2445,8 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   setTaskStatus(io, taskId, 'review', {
     devNamespace: namespace,
     devUrl,
+    devPort: df.port,
+    devEnvState: 'active',
     ...(prUrl ? { pullRequestUrl: prUrl } : {}),
     ...(prNumber !== undefined ? { pullRequestNumber: prNumber } : {}),
   });
@@ -2889,7 +3112,7 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   const devUrl = `${PUBLIC_BASE_URL}${live.pathPrefix}/`;
   // Persist devUrl/namespace early but keep status='deploying' until validate
   // confirms healthy (or exhausts).
-  store.updateTask(taskId, { devUrl, devNamespace: live.namespace });
+  store.updateTask(taskId, { devUrl, devNamespace: live.namespace, devPort: live.port, devEnvState: 'active' });
 
   const liliputMsg = store.addChatMessage(
     taskId,
@@ -2921,7 +3144,7 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
 
   // Flip back to 'review' after validate (loop already posted the appropriate
   // healthy/exhausted chat message).
-  setTaskStatus(io, taskId, 'review', { devUrl, devNamespace: live.namespace });
+  setTaskStatus(io, taskId, 'review', { devUrl, devNamespace: live.namespace, devPort: live.port, devEnvState: 'active' });
 }
 
 /**
@@ -3053,7 +3276,7 @@ async function runRebuildOnly(
   completePhase(io, taskId, deployer);
 
   const devUrl = `${PUBLIC_BASE_URL}${live.pathPrefix}/`;
-  store.updateTask(taskId, { devUrl, devNamespace: live.namespace });
+  store.updateTask(taskId, { devUrl, devNamespace: live.namespace, devPort: live.port, devEnvState: 'active' });
 
   const ackMsg = store.addChatMessage(
     taskId,
@@ -3079,7 +3302,7 @@ async function runRebuildOnly(
     initialSha: deployOutcome.sha,
   });
 
-  setTaskStatus(io, taskId, 'review', { devUrl, devNamespace: live.namespace });
+  setTaskStatus(io, taskId, 'review', { devUrl, devNamespace: live.namespace, devPort: live.port, devEnvState: 'active' });
 }
 
 /** Returns true if a follow-up chat message would trigger an iteration. */

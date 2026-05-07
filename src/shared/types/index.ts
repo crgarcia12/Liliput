@@ -59,6 +59,18 @@ export type TaskStatus =
 
 export type CommitMode = 'pr' | 'direct';
 
+/**
+ * Lifecycle state for a per-task dev environment (k8s namespace + deployment + nginx route).
+ *  - `active`  — deployment + service running, nginx route live, public URL serves the app.
+ *  - `stopped` — deployment + service deleted, nginx route removed; namespace + image kept
+ *                so a quick `start` redeploys without rebuilding.
+ *  - `deleted` — namespace fully torn down; metadata (namespace name, path, port, image)
+ *                preserved on the Task so it can be resurrected from cache.
+ *
+ * Tasks created before this field existed are treated as `active`.
+ */
+export type DevEnvState = 'active' | 'stopped' | 'deleted';
+
 export interface Task {
   id: string;
   title: string;
@@ -77,6 +89,8 @@ export interface Task {
   imageRef?: string;          // ACR image reference built for the dev env
   devNamespace?: string;      // K8s namespace hosting the dev env
   devUrl?: string;            // Public URL where the dev env is reachable
+  devPort?: number;           // Container port the dev env app listens on (needed to restart from `stopped`/`deleted`)
+  devEnvState?: DevEnvState;  // Lifecycle state of the dev env. Missing = legacy task = treated as 'active'.
   errorMessage?: string;      // Populated when status='failed'
   model?: string;             // Copilot SDK model id to use for agent turns (e.g. "gpt-5", "claude-sonnet-4.5"). Falls back to server default when missing.
   reasoningEffort?: ReasoningEffort;  // Optional reasoning-effort hint for the SDK. When undefined, the server auto-derives from the model id (e.g. `*-xhigh` -> 'xhigh') so models that only accept one effort (like claude-opus-4.7-xhigh) work out of the box.

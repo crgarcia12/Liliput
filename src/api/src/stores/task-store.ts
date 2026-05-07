@@ -226,6 +226,8 @@ export function updateTask(
       | 'imageRef'
       | 'devNamespace'
       | 'devUrl'
+      | 'devPort'
+      | 'devEnvState'
       | 'errorMessage'
       | 'workstreamId'
       | 'model'

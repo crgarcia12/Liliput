@@ -139,6 +139,33 @@ function DevEnvCard({ task }: { task: Task }) {
   const [logsLoading, setLogsLoading] = useState(false);
   const [logsErr, setLogsErr] = useState<string | null>(null);
   const [previous, setPrevious] = useState(false);
+  const [lifecycleBusy, setLifecycleBusy] = useState<null | 'stop' | 'start' | 'delete'>(null);
+  const [lifecycleErr, setLifecycleErr] = useState<string | null>(null);
+
+  const devEnvState = task.devEnvState ?? 'active';
+
+  const callLifecycle = useCallback(
+    async (action: 'stop' | 'start' | 'delete') => {
+      if (action === 'delete' && !confirm(`Delete the dev environment for "${task.title}"?\n\nThis removes the k8s deployment and route. The image stays in ACR — chat will recreate it.`)) {
+        return;
+      }
+      setLifecycleBusy(action);
+      setLifecycleErr(null);
+      try {
+        const url = `/api/tasks/${task.id}/dev-env${action === 'delete' ? '' : `/${action}`}`;
+        const r = await fetch(url, { method: action === 'delete' ? 'DELETE' : 'POST' });
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({}));
+          throw new Error(err.details ?? err.error ?? `HTTP ${r.status}`);
+        }
+      } catch (e) {
+        setLifecycleErr(e instanceof Error ? e.message : String(e));
+      } finally {
+        setLifecycleBusy(null);
+      }
+    },
+    [task.id, task.title],
+  );
 
   const loadPods = useCallback(async () => {
     if (!task.devNamespace) return;
@@ -197,6 +224,18 @@ function DevEnvCard({ task }: { task: Task }) {
         >
           {style.label}
         </span>
+        {devEnvState !== 'active' && (
+          <span
+            className={`shrink-0 text-[10px] px-2 py-0.5 rounded-full border ${
+              devEnvState === 'stopped'
+                ? 'bg-gray-500/15 text-gray-300 border-gray-500/30'
+                : 'bg-red-500/15 text-red-300 border-red-500/30'
+            }`}
+            title={devEnvState === 'stopped' ? 'Deployment scaled to 0 + nginx route removed' : 'k8s resources deleted (image preserved in ACR)'}
+          >
+            {devEnvState === 'stopped' ? '⏸ Stopped' : '🗑 Deleted'}
+          </span>
+        )}
       </div>
 
       <div className="mb-3 text-[10px] text-gray-500 space-y-1.5 border-l-2 border-cyan-500/20 pl-3">
@@ -275,7 +314,43 @@ function DevEnvCard({ task }: { task: Task }) {
             {open ? '▼ Hide pods/logs' : '▶ Pods & logs'}
           </button>
         )}
+        {devEnvState === 'active' && (
+          <button
+            onClick={() => void callLifecycle('stop')}
+            disabled={lifecycleBusy !== null}
+            className="px-2 py-1 bg-amber-600/20 hover:bg-amber-600/40 border border-amber-500/40 rounded text-amber-200 disabled:opacity-50"
+            title="Scale deployment to 0 and remove route — preserves namespace + image"
+          >
+            {lifecycleBusy === 'stop' ? '⏳ Stopping…' : '⏸ Stop'}
+          </button>
+        )}
+        {devEnvState !== 'active' && task.imageRef && (
+          <button
+            onClick={() => void callLifecycle('start')}
+            disabled={lifecycleBusy !== null}
+            className="px-2 py-1 bg-green-600/20 hover:bg-green-600/40 border border-green-500/40 rounded text-green-200 disabled:opacity-50"
+            title="Redeploy from cached image and restore route"
+          >
+            {lifecycleBusy === 'start' ? '⏳ Starting…' : '▶ Start'}
+          </button>
+        )}
+        {devEnvState !== 'deleted' && (
+          <button
+            onClick={() => void callLifecycle('delete')}
+            disabled={lifecycleBusy !== null}
+            className="px-2 py-1 bg-red-600/20 hover:bg-red-600/40 border border-red-500/40 rounded text-red-200 disabled:opacity-50"
+            title="Delete k8s deployment + route (image stays in ACR — chat will recreate)"
+          >
+            {lifecycleBusy === 'delete' ? '⏳ Deleting…' : '🗑 Delete'}
+          </button>
+        )}
       </div>
+
+      {lifecycleErr && (
+        <div className="mt-2 text-[10px] text-red-300 bg-red-500/10 border border-red-500/30 rounded px-2 py-1">
+          {lifecycleErr}
+        </div>
+      )}
 
       {open && task.devNamespace && (
         <div className="mt-3 border-t border-[#1a1a2e] pt-3 space-y-2">

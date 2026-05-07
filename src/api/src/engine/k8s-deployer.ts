@@ -214,6 +214,35 @@ export async function deployApp(opts: DeployAppOptions): Promise<void> {
   }
 }
 
+/**
+ * Delete a single Deployment in a namespace. Idempotent — returns silently
+ * if the Deployment is already gone. Used by the dev-env "stop" lifecycle
+ * to free pod resources without touching the namespace itself.
+ */
+export async function deleteDeployment(namespace: string, name: string): Promise<void> {
+  const apps = appsApi();
+  try {
+    await apps.deleteNamespacedDeployment({ name, namespace });
+  } catch (err) {
+    if (isNotFound(err)) return;
+    throw err;
+  }
+}
+
+/**
+ * Delete a single Service in a namespace. Idempotent — returns silently
+ * if the Service is already gone.
+ */
+export async function deleteService(namespace: string, name: string): Promise<void> {
+  const core = coreApi();
+  try {
+    await core.deleteNamespacedService({ name, namespace });
+  } catch (err) {
+    if (isNotFound(err)) return;
+    throw err;
+  }
+}
+
 export async function waitDeploymentReady(
   namespace: string,
   appName: string,

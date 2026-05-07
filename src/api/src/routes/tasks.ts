@@ -8,7 +8,7 @@ import * as store from '../stores/task-store.js';
 import * as wsStore from '../stores/workstream-store.js';
 import { generateSpec as defaultGenerateSpec, type SpecGenerator } from '../engine/spec-generator.js';
 import { listDevPods, getPodLogs } from '../engine/k8s-deployer.js';
-import { startBuild, shipTask, discardTask, iterateTask, canIterate, enqueueChatForAgent, hasInFlightAgent } from '../engine/agent-engine.js';
+import { startBuild, shipTask, discardTask, iterateTask, canIterate, enqueueChatForAgent, hasInFlightAgent, stopDevEnvForTask, startDevEnvForTask, deleteDevEnvForTask } from '../engine/agent-engine.js';
 import { verifyRepositoryAccess } from '../engine/github-pr.js';
 import { runFeatureDecomposer } from '../engine/feature-decomposer-runner.js';
 import * as featureStore from '../stores/feature-store.js';
@@ -256,6 +256,40 @@ export function createTasksRouter(
         { taskId: task.id, status: task.status, msgPreview: message.substring(0, 80) },
         'Chat message received',
       );
+
+      // Auto-resurrect a stopped/deleted dev env before any status-based routing.
+      // We must NOT race with iterateTask (which redeploys), so the resurrection
+      // is fire-and-forget but the user's message is queued for the agent (via
+      // enqueueChatForAgent) — once the env is back, the agent picks it up on
+      // its next turn. The HTTP response returns immediately.
+      const devEnvState = task.devEnvState ?? 'active';
+      if ((devEnvState === 'stopped' || devEnvState === 'deleted') && task.imageRef && task.devNamespace && task.devPort) {
+        const ackMsg = store.addChatMessage(
+          task.id,
+          'liliput',
+          `♻️ Dev environment was ${devEnvState} — bringing it back online before processing your message…`,
+        );
+        if (ackMsg) io.to(`task:${task.id}`).emit('chat:message', ackMsg);
+        void (async () => {
+          try {
+            await startDevEnvForTask(io, task.id);
+          } catch {
+            return; // startDevEnvForTask already posted an error chat msg
+          }
+          // Re-fetch and route as if the message had just arrived.
+          const refreshed = store.getTask(task.id);
+          if (!refreshed) return;
+          if (
+            (refreshed.status === 'review' || refreshed.status === 'completed' || refreshed.status === 'failed') &&
+            canIterate(refreshed.id)
+          ) {
+            iterateTask(io, refreshed.id, message);
+          }
+        })();
+        const updatedTask = store.getTask(task.id);
+        res.json({ task: updatedTask });
+        return;
+      }
 
       // Auto-respond based on status
       if (task.status === 'clarifying') {
@@ -664,6 +698,43 @@ export function createTasksRouter(
       const message = err instanceof Error ? err.message : String(err);
       logger.error({ err: message }, 'Failed to read dev logs');
       res.status(500).json({ error: 'Failed to read dev logs', details: message });
+    }
+  });
+
+  // ── Dev environment lifecycle ──────────────────────────────────────
+  // Stop / Start / Delete the per-task k8s deployment + nginx route.
+  // Auto-resurrection on chat is handled in the chat handler above.
+
+  router.post('/api/tasks/:id/dev-env/stop', async (req: Request, res: Response) => {
+    try {
+      const updated = await stopDevEnvForTask(io, req.params['id'] as string);
+      res.json({ task: updated });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn({ err: message }, 'stopDevEnv failed');
+      res.status(409).json({ error: 'Failed to stop dev environment', details: message });
+    }
+  });
+
+  router.post('/api/tasks/:id/dev-env/start', async (req: Request, res: Response) => {
+    try {
+      const updated = await startDevEnvForTask(io, req.params['id'] as string);
+      res.json({ task: updated });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn({ err: message }, 'startDevEnv failed');
+      res.status(409).json({ error: 'Failed to start dev environment', details: message });
+    }
+  });
+
+  router.delete('/api/tasks/:id/dev-env', async (req: Request, res: Response) => {
+    try {
+      const updated = await deleteDevEnvForTask(io, req.params['id'] as string);
+      res.json({ task: updated });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn({ err: message }, 'deleteDevEnv failed');
+      res.status(409).json({ error: 'Failed to delete dev environment', details: message });
     }
   });
 
