@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { AuthStatusBanner } from "../components/AuthStatusBanner";
@@ -12,6 +12,12 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Liliput — Agent Orchestrator",
   description: "Your tiny workers, building features at scale. A Gulliver's Travels-inspired AI agent platform.",
+};
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  themeColor: '#050510',
 };
 
 export default function RootLayout({

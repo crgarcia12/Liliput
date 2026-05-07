@@ -24,6 +24,36 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed paths
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            api:
+              - 'src/api/**'
+              - 'src/shared/**'
+              - 'k8s/**'
+              - '.github/workflows/deploy-liliput.yml'
+            web:
+              - 'src/web/**'
+              - 'src/shared/**'
+              - 'k8s/**'
+              - '.github/workflows/deploy-liliput.yml'
+
+      - name: Compute build flags
+        id: flags
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "build_api=true"  >> "$GITHUB_OUTPUT"
+            echo "build_web=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "build_api=${{ steps.changes.outputs.api }}" >> "$GITHUB_OUTPUT"
+            echo "build_web=${{ steps.changes.outputs.web }}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "API build: ${{ steps.changes.outputs.api }} | Web build: ${{ steps.changes.outputs.web }} | event: ${{ github.event_name }}"
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
@@ -33,6 +63,7 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Build API image
+        if: steps.flags.outputs.build_api == 'true'
         run: |
           az acr build \
             --registry $ACR \
@@ -42,6 +73,7 @@ jobs:
             .
 
       - name: Build Web image
+        if: steps.flags.outputs.build_web == 'true'
         run: |
           az acr build \
             --registry $ACR \
@@ -85,16 +117,29 @@ jobs:
               k8s/liliput.yaml > k8s/liliput.rendered.yaml
 
       - name: Deploy to AKS
+        env:
+          BUILD_API: ${{ steps.flags.outputs.build_api }}
+          BUILD_WEB: ${{ steps.flags.outputs.build_web }}
         run: |
-          # Clean up stale pods/replicasets from previous failed deployments
-          kubectl delete deployments --all -n liliput --ignore-not-found 2>/dev/null || true
           kubectl apply -f k8s/liliput.rendered.yaml
-          kubectl -n liliput set image deployment/liliput-api \
-            api=$ACR_LOGIN_SERVER/liliput-api:${{ github.sha }}
-          kubectl -n liliput set image deployment/liliput-web \
-            web=$ACR_LOGIN_SERVER/liliput-web:${{ github.sha }}
-          # Pick up secret changes even when the image SHA didn't change
-          kubectl -n liliput rollout restart deployment/liliput-api
+          if [ "$BUILD_API" = "true" ]; then
+            kubectl -n liliput set image deployment/liliput-api \
+              api=$ACR_LOGIN_SERVER/liliput-api:${{ github.sha }}
+          else
+            echo "Skipping API image update — no API/shared changes."
+          fi
+          if [ "$BUILD_WEB" = "true" ]; then
+            kubectl -n liliput set image deployment/liliput-web \
+              web=$ACR_LOGIN_SERVER/liliput-web:${{ github.sha }}
+          else
+            echo "Skipping Web image update — no Web/shared changes."
+          fi
+          # Pick up secret changes even when the API image SHA didn't change.
+          # Only restart when API was rebuilt OR when secrets/manifests changed —
+          # avoid bouncing the API on web-only deploys.
+          if [ "$BUILD_API" = "true" ]; then
+            kubectl -n liliput rollout restart deployment/liliput-api
+          fi
 
       - name: Wait for rollout
         run: |

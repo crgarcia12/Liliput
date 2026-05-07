@@ -76,6 +76,13 @@ export default function TopBar({ subtitle, connected, extras, hideNewCta }: TopB
         </nav>
         <div className="flex items-center gap-2 text-xs shrink-0">
           {extras}
+          <Link
+            href="/m"
+            className="text-xs text-gray-400 hover:text-cyan-300 whitespace-nowrap"
+            title="Mobile view"
+          >
+            📱 Mobile
+          </Link>
           {typeof connected === 'boolean' && (
             <span
               className={`inline-flex items-center h-7 px-2.5 rounded-md border text-[11px] ${
