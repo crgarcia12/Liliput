@@ -27,9 +27,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark">
-      <body className={`${geistMono.variable} antialiased bg-[#0a0a0f] text-[#e0e0e8] min-h-screen font-mono`}>
+      <body className={`${geistMono.variable} antialiased bg-[#0a0a0f] text-[#e0e0e8] h-screen flex flex-col font-mono`}>
         <AuthStatusBanner />
-        {children}
+        <div className="flex-1 min-h-0 overflow-auto flex flex-col">{children}</div>
         <VersionFooter />
       </body>
     </html>

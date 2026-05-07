@@ -7,16 +7,23 @@ import { useEffect, useState } from 'react';
  * It's hard-coded so the running bundle reflects the source at build time — the version
  * shown in the footer = the version that's actually running.
  */
-export const FRONTEND_VERSION = '0.0.76';
+export const FRONTEND_VERSION = '0.0.77';
 
 /**
- * Footer pinned at the bottom-right of the viewport showing
- *   FE 0.0.1 | BE 0.0.1
- * so we can verify which deploy is live.
+ * Footer pinned at the bottom of the viewport. Real opaque bar (NOT a
+ * floating overlay) so it never obscures content. Shows:
+ *   ● Connected · [ENV] · FE x.y.z | BE x.y.z
+ *
+ * The connection chip is driven by a `liliput:connection` CustomEvent that
+ * pages with sockets dispatch on connect/disconnect. We don't own the
+ * socket here (each page does), so a tiny global event channel keeps this
+ * component zero-dependency and per-page-agnostic.
  */
 export default function VersionFooter() {
   const [backend, setBackend] = useState<string>('…');
   const [env, setEnv] = useState<string>('');
+  // `null` = no socket on this page; true/false = explicit state.
+  const [connected, setConnected] = useState<boolean | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -41,6 +48,18 @@ export default function VersionFooter() {
     };
   }, []);
 
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const ce = e as CustomEvent<{ connected: boolean }>;
+      if (ce.detail && typeof ce.detail.connected === 'boolean') {
+        setConnected(ce.detail.connected);
+      }
+    };
+    window.addEventListener('liliput:connection', handler as EventListener);
+    return () =>
+      window.removeEventListener('liliput:connection', handler as EventListener);
+  }, []);
+
   const envColor =
     env === 'DEV' ? 'text-yellow-300' :
     env === 'TEST' ? 'text-green-300' :
@@ -48,12 +67,24 @@ export default function VersionFooter() {
     'text-gray-400';
 
   return (
-    <div
-      className="pointer-events-none fixed bottom-1 left-0 right-0 z-50 select-none text-center font-mono text-[10px] text-gray-500"
-      title="Environment / Frontend / Backend versions"
+    <footer
+      className="shrink-0 h-6 flex items-center justify-between px-3 border-t border-[#1a1a2e] bg-[#0d0d14] font-mono text-[10px] text-gray-500 select-none"
+      title="Connection / Environment / Frontend / Backend versions"
     >
-      {env && <span className={`${envColor} font-bold mr-2`}>[{env}]</span>}
-      FE {FRONTEND_VERSION} | BE {backend}
-    </div>
+      <div className="flex items-center gap-3">
+        {connected === null ? (
+          <span className="text-gray-600">○ no socket</span>
+        ) : connected ? (
+          <span className="text-green-400">● Connected</span>
+        ) : (
+          <span className="text-red-400">○ Disconnected</span>
+        )}
+        {env && <span className={`${envColor} font-bold`}>[{env}]</span>}
+      </div>
+      <div>
+        FE {FRONTEND_VERSION} | BE {backend}
+      </div>
+    </footer>
   );
 }
+

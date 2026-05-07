@@ -7,6 +7,7 @@ import Terminal from '../../../components/Terminal';
 import AgentPanel from '../../../components/AgentPanel';
 import ActivityLog from '../../../components/ActivityLog';
 import PhaseStepper from '../../../components/PhaseStepper';
+import ResizableSplit from '../../../components/ResizableSplit';
 import { useSocket } from '../../../hooks/useSocket';
 import { useTasks } from '../../../hooks/useTasks';
 import type { Task, ChatMessage, Agent, ModelOption, ModelsResponse } from '@shared/types';
@@ -123,6 +124,24 @@ export default function TaskPage() {
       return () => leaveTask(taskId);
     }
   }, [connected, taskId, joinTask, leaveTask]);
+
+  // Surface socket connection state to the global VersionFooter.
+  // Each page owns its own socket; the footer listens on this CustomEvent.
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent('liliput:connection', { detail: { connected } }),
+    );
+    return () => {
+      // On unmount the next page's socket effect will overwrite, but if no
+      // socket-using page mounts after this one we want the footer to fall
+      // back to "no socket" rather than showing stale state. Send a sentinel
+      // by re-firing as `connected: false` and letting the next page (if any)
+      // override immediately.
+      window.dispatchEvent(
+        new CustomEvent('liliput:connection', { detail: { connected: false } }),
+      );
+    };
+  }, [connected]);
 
   // Cheap polling fallback so the user always sees fresh state — including
   // chat history. Without this, any chat:message emitted before the page was
@@ -260,7 +279,7 @@ export default function TaskPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen bg-[#0a0a0f]">
+      <div className="flex items-center justify-center h-full bg-[#0a0a0f]">
         <div className="text-center">
           <div className="text-4xl animate-pulse mb-4">🏰</div>
           <p className="text-gray-500">Loading task...</p>
@@ -271,7 +290,7 @@ export default function TaskPage() {
 
   if (error && !task) {
     return (
-      <div className="flex items-center justify-center h-screen bg-[#0a0a0f]">
+      <div className="flex items-center justify-center h-full bg-[#0a0a0f]">
         <div className="text-center">
           <div className="text-4xl mb-4">⚠️</div>
           <p className="text-red-400">{error}</p>
@@ -281,180 +300,196 @@ export default function TaskPage() {
   }
 
   return (
-    <div className="flex flex-col h-screen">
-      <header className="flex items-center justify-between px-6 py-3 border-b border-[#1a1a2e] bg-[#0d0d14] gap-3">
-        <div className="flex items-center gap-3 min-w-0">
-          <a href="/" className="text-gray-500 hover:text-gray-300 text-sm">
-            ← Back
-          </a>
-          <span className="text-gray-600">|</span>
-          <span className="text-2xl">🏰</span>
-          <h1 className="text-lg font-bold truncate max-w-md">
-            <span className="text-cyan-400">{task?.title || 'Task'}</span>
-          </h1>
-          {task?.status && (
-            <span
-              className={`text-xs px-2 py-0.5 rounded ${
-                task.status === 'failed'
-                  ? 'bg-red-900/40 text-red-300 border border-red-800'
-                  : task.status === 'review'
-                  ? 'bg-amber-900/40 text-amber-300 border border-amber-700'
-                  : task.status === 'completed'
-                  ? 'bg-green-900/40 text-green-300 border border-green-800'
-                  : 'bg-[#1a1a2e] text-gray-400'
-              }`}
-            >
-              {task.status}
-            </span>
-          )}
-          {task && <PhaseStepper task={task} agents={agents} />}
-          {task?.repository && (
-            <span className="text-xs text-gray-500 font-mono truncate">
-              📦 {task.repository}@{task.baseBranch ?? 'main'}
-            </span>
-          )}
-          {task && task.status !== 'completed' && task.status !== 'deleting' && modelOptions.length > 0 && (
-            <label className="flex items-center gap-1 text-xs">
-              <span className="text-gray-500">🧠</span>
-              <select
-                value={task.model ?? modelDefault}
-                disabled={modelPending}
-                onChange={async (e) => {
-                  const next = e.target.value;
-                  if (!task || next === (task.model ?? modelDefault)) return;
-                  setModelPending(true);
-                  try {
-                    const updated = await setTaskModel(task.id, next);
-                    setTask(updated);
-                  } catch (err) {
-                    setError(err instanceof Error ? err.message : 'Failed to switch model');
-                  } finally {
-                    setModelPending(false);
-                  }
-                }}
-                className="bg-[#050510] border border-[#1a1a2e] rounded px-1.5 py-0.5 text-gray-300 focus:outline-none focus:border-cyan-500 disabled:opacity-50"
-                title="Copilot SDK model — applies on next agent turn"
-              >
-                {modelOptions.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          {task && task.status !== 'completed' && task.status !== 'deleting' && (
-            <label className="flex items-center gap-1 text-xs">
-              <span className="text-gray-500">⚙</span>
-              <select
-                value={task.reasoningEffort ?? ''}
-                disabled={reasoningPending}
-                onChange={async (e) => {
-                  const next = e.target.value as '' | 'low' | 'medium' | 'high' | 'xhigh';
-                  if (!task || next === (task.reasoningEffort ?? '')) return;
-                  setReasoningPending(true);
-                  try {
-                    const updated = await setTaskReasoningEffort(task.id, next);
-                    setTask(updated);
-                  } catch (err) {
-                    setError(err instanceof Error ? err.message : 'Failed to switch reasoning effort');
-                  } finally {
-                    setReasoningPending(false);
-                  }
-                }}
-                className="bg-[#050510] border border-[#1a1a2e] rounded px-1.5 py-0.5 text-gray-300 focus:outline-none focus:border-cyan-500 disabled:opacity-50"
-                title="Reasoning effort — applies on next agent turn. Some models (e.g. claude-opus-4.7-xhigh) only accept ONE value; auto picks it from the model id suffix."
-              >
-                <option value="">auto</option>
-                <option value="low">low</option>
-                <option value="medium">medium</option>
-                <option value="high">high</option>
-                <option value="xhigh">xhigh</option>
-              </select>
-            </label>
-          )}
-          {task?.devUrl && (
-            <a
-              href={task.devUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs px-2 py-0.5 rounded bg-cyan-900/30 border border-cyan-700/50 text-cyan-300 hover:bg-cyan-900/50"
-            >
-              🌐 Dev preview
-            </a>
-          )}
-          {task?.pullRequestUrl && (
-            <a
-              href={task.pullRequestUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs px-2 py-0.5 rounded bg-purple-900/30 border border-purple-700/50 text-purple-300 hover:bg-purple-900/50"
-            >
-              🔀 Pull request{task.pullRequestNumber ? ` #${task.pullRequestNumber}` : ''}
-            </a>
-          )}
-        </div>
-        <div className="flex items-center gap-3 shrink-0">
-          {task?.status === 'review' && (
-            <>
-              {task.pullRequestUrl && (
-                <a
-                  href={task.pullRequestUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs px-3 py-1 rounded bg-purple-700 hover:bg-purple-600 text-white"
-                >
-                  🔀 View PR{task.pullRequestNumber ? ` #${task.pullRequestNumber}` : ''} ↗
-                </a>
+    <div className="flex flex-col h-full">
+      {/*
+        Two-line header.
+          Row 1: brand · workstream/task title · 📦 repo · 🧠 model · ⚙ effort · status
+          Row 2: phase stepper (clarify→…→ship) with elapsed
+        Right side spans both rows: 🌐 Dev preview + 📋 Workstreams (and PR / ship / discard when in review).
+        The previous "● Connected" + "FE x.y.z | BE x.y.z" overlap with header
+        text is fixed by moving both into the global VersionFooter bar.
+      */}
+      <header className="border-b border-[#1a1a2e] bg-[#0d0d14]">
+        <div className="flex items-stretch gap-3 px-4 py-2">
+          <div className="flex-1 min-w-0 flex flex-col gap-1.5 justify-center">
+            {/* Row 1 — identity + config */}
+            <div className="flex items-center gap-2 min-w-0 flex-wrap">
+              <span className="text-xl shrink-0">🏰</span>
+              {task?.repository && (
+                <span className="text-xs text-gray-500 font-mono truncate shrink-0">
+                  📦 {task.repository}@{task.baseBranch ?? 'main'}
+                </span>
               )}
-              <button
-                onClick={async () => {
-                  if (!task) return;
-                  setActionPending('ship');
-                  try {
-                    const updated = await shipTask(task.id);
-                    setTask(updated);
-                  } catch (err) {
-                    setError(err instanceof Error ? err.message : 'Ship failed');
-                  } finally {
-                    setActionPending(null);
-                  }
-                }}
-                disabled={actionPending !== null}
-                className="text-xs px-3 py-1 rounded bg-green-700 hover:bg-green-600 text-white disabled:opacity-50"
-              >
-                {actionPending === 'ship'
-                  ? 'Shipping…'
-                  : `🚀 Ship (${task.commitMode === 'direct' ? 'merge' : 'PR'})`}
-              </button>
-              <button
-                onClick={async () => {
-                  if (!task) return;
-                  if (!confirm('Discard this task? Dev environment + branch will be deleted.'))
-                    return;
-                  setActionPending('discard');
-                  try {
-                    const updated = await discardTask(task.id);
-                    setTask(updated);
-                  } catch (err) {
-                    setError(err instanceof Error ? err.message : 'Discard failed');
-                  } finally {
-                    setActionPending(null);
-                  }
-                }}
-                disabled={actionPending !== null}
-                className="text-xs px-3 py-1 rounded bg-red-800 hover:bg-red-700 text-white disabled:opacity-50"
-              >
-                {actionPending === 'discard' ? 'Discarding…' : '🗑️ Discard'}
-              </button>
-            </>
-          )}
-          <span className={`text-xs ${connected ? 'text-green-400' : 'text-red-400'}`}>
-            {connected ? '● Connected' : '○ Disconnected'}
-          </span>
-          <a href="/" className="text-xs text-gray-400 hover:text-cyan-300">
-            📋 All workstreams
-          </a>
+              <span className="text-gray-700">·</span>
+              <h1 className="text-sm font-bold truncate min-w-0">
+                <span className="text-cyan-400">{task?.title || 'Task'}</span>
+              </h1>
+              {task?.status && (
+                <span
+                  className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 ${
+                    task.status === 'failed'
+                      ? 'bg-red-900/40 text-red-300 border border-red-800'
+                      : task.status === 'review'
+                      ? 'bg-amber-900/40 text-amber-300 border border-amber-700'
+                      : task.status === 'completed'
+                      ? 'bg-green-900/40 text-green-300 border border-green-800'
+                      : 'bg-[#1a1a2e] text-gray-400'
+                  }`}
+                >
+                  {task.status}
+                </span>
+              )}
+              {task && task.status !== 'completed' && task.status !== 'deleting' && modelOptions.length > 0 && (
+                <label className="flex items-center gap-1 text-xs shrink-0">
+                  <span className="text-gray-500">🧠</span>
+                  <select
+                    value={task.model ?? modelDefault}
+                    disabled={modelPending}
+                    onChange={async (e) => {
+                      const next = e.target.value;
+                      if (!task || next === (task.model ?? modelDefault)) return;
+                      setModelPending(true);
+                      try {
+                        const updated = await setTaskModel(task.id, next);
+                        setTask(updated);
+                      } catch (err) {
+                        setError(err instanceof Error ? err.message : 'Failed to switch model');
+                      } finally {
+                        setModelPending(false);
+                      }
+                    }}
+                    className="bg-[#050510] border border-[#1a1a2e] rounded px-1.5 py-0.5 text-gray-300 focus:outline-none focus:border-cyan-500 disabled:opacity-50"
+                    title="Copilot SDK model — applies on next agent turn"
+                  >
+                    {modelOptions.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {task && task.status !== 'completed' && task.status !== 'deleting' && (
+                <label className="flex items-center gap-1 text-xs shrink-0">
+                  <span className="text-gray-500">⚙</span>
+                  <select
+                    value={task.reasoningEffort ?? ''}
+                    disabled={reasoningPending}
+                    onChange={async (e) => {
+                      const next = e.target.value as '' | 'low' | 'medium' | 'high' | 'xhigh';
+                      if (!task || next === (task.reasoningEffort ?? '')) return;
+                      setReasoningPending(true);
+                      try {
+                        const updated = await setTaskReasoningEffort(task.id, next);
+                        setTask(updated);
+                      } catch (err) {
+                        setError(err instanceof Error ? err.message : 'Failed to switch reasoning effort');
+                      } finally {
+                        setReasoningPending(false);
+                      }
+                    }}
+                    className="bg-[#050510] border border-[#1a1a2e] rounded px-1.5 py-0.5 text-gray-300 focus:outline-none focus:border-cyan-500 disabled:opacity-50"
+                    title="Reasoning effort — applies on next agent turn. Some models (e.g. claude-opus-4.7-xhigh) only accept ONE value; auto picks it from the model id suffix."
+                  >
+                    <option value="">auto</option>
+                    <option value="low">low</option>
+                    <option value="medium">medium</option>
+                    <option value="high">high</option>
+                    <option value="xhigh">xhigh</option>
+                  </select>
+                </label>
+              )}
+            </div>
+            {/* Row 2 — phase stepper + elapsed */}
+            <div className="flex items-center gap-2 min-w-0 overflow-x-auto">
+              {task && <PhaseStepper task={task} agents={agents} />}
+            </div>
+          </div>
+          {/* Right side — primary actions, span both rows */}
+          <div className="flex items-stretch gap-2 shrink-0">
+            <a
+              href={task?.devUrl || '#'}
+              onClick={(e) => {
+                if (!task?.devUrl) e.preventDefault();
+              }}
+              target={task?.devUrl ? '_blank' : undefined}
+              rel="noopener noreferrer"
+              aria-disabled={!task?.devUrl}
+              className={`flex flex-col items-center justify-center px-3 rounded text-xs whitespace-nowrap border ${
+                task?.devUrl
+                  ? 'bg-cyan-900/30 border-cyan-700/50 text-cyan-300 hover:bg-cyan-900/50'
+                  : 'bg-[#0a0a14] border-[#1a1a2e] text-gray-600 cursor-not-allowed'
+              }`}
+              title={task?.devUrl ? 'Open dev preview in new tab' : 'No dev preview yet'}
+            >
+              <span className="text-base leading-none">🌐</span>
+              <span className="leading-tight">Dev preview</span>
+            </a>
+            <a
+              href="/"
+              className="flex flex-col items-center justify-center px-3 rounded text-xs whitespace-nowrap border bg-[#15152a] border-[#1a1a2e] text-gray-300 hover:bg-[#1a1a2e] hover:text-cyan-300"
+              title="Back to workstreams list"
+            >
+              <span className="text-base leading-none">📋</span>
+              <span className="leading-tight">Workstreams</span>
+            </a>
+            {task?.status === 'review' && (
+              <div className="flex flex-col gap-1 justify-center">
+                {task.pullRequestUrl && (
+                  <a
+                    href={task.pullRequestUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[11px] px-2 py-0.5 rounded bg-purple-700 hover:bg-purple-600 text-white text-center"
+                  >
+                    🔀 PR{task.pullRequestNumber ? ` #${task.pullRequestNumber}` : ''} ↗
+                  </a>
+                )}
+                <div className="flex gap-1">
+                  <button
+                    onClick={async () => {
+                      if (!task) return;
+                      setActionPending('ship');
+                      try {
+                        const updated = await shipTask(task.id);
+                        setTask(updated);
+                      } catch (err) {
+                        setError(err instanceof Error ? err.message : 'Ship failed');
+                      } finally {
+                        setActionPending(null);
+                      }
+                    }}
+                    disabled={actionPending !== null}
+                    className="text-[11px] px-2 py-0.5 rounded bg-green-700 hover:bg-green-600 text-white disabled:opacity-50"
+                  >
+                    {actionPending === 'ship'
+                      ? 'Shipping…'
+                      : `🚀 Ship (${task.commitMode === 'direct' ? 'merge' : 'PR'})`}
+                  </button>
+                  <button
+                    onClick={async () => {
+                      if (!task) return;
+                      if (!confirm('Discard this task? Dev environment + branch will be deleted.'))
+                        return;
+                      setActionPending('discard');
+                      try {
+                        const updated = await discardTask(task.id);
+                        setTask(updated);
+                      } catch (err) {
+                        setError(err instanceof Error ? err.message : 'Discard failed');
+                      } finally {
+                        setActionPending(null);
+                      }
+                    }}
+                    disabled={actionPending !== null}
+                    className="text-[11px] px-2 py-0.5 rounded bg-red-800 hover:bg-red-700 text-white disabled:opacity-50"
+                  >
+                    {actionPending === 'discard' ? 'Discarding…' : '🗑️'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -516,23 +551,32 @@ export default function TaskPage() {
         </div>
       )}
 
-      <main className="flex-1 flex overflow-hidden">
-        <div className="w-[40%] p-3">
-          <Terminal messages={allMessages} onSend={handleSend} isWorking={isWorking} />
-        </div>
-
-        <div className="flex-1 p-3 pl-0">
-          <ActivityLog entries={taskActivity} title="Live Activity" />
-        </div>
-
-        <div className="w-[300px] flex flex-col p-3 pl-0 gap-3">
-          <div className="h-[40%]">
-            <LiliputIsland agents={agents} />
-          </div>
-          <div className="flex-1 bg-[#0d0d14] border border-[#1a1a2e] rounded-lg overflow-hidden">
-            <AgentPanel agents={agents} />
-          </div>
-        </div>
+      <main className="flex-1 min-h-0 overflow-hidden p-3">
+        <ResizableSplit
+          storageKey="liliput.task.split"
+          defaults={{ left: 0.4, center: 0.45 }}
+          min={{ left: 0.2, center: 0.2, right: 0.18 }}
+          left={
+            <div className="h-full pr-1.5">
+              <Terminal messages={allMessages} onSend={handleSend} isWorking={isWorking} />
+            </div>
+          }
+          center={
+            <div className="h-full px-1.5">
+              <ActivityLog entries={taskActivity} title="Live Activity" />
+            </div>
+          }
+          right={
+            <div className="h-full pl-1.5 flex flex-col gap-3">
+              <div className="h-[40%]">
+                <LiliputIsland agents={agents} />
+              </div>
+              <div className="flex-1 bg-[#0d0d14] border border-[#1a1a2e] rounded-lg overflow-hidden">
+                <AgentPanel agents={agents} />
+              </div>
+            </div>
+          }
+        />
       </main>
     </div>
   );
