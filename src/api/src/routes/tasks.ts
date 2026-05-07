@@ -419,6 +419,33 @@ export function createTasksRouter(
     }
   });
 
+  // PATCH /api/tasks/:id/title — rename a workstream. Pure metadata, no agent
+  // impact. Used by the new-workstream form to backfill the LLM-generated
+  // 1-4 word title once /api/title-suggest returns.
+  router.patch('/api/tasks/:id/title', (req: Request, res: Response) => {
+    try {
+      const task = store.getTask(req.params['id'] as string);
+      if (!task || task.status === 'deleting') {
+        res.status(404).json({ error: 'Task not found' });
+        return;
+      }
+      const { title } = (req.body ?? {}) as { title?: string };
+      const trimmed = (title ?? '').trim();
+      if (!trimmed) {
+        res.status(400).json({ error: 'title is required', field: 'title' });
+        return;
+      }
+      const clipped = trimmed.slice(0, 200);
+      store.updateTask(task.id, { title: clipped });
+      const updated = store.getTask(task.id);
+      res.json({ task: updated });
+    } catch (err: unknown) {
+      const errMessage = err instanceof Error ? err.message : String(err);
+      logger.error({ err: errMessage }, 'Failed to update task title');
+      res.status(500).json({ error: 'Failed to update task title', details: errMessage });
+    }
+  });
+
   // PATCH /api/tasks/:id/model — change the Copilot SDK model on a live task.
   // Only takes effect on the NEXT agent turn (we don't kill the in-flight SDK
   // session — that would lose context and is rarely what the operator wants).

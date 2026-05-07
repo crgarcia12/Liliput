@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
+import TopBar from '../../components/TopBar';
 
 type VerdictStatus = 'done' | 'blocked' | 'continue';
 
@@ -56,20 +57,17 @@ export default function VerdictsPage() {
   };
 
   return (
-    <main className="min-h-screen bg-zinc-950 text-zinc-100 p-8">
-      <div className="max-w-5xl mx-auto">
-        <div className="flex items-center justify-between mb-6">
-          <div>
+    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+      <TopBar subtitle="Verdicts" />
+      <main className="p-8">
+        <div className="max-w-5xl mx-auto">
+          <div className="mb-6">
             <h1 className="text-2xl font-bold">Agent verdicts</h1>
             <p className="text-sm text-zinc-400 mt-1">
               Per-turn declarations from agents. Observational only — does not
               yet gate task completion.
             </p>
           </div>
-          <Link href="/requests" className="text-sm text-blue-400 hover:text-blue-300">
-            ← back to requests
-          </Link>
-        </div>
 
         {error && (
           <div className="bg-red-500/10 border border-red-500/30 text-red-300 px-4 py-3 rounded mb-4">
@@ -136,7 +134,8 @@ export default function VerdictsPage() {
             ))}
           </div>
         )}
-      </div>
-    </main>
+        </div>
+      </main>
+    </div>
   );
 }

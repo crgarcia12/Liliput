@@ -10,6 +10,7 @@ import { createToolWishesRouter } from './routes/tool-wishes.js';
 import { createVerdictsRouter } from './routes/verdicts.js';
 import { createFeaturesRouter } from './routes/features.js';
 import { createProjectsRouter } from './routes/projects.js';
+import { createTitleSuggestRouter } from './routes/title-suggest.js';
 import type { SpecGenerator } from './engine/spec-generator.js';
 
 export interface AppOptions {
@@ -35,6 +36,7 @@ export function createApp(io: SocketServer, options: AppOptions = {}): express.E
   app.use(createVerdictsRouter());
   app.use(createFeaturesRouter());
   app.use(createProjectsRouter());
+  app.use(createTitleSuggestRouter());
   app.use(createTasksRouter(io, options.specGenerator));
 
   return app;
