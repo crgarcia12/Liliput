@@ -32,6 +32,15 @@ export default function Home() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [isWorking, setIsWorking] = useState(false);
   const [targetRepo, setTargetRepo] = useState('');
+
+  // Prefill repo from ?repo=owner/name (set when launching from a repo node
+  // on the workstreams list). Read client-side to avoid the SSR Suspense
+  // requirement of useSearchParams.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const r = new URLSearchParams(window.location.search).get('repo');
+    if (r && r.trim()) setTargetRepo(r.trim());
+  }, []);
   const [baseBranch, setBaseBranch] = useState('main');
   const [commitMode, setCommitMode] = useState<'pr' | 'direct'>('pr');
   const [modelOptions, setModelOptions] = useState<readonly ModelOption[]>([]);

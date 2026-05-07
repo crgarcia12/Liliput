@@ -270,6 +270,16 @@ export default function RequestsPage() {
                     <span className="text-[10px] text-gray-500">{taskCount}</span>
                   </button>
                   {isRealRepo && (
+                    <Link
+                      href={`/new?repo=${encodeURIComponent(repo)}`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="opacity-0 group-hover:opacity-100 text-cyan-400 hover:text-cyan-200 px-1.5 text-[10px] font-semibold"
+                      title={`New workstream in ${repo}`}
+                    >
+                      + New
+                    </Link>
+                  )}
+                  {isRealRepo && (
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -480,10 +490,21 @@ function DetailPane({ sel, tasks }: { sel: Selection | null; tasks: Task[] }) {
 
   if (sel.kind === 'repo') {
     const repoTasks = tasks.filter((t) => (t.repository ?? '(no repo)') === sel.repo);
+    const isRealRepo = sel.repo !== '(no repo)';
     return (
       <div className="flex-1 overflow-y-auto p-6">
-        <h2 className="text-lg font-semibold mb-1">📁 {sel.repo}</h2>
-        <div className="text-xs text-gray-500 mb-4">{repoTasks.length} request(s)</div>
+        <div className="flex items-center justify-between mb-1 gap-3">
+          <h2 className="text-lg font-semibold truncate">📁 {sel.repo}</h2>
+          {isRealRepo && (
+            <Link
+              href={`/new?repo=${encodeURIComponent(sel.repo)}`}
+              className="inline-flex items-center h-7 px-3 rounded-md bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold shadow-sm transition-colors shrink-0"
+            >
+              + New workstream
+            </Link>
+          )}
+        </div>
+        <div className="text-xs text-gray-500 mb-4">{repoTasks.length} workstream(s)</div>
         <ul className="space-y-1 text-sm">
           {repoTasks.map((t) => {
             const style = STATUS_STYLES[t.status];
