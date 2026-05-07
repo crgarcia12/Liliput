@@ -33,6 +33,7 @@ import {
 } from './agent-loop.js';
 import { resolveDockerfile } from './dockerfile-detector.js';
 import { acrBuild } from './azure-builder.js';
+import { isSdkConnectionClosed, resetCopilotClient } from './copilot-client.js';
 import { runOpsFixer } from './ops-fixer.js';
 import { runGitOpWithFixer } from './git-fixer.js';
 import {
@@ -2265,7 +2266,24 @@ export async function purgeOrphanWorkspaces(): Promise<{ removed: number; kept: 
 export function iterateTask(io: SocketServer, taskId: string, message: string): void {
   void (async () => {
     try {
-      await runIteration(io, taskId, message);
+      try {
+        await runIteration(io, taskId, message);
+      } catch (err) {
+        // Auto-recover from a dead Copilot SDK subprocess. Drop the live
+        // session (whose handle now points at a closed pipe), reset the
+        // singleton client, then retry once. The retry's first action in
+        // runIteration will be `resurrectLiveSession` which spawns a fresh
+        // SDK session and replays a recap from chat history.
+        if (isSdkConnectionClosed(err)) {
+          const m = err instanceof Error ? err.message : String(err);
+          logger.warn({ taskId, err: m }, 'iterateTask: SDK connection closed — resurrecting and retrying once');
+          liveSessions.delete(taskId);
+          await resetCopilotClient();
+          await runIteration(io, taskId, message);
+        } else {
+          throw err;
+        }
+      }
     } catch (err) {
       const m = err instanceof Error ? err.message : String(err);
       logger.error({ taskId, err: m }, 'Iteration failed');

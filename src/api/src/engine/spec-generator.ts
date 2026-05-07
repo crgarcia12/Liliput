@@ -211,7 +211,9 @@ export async function generateSpec(
   const reasoningEffort = context?.reasoningEffort ?? deriveReasoningEffort(model);
   setForceEffort(reasoningEffort);
 
-  try {
+  // One in-process SDK attempt: create a session, send the prompt, return the trimmed
+  // content. Throws on SDK errors so the outer retry loop can reset+reattempt.
+  const attempt = async (): Promise<string | null> => {
     progress('connecting-llm', `model: ${model}`);
     const client = await getCopilotClient();
     const session = await client.createSession({
@@ -229,26 +231,45 @@ export async function generateSpec(
         );
       }
     }
-
     try {
       progress('drafting', `prompt: ${prompt.length} chars`);
       const result = await session.sendAndWait({ prompt }, DEFAULT_TIMEOUT_MS);
-      const content = result?.data?.content?.trim();
-      if (!content) {
-        recordAuthFailure('unknown', 'Empty response from the LLM');
-        progress('spec-failed', 'empty LLM response');
-        return fallbackSpec(title, description, 'empty LLM response');
-      }
-      recordAuthSuccess();
-      logger.info({ model, chars: content.length }, 'Spec generated via Copilot SDK');
-      progress('spec-ready', `${content.length} chars`);
-      return stripCodeFence(content);
+      return result?.data?.content?.trim() ?? null;
     } finally {
       await session.disconnect().catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         logger.warn({ err: message }, 'Error disconnecting Copilot session');
       });
     }
+  };
+
+  try {
+    let content: string | null;
+    try {
+      content = await attempt();
+    } catch (err: unknown) {
+      // The SDK subprocess died mid-flight (Connection is closed / EPIPE / etc).
+      // Discard the dead singleton and retry ONCE with a fresh subprocess. This
+      // is safe because each spec-generator call uses its own session — there's
+      // no conversation history we'd lose by reconnecting.
+      if (isSdkConnectionClosed(err)) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn({ err: msg }, 'spec-generator: SDK connection closed — resetting client and retrying once');
+        await resetCopilotClient();
+        content = await attempt();
+      } else {
+        throw err;
+      }
+    }
+    if (!content) {
+      recordAuthFailure('unknown', 'Empty response from the LLM');
+      progress('spec-failed', 'empty LLM response');
+      return fallbackSpec(title, description, 'empty LLM response');
+    }
+    recordAuthSuccess();
+    logger.info({ model, chars: content.length }, 'Spec generated via Copilot SDK');
+    progress('spec-ready', `${content.length} chars`);
+    return stripCodeFence(content);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     const { kind, message: humanMsg } = classifyError(err);
