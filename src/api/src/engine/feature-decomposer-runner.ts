@@ -53,7 +53,11 @@ export async function runFeatureDecomposer(
   const model = modelOverride && modelOverride.trim() ? modelOverride.trim() : DEFAULT_MODEL;
   const reasoningEffort = reasoningEffortOverride ?? deriveReasoningEffort(model);
   setForceEffort(reasoningEffort);
-  try {
+
+  // One in-process SDK attempt. Throws on SDK errors so the outer retry
+  // can reset the dead client and try again. Returns the trimmed LLM
+  // content (may be empty string).
+  const attempt = async (): Promise<string> => {
     const client = await getCopilotClient();
     const session = await client.createSession({
       model,
@@ -72,46 +76,63 @@ export async function runFeatureDecomposer(
     }
     try {
       const result = await session.sendAndWait({ prompt }, DEFAULT_TIMEOUT_MS);
-      const content = result?.data?.content?.trim();
-      if (!content) {
-        logger.warn(
-          { workstreamId: input.workstreamId },
-          'decomposer: empty LLM response — falling back to single feature',
-        );
-        return null;
-      }
-      try {
-        const decomp = parseDecomposition(input.workstreamId, content);
-        if (!decomp) {
-          logger.warn(
-            { workstreamId: input.workstreamId, chars: content.length },
-            'decomposer: response contained no Feature/Integration headings',
-          );
-          return null;
-        }
-        logger.info(
-          {
-            workstreamId: input.workstreamId,
-            features: decomp.features.length,
-            hasIntegration: !!decomp.integration,
-          },
-          'decomposer: parsed decomposition',
-        );
-        return decomp;
-      } catch (parseErr) {
-        const msg =
-          parseErr instanceof Error ? parseErr.message : String(parseErr);
-        logger.warn(
-          { workstreamId: input.workstreamId, err: msg },
-          'decomposer: parse error — falling back to single feature',
-        );
-        return null;
-      }
+      return result?.data?.content?.trim() ?? '';
     } finally {
       await session.disconnect().catch((err: unknown) => {
         const m = err instanceof Error ? err.message : String(err);
         logger.warn({ err: m }, 'decomposer: error disconnecting Copilot session');
       });
+    }
+  };
+
+  try {
+    let content: string;
+    try {
+      content = await attempt();
+    } catch (err) {
+      // Dead SDK subprocess — reset singleton and retry once with a fresh one.
+      // Safe because each decomposer call uses its own session (no shared state).
+      if (isSdkConnectionClosed(err)) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn({ err: msg }, 'decomposer: SDK connection closed — resetting client and retrying once');
+        await resetCopilotClient();
+        content = await attempt();
+      } else {
+        throw err;
+      }
+    }
+    if (!content) {
+      logger.warn(
+        { workstreamId: input.workstreamId },
+        'decomposer: empty LLM response — falling back to single feature',
+      );
+      return null;
+    }
+    try {
+      const decomp = parseDecomposition(input.workstreamId, content);
+      if (!decomp) {
+        logger.warn(
+          { workstreamId: input.workstreamId, chars: content.length },
+          'decomposer: response contained no Feature/Integration headings',
+        );
+        return null;
+      }
+      logger.info(
+        {
+          workstreamId: input.workstreamId,
+          features: decomp.features.length,
+          hasIntegration: !!decomp.integration,
+        },
+        'decomposer: parsed decomposition',
+      );
+      return decomp;
+    } catch (parseErr) {
+      const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
+      logger.warn(
+        { workstreamId: input.workstreamId, err: msg },
+        'decomposer: parse error — falling back to single feature',
+      );
+      return null;
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
