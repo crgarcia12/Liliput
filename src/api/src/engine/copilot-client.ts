@@ -17,6 +17,34 @@ export function isSdkConnectionClosed(err: unknown): boolean {
 }
 
 /**
+ * Tagged error thrown by the agent-loop idle watchdog when the SDK has not
+ * fired any event for IDLE_THRESHOLD_MS — meaning the agent's turn is
+ * silently wedged (no tool calls, no reasoning, no messages). Treated as
+ * recoverable: the iteration layer should resurrect and retry.
+ */
+export class IdleTimeoutError extends Error {
+  readonly idleMs: number;
+  constructor(idleMs: number) {
+    super(`Agent idle: no SDK event for ${Math.round(idleMs / 1000)}s`);
+    this.name = 'IdleTimeoutError';
+    this.idleMs = idleMs;
+  }
+}
+
+/**
+ * True when the error indicates a recoverable SDK fault — either the CLI
+ * subprocess died (`isSdkConnectionClosed`) or the watchdog tripped because
+ * the agent went silent (`IdleTimeoutError`). The iteration layer retries
+ * on these; non-recoverable errors propagate to the user.
+ */
+export function isRecoverableSdkError(err: unknown): boolean {
+  if (isSdkConnectionClosed(err)) return true;
+  if (err instanceof IdleTimeoutError) return true;
+  if (err instanceof Error && err.name === 'IdleTimeoutError') return true;
+  return false;
+}
+
+/**
  * Discard the current singleton. The next `getCopilotClient()` call will
  * spawn a fresh CLI subprocess. Safe to call concurrently — best-effort
  * stop of the dead client; ignores errors. Call this when a session call

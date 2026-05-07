@@ -33,7 +33,7 @@ import {
 } from './agent-loop.js';
 import { resolveDockerfile } from './dockerfile-detector.js';
 import { acrBuild } from './azure-builder.js';
-import { isSdkConnectionClosed, resetCopilotClient } from './copilot-client.js';
+import { isRecoverableSdkError, resetCopilotClient } from './copilot-client.js';
 import { runOpsFixer } from './ops-fixer.js';
 import { runGitOpWithFixer } from './git-fixer.js';
 import {
@@ -2265,34 +2265,57 @@ export async function purgeOrphanWorkspaces(): Promise<{ removed: number; kept: 
  */
 export function iterateTask(io: SocketServer, taskId: string, message: string): void {
   void (async () => {
-    try {
+    // Auto-retry on recoverable SDK faults (dead subprocess OR idle-watchdog
+    // abort). The user may not be present — Liliput agents are expected to
+    // run unattended for hours/days, so we keep trying with backoff rather
+    // than failing the task on transient SDK problems.
+    //
+    // Each retry drops the live session + resets the singleton client; the
+    // resurrection on the next runIteration call spawns a fresh SDK session
+    // and replays a recap from chat history.
+    const MAX_ATTEMPTS = parseInt(process.env['AGENT_MAX_RETRY_ATTEMPTS'] ?? '5', 10);
+    const BACKOFF_BASE_MS = 5_000;
+    let lastErr: unknown;
+    let succeeded = false;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
         await runIteration(io, taskId, message);
+        succeeded = true;
+        break;
       } catch (err) {
-        // Auto-recover from a dead Copilot SDK subprocess. Drop the live
-        // session (whose handle now points at a closed pipe), reset the
-        // singleton client, then retry once. The retry's first action in
-        // runIteration will be `resurrectLiveSession` which spawns a fresh
-        // SDK session and replays a recap from chat history.
-        if (isSdkConnectionClosed(err)) {
-          const m = err instanceof Error ? err.message : String(err);
-          logger.warn({ taskId, err: m }, 'iterateTask: SDK connection closed — resurrecting and retrying once');
-          liveSessions.delete(taskId);
-          await resetCopilotClient();
-          await runIteration(io, taskId, message);
-        } else {
-          throw err;
+        lastErr = err;
+        if (!isRecoverableSdkError(err) || attempt === MAX_ATTEMPTS) {
+          break;
         }
+        const m = err instanceof Error ? err.message : String(err);
+        const backoffMs = BACKOFF_BASE_MS * attempt;
+        logger.warn(
+          { taskId, attempt, maxAttempts: MAX_ATTEMPTS, backoffMs, err: m },
+          'iterateTask: recoverable SDK error — resetting and retrying after backoff',
+        );
+        const retryMsg = store.addChatMessage(
+          taskId,
+          'system',
+          `🔄 Recoverable SDK error (attempt ${attempt}/${MAX_ATTEMPTS}): ${m}. Resurrecting in ${Math.round(backoffMs / 1000)}s…`,
+        );
+        if (retryMsg) io.to(`task:${taskId}`).emit('chat:message', retryMsg);
+        liveSessions.delete(taskId);
+        await resetCopilotClient();
+        await new Promise((r) => setTimeout(r, backoffMs));
       }
-    } catch (err) {
-      const m = err instanceof Error ? err.message : String(err);
-      logger.error({ taskId, err: m }, 'Iteration failed');
-      setTaskStatus(io, taskId, 'failed', { errorMessage: m });
-      const sysMsg = store.addChatMessage(taskId, 'system', `❌ Iteration failed: ${m}`);
-      if (sysMsg) io.to(`task:${taskId}`).emit('chat:message', sysMsg);
-    } finally {
-      clearInFlightAgent(taskId);
     }
+    if (!succeeded) {
+      const m = lastErr instanceof Error ? lastErr.message : String(lastErr);
+      logger.error({ taskId, err: m }, 'Iteration failed after all retry attempts');
+      setTaskStatus(io, taskId, 'failed', { errorMessage: m });
+      const sysMsg = store.addChatMessage(
+        taskId,
+        'system',
+        `❌ Iteration failed after ${MAX_ATTEMPTS} attempts: ${m}`,
+      );
+      if (sysMsg) io.to(`task:${taskId}`).emit('chat:message', sysMsg);
+    }
+    clearInFlightAgent(taskId);
   })();
 }
 
