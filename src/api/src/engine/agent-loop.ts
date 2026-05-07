@@ -25,7 +25,7 @@
 
 import { approveAll } from '@github/copilot-sdk';
 import type { CopilotSession, SessionEvent } from '@github/copilot-sdk';
-import { getCopilotClient, isSdkConnectionClosed, resetCopilotClient } from './copilot-client.js';
+import { getCopilotClient, isSdkConnectionClosed, resetCopilotClient, IdleTimeoutError } from './copilot-client.js';
 import { deriveReasoningEffort, type ReasoningEffort } from '../../../shared/types/index.js';
 import { setForceEffort } from './force-effort.js';
 import { buildDeployContract, type DeployContractContext } from './liliput-deploy-contract.js';
@@ -35,9 +35,17 @@ const DEFAULT_MODEL = process.env['COPILOT_MODEL'] ?? 'claude-sonnet-4';
 // No wall-clock timeout: the SDK streams an event for every tool call, so a
 // turn that's actively making progress should never be killed. Wedged turns
 // are caught either by the user (Stop button / new chat message → preempt)
-// or by an idle-watchdog (TODO). We pass a paranoid 24h backstop here purely
+// or by the idle watchdog below. We pass a paranoid 24h backstop here purely
 // to satisfy the SDK signature — any turn that hits that is genuinely lost.
 const TIMEOUT_MS = parseInt(process.env['AGENT_LOOP_TIMEOUT_MS'] ?? '86400000', 10);
+
+// Idle watchdog: if the SDK fires no event for this long, abort the turn so
+// the iteration layer can resurrect and retry. 8 minutes is comfortably
+// longer than any single legitimate tool call (long npm installs, big
+// docker builds, slow tests) but short enough that genuine wedges are
+// caught quickly.
+const IDLE_THRESHOLD_MS = parseInt(process.env['AGENT_IDLE_THRESHOLD_MS'] ?? '480000', 10);
+const IDLE_CHECK_INTERVAL_MS = 30_000;
 
 // Truncation limits to keep the activity log readable.
 const ARGS_PREVIEW = 200;
@@ -650,10 +658,24 @@ export async function runAgentTurn(
   const log = opts.onLog ?? noLog;
   const onEvent = opts.onToolEvent ?? noEvent;
 
+  // Idle watchdog: every SDK event (tool call, reasoning, message, log line)
+  // resets `lastEventAt`. A 30s interval checks for idle; if the gap exceeds
+  // IDLE_THRESHOLD_MS we abort the session and throw IdleTimeoutError so
+  // iterateTask can resurrect + retry.
+  let lastEventAt = Date.now();
+  const wrappedLog: LogFn = (level, message, command, output) => {
+    lastEventAt = Date.now();
+    log(level, message, command, output);
+  };
+  const wrappedEvent: ToolEventFn = (event) => {
+    lastEventAt = Date.now();
+    onEvent(event);
+  };
+
   // Swap the live callbacks so the session-level event handler routes events
   // to this turn's destinations.
-  handle._callbacks.log = log;
-  handle._callbacks.toolEvent = onEvent;
+  handle._callbacks.log = wrappedLog;
+  handle._callbacks.toolEvent = wrappedEvent;
   const before = handle._callbacks.toolCount;
 
   const prompt = opts.promptOverride
@@ -668,6 +690,21 @@ export async function runAgentTurn(
 
   log('info', opts.isInitial ? 'Asking agent to plan and apply edits…' : 'Sending follow-up to agent…');
 
+  let idleAbort: IdleTimeoutError | undefined;
+  const watchdog = setInterval(() => {
+    const idle = Date.now() - lastEventAt;
+    if (idle > IDLE_THRESHOLD_MS) {
+      idleAbort = new IdleTimeoutError(idle);
+      logger.warn(
+        { idleMs: idle, thresholdMs: IDLE_THRESHOLD_MS },
+        'Idle watchdog: no SDK event — aborting turn so iteration layer can retry',
+      );
+      // Best-effort abort. sendAndWait will reject; the catch below tags it.
+      void handle._session.abort().catch(() => undefined);
+      clearInterval(watchdog);
+    }
+  }, IDLE_CHECK_INTERVAL_MS);
+
   let finalMessage = '';
   try {
     logger.info(
@@ -681,6 +718,18 @@ export async function runAgentTurn(
     const result = await handle._session.sendAndWait({ prompt }, opts.timeoutMs ?? TIMEOUT_MS);
     finalMessage = result?.data?.content?.trim() ?? '';
   } catch (err) {
+    // If the abort was driven by our watchdog, surface that as the typed
+    // recoverable error rather than the SDK's generic abort message.
+    if (idleAbort) {
+      logger.error(
+        { idleMs: idleAbort.idleMs },
+        'SDK session turn failed: idle-watchdog abort',
+      );
+      // The SDK CLI subprocess may itself be wedged — recycle it so the
+      // resurrection turn starts from a fresh process.
+      void resetCopilotClient();
+      throw idleAbort;
+    }
     logger.error({ err: err instanceof Error ? err.message : String(err) }, 'SDK session turn failed');
     if (isSdkConnectionClosed(err)) {
       // The SDK's CLI subprocess died. Discard the singleton so the next
@@ -689,6 +738,8 @@ export async function runAgentTurn(
       void resetCopilotClient();
     }
     throw err;
+  } finally {
+    clearInterval(watchdog);
   }
 
   const tools = handle._callbacks.toolCount - before;
