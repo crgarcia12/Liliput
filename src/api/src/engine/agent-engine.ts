@@ -1618,14 +1618,49 @@ async function commitBuildAndRedeploy(opts: {
 
 export function startBuild(io: SocketServer, taskId: string): void {
   void (async () => {
+    const MAX_ATTEMPTS = parseInt(process.env['AGENT_MAX_RETRY_ATTEMPTS'] ?? '5', 10);
+    const BACKOFF_BASE_MS = 5_000;
+    let lastErr: unknown;
+    let succeeded = false;
     try {
-      await runFullPipeline(io, taskId);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logger.error({ taskId, err: message }, 'Agent pipeline failed');
-      setTaskStatus(io, taskId, 'failed', { errorMessage: message });
-      const sysMsg = store.addChatMessage(taskId, 'system', `❌ Agent pipeline failed: ${message}`);
-      if (sysMsg) io.to(`task:${taskId}`).emit('chat:message', sysMsg);
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+          await runFullPipeline(io, taskId);
+          succeeded = true;
+          break;
+        } catch (err) {
+          lastErr = err;
+          if (!isRecoverableSdkError(err) || attempt === MAX_ATTEMPTS) {
+            break;
+          }
+          const m = err instanceof Error ? err.message : String(err);
+          const backoffMs = BACKOFF_BASE_MS * attempt;
+          logger.warn(
+            { taskId, attempt, maxAttempts: MAX_ATTEMPTS, backoffMs, err: m },
+            'startBuild: recoverable SDK error — resetting and retrying after backoff',
+          );
+          const retryMsg = store.addChatMessage(
+            taskId,
+            'system',
+            `🔄 Recoverable SDK error during build (attempt ${attempt}/${MAX_ATTEMPTS}): ${m}. Resurrecting in ${Math.round(backoffMs / 1000)}s…`,
+          );
+          if (retryMsg) io.to(`task:${taskId}`).emit('chat:message', retryMsg);
+          liveSessions.delete(taskId);
+          await resetCopilotClient();
+          await new Promise((r) => setTimeout(r, backoffMs));
+        }
+      }
+      if (!succeeded) {
+        const message = lastErr instanceof Error ? lastErr.message : String(lastErr);
+        logger.error({ taskId, err: message }, 'Agent pipeline failed after all retry attempts');
+        setTaskStatus(io, taskId, 'failed', { errorMessage: message });
+        const sysMsg = store.addChatMessage(
+          taskId,
+          'system',
+          `❌ Agent pipeline failed after ${MAX_ATTEMPTS} attempts: ${message}`,
+        );
+        if (sysMsg) io.to(`task:${taskId}`).emit('chat:message', sysMsg);
+      }
     } finally {
       clearInFlightAgent(taskId);
     }
