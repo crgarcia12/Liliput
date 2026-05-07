@@ -690,18 +690,27 @@ export async function runAgentTurn(
 
   log('info', opts.isInitial ? 'Asking agent to plan and apply edits…' : 'Sending follow-up to agent…');
 
+  // Watchdog uses a Promise.race so the rejection is guaranteed even when
+  // the SDK's sendAndWait hangs (CLI subprocess wedged, abort() best-effort).
   let idleAbort: IdleTimeoutError | undefined;
+  let rejectIdle: ((err: IdleTimeoutError) => void) | undefined;
+  const idlePromise = new Promise<never>((_, reject) => {
+    rejectIdle = reject;
+  });
   const watchdog = setInterval(() => {
     const idle = Date.now() - lastEventAt;
     if (idle > IDLE_THRESHOLD_MS) {
+      if (idleAbort) return; // already firing
       idleAbort = new IdleTimeoutError(idle);
       logger.warn(
         { idleMs: idle, thresholdMs: IDLE_THRESHOLD_MS },
         'Idle watchdog: no SDK event — aborting turn so iteration layer can retry',
       );
-      // Best-effort abort. sendAndWait will reject; the catch below tags it.
+      // Best-effort abort to free SDK resources; even if it does not unblock
+      // sendAndWait, the Promise.race below ensures we propagate the throw.
       void handle._session.abort().catch(() => undefined);
       clearInterval(watchdog);
+      rejectIdle?.(idleAbort);
     }
   }, IDLE_CHECK_INTERVAL_MS);
 
@@ -715,7 +724,8 @@ export async function runAgentTurn(
       },
       '[effort-trace] runAgentTurn: about to sendAndWait (per-turn CAPI request will use cached model/effort)',
     );
-    const result = await handle._session.sendAndWait({ prompt }, opts.timeoutMs ?? TIMEOUT_MS);
+    const sendPromise = handle._session.sendAndWait({ prompt }, opts.timeoutMs ?? TIMEOUT_MS);
+    const result = await Promise.race([sendPromise, idlePromise]);
     finalMessage = result?.data?.content?.trim() ?? '';
   } catch (err) {
     // If the abort was driven by our watchdog, surface that as the typed
