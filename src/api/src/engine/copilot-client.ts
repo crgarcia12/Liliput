@@ -7,6 +7,37 @@ let modelsCache: { fetchedAt: number; models: ModelOption[] } | undefined;
 const MODELS_CACHE_TTL_MS = 5 * 60_000;
 
 /**
+ * Returns true for SDK errors that indicate the underlying CLI subprocess
+ * died (stdin/stdout IPC channel closed). Once this happens the singleton
+ * is unusable and must be discarded so the next call can spawn a fresh one.
+ */
+export function isSdkConnectionClosed(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err ?? '');
+  return /connection is closed|stream is closed|EPIPE|pipe closed|unexpected end of stream/i.test(msg);
+}
+
+/**
+ * Discard the current singleton. The next `getCopilotClient()` call will
+ * spawn a fresh CLI subprocess. Safe to call concurrently — best-effort
+ * stop of the dead client; ignores errors. Call this when a session call
+ * throws an SDK-level connection error (see `isSdkConnectionClosed`).
+ */
+export async function resetCopilotClient(): Promise<void> {
+  if (!clientPromise) return;
+  const dying = clientPromise;
+  clientPromise = undefined;
+  modelsCache = undefined;
+  try {
+    const client = await dying;
+    await client.stop();
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn({ err: msg }, 'resetCopilotClient: error stopping dead client (ignored)');
+  }
+  logger.warn('Copilot SDK client reset — next call will spawn a fresh subprocess');
+}
+
+/**
  * Lazily create and start a single shared CopilotClient.
  * The bundled Copilot CLI is spawned the first time this is called and
  * reused for every subsequent session.

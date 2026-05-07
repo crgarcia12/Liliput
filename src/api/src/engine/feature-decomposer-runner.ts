@@ -15,7 +15,7 @@
  * creation path. This module is the runner only.
  */
 import { approveAll } from '@github/copilot-sdk';
-import { getCopilotClient } from './copilot-client.js';
+import { getCopilotClient, isSdkConnectionClosed, resetCopilotClient } from './copilot-client.js';
 import { logger } from '../logger.js';
 import {
   buildDecompositionPrompt,
@@ -119,6 +119,9 @@ export async function runFeatureDecomposer(
       { workstreamId: input.workstreamId, err: msg },
       'decomposer: SDK error — falling back to single feature',
     );
+    if (isSdkConnectionClosed(err)) {
+      void resetCopilotClient();
+    }
     return null;
   }
 }

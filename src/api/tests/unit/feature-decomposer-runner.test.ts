@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mock the Copilot client so tests don't need a real auth token.
 vi.mock('../../src/engine/copilot-client.js', () => ({
   getCopilotClient: vi.fn(),
+  isSdkConnectionClosed: vi.fn(() => false),
+  resetCopilotClient: vi.fn(async () => undefined),
 }));
 
 import { runFeatureDecomposer } from '../../src/engine/feature-decomposer-runner.js';
