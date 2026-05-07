@@ -25,6 +25,7 @@ import { getDb } from './db.js';
 import * as wsStore from './workstream-store.js';
 import { captureFromText as captureToolWishes } from './tool-wish-store.js';
 import { captureFromText as captureVerdict } from './verdict-store.js';
+import { getPodId, LEASE_DURATION_MS } from '../engine/pod-identity.js';
 
 function now(): string {
   return new Date().toISOString();
@@ -587,17 +588,30 @@ export function backfillDefaultWorkstreams(): { tasksAssigned: number; workstrea
  * Safe statuses are preserved:
  *   - tasks: `review` (awaiting user), `completed`, `discarded`, `failed`
  *   - agents: anything other than `working`
+ *
+ * Returns a `resumable` list of task ids that the caller can hand to the
+ * agent engine for auto-resume. We only consider tasks that were in
+ * `building` (mid-agent-work) AND have the workspace metadata
+ * (repository + branch) needed to resurrect a session. `deploying` and
+ * `shipping` are intentionally NOT auto-resumed because they involve
+ * non-idempotent k8s/git operations whose mid-flight state is unsafe to
+ * blindly retry — the user gets a `failed` task and can re-trigger
+ * manually.
  */
 export function reconcileOrphanedRuns(): {
   agentsReset: number;
   tasksFailed: number;
+  resumable: string[];
 } {
   const db = getDb();
   const ts = now();
   const note = 'Container restarted while this was in flight; marked failed by boot-time reconciler.';
+  const podId = getPodId();
+  const leaseExpiresAt = Date.now() + LEASE_DURATION_MS;
 
   let agentsReset = 0;
   let tasksFailed = 0;
+  const resumable: string[] = [];
 
   const txn = db.transaction(() => {
     // 1. Agents stuck in `working`
@@ -630,22 +644,37 @@ export function reconcileOrphanedRuns(): {
     const ACTIVE_STATUSES = ['clarifying', 'specifying', 'building', 'deploying', 'shipping'];
     const taskRows = db
       .prepare(
-        `SELECT id, data FROM tasks WHERE status IN (${ACTIVE_STATUSES.map(() => '?').join(',')})`,
+        `SELECT id, status, data FROM tasks WHERE status IN (${ACTIVE_STATUSES.map(() => '?').join(',')})`,
       )
-      .all(...ACTIVE_STATUSES) as { id: string; data: string }[];
+      .all(...ACTIVE_STATUSES) as { id: string; status: string; data: string }[];
 
     const updateTaskStmt = db.prepare(
-      'UPDATE tasks SET status = ?, data = ?, updated_at = ? WHERE id = ?',
+      `UPDATE tasks
+         SET status = ?, data = ?, updated_at = ?, owner_pod_id = ?, lease_expires_at = ?
+       WHERE id = ?`,
     );
 
     for (const row of taskRows) {
       const task = JSON.parse(row.data) as Task;
       const updated = { ...task, status: 'failed' as const, updatedAt: ts };
-      updateTaskStmt.run('failed', JSON.stringify(updated), ts, row.id);
+      updateTaskStmt.run(
+        'failed',
+        JSON.stringify(updated),
+        ts,
+        podId,
+        leaseExpiresAt,
+        row.id,
+      );
       tasksFailed++;
+
+      // Resumable iff (a) was actively coding, and (b) has a workspace to
+      // resurrect against. `iterateTask` requires repository + branch.
+      if (row.status === 'building' && task.repository && task.branch) {
+        resumable.push(row.id);
+      }
     }
   });
 
   txn();
-  return { agentsReset, tasksFailed };
+  return { agentsReset, tasksFailed, resumable };
 }

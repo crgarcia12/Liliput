@@ -348,6 +348,94 @@ export async function restoreDevRoutesFromStore(): Promise<{ restored: number }>
   return { restored };
 }
 
+/**
+ * Re-trigger an agent turn for tasks that were mid-`building` when the
+ * previous container died. Called once at startup, after the boot-time
+ * reconciler has marked them `failed`. Each resume:
+ *
+ *   1. appends a system chat message + activity entry so the user sees
+ *      the resurrection in the UI,
+ *   2. calls `iterateTask` with a "you were interrupted" prompt — the
+ *      engine then re-clones (or re-uses) the workspace, recreates the
+ *      Copilot SDK session, and runs another agent turn. `canIterate`
+ *      already accepts `failed` status, so no special handling needed.
+ *
+ * Concurrency is capped (env: LILIPUT_AUTO_RESUME_CONCURRENCY, default 3)
+ * to avoid stampeding the API with N parallel `git clone`s right after
+ * boot. We stagger starts with a small delay so logs stay readable.
+ *
+ * Multi-pod safety: this is intentionally a single-pod-only optimisation.
+ * Two replicas would each see the same `failed` tasks and both try to
+ * resume them, racing on the same workspace PVC. The lease columns
+ * (`tasks.owner_pod_id`, `tasks.lease_expires_at`) are populated for
+ * forward-compat but NOT enforced. Set `LILIPUT_AUTO_RESUME=false` to
+ * disable until lease-based claiming lands.
+ */
+export async function autoResumeInterruptedTasks(
+  io: SocketServer,
+  taskIds: string[],
+  opts: { concurrency: number; staggerMs?: number } = { concurrency: 3 },
+): Promise<{ resumed: number; skipped: number }> {
+  if (taskIds.length === 0) return { resumed: 0, skipped: 0 };
+  const concurrency = Math.max(1, opts.concurrency);
+  const staggerMs = opts.staggerMs ?? 500;
+  const RESUME_PROMPT =
+    'Your previous turn was interrupted by an API pod restart — any running shell, ' +
+    'watcher, or in-flight tool call was killed. Look at the workspace state, re-check ' +
+    "what was actually committed/saved, and continue from there. Don't re-do work " +
+    "that's already on disk.";
+
+  let resumed = 0;
+  let skipped = 0;
+  let cursor = 0;
+
+  async function startOne(taskId: string): Promise<void> {
+    const t = store.getTask(taskId);
+    if (!t || !t.repository || !t.branch) {
+      skipped++;
+      return;
+    }
+    if (!canIterate(taskId)) {
+      skipped++;
+      logger.warn({ taskId }, 'autoResume: canIterate returned false — skipping');
+      return;
+    }
+    const sysMsg = store.addChatMessage(
+      taskId,
+      'system',
+      `🔁 API restarted — resuming this task automatically. The agent will pick up ` +
+        `from \`${t.repository}@${t.branch}\`.`,
+    );
+    if (sysMsg) io.to(`task:${taskId}`).emit('chat:message', sysMsg);
+    logger.info({ taskId }, 'autoResume: re-triggering iterateTask after restart');
+    try {
+      iterateTask(io, taskId, RESUME_PROMPT);
+      resumed++;
+    } catch (err) {
+      skipped++;
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn({ taskId, err: msg }, 'autoResume: iterateTask threw synchronously');
+    }
+  }
+
+  async function worker(): Promise<void> {
+    while (true) {
+      const i = cursor++;
+      if (i >= taskIds.length) return;
+      // Stagger starts so the API isn't slammed with N parallel clones.
+      if (i > 0 && staggerMs > 0) await new Promise((r) => setTimeout(r, staggerMs));
+      const id = taskIds[i];
+      if (id) await startOne(id);
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, taskIds.length) }, () =>
+    worker(),
+  );
+  await Promise.all(workers);
+  return { resumed, skipped };
+}
+
 function spawnPhase(
   io: SocketServer,
   taskId: string,

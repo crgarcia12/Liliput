@@ -165,6 +165,20 @@ export function getDb(): Database.Database {
       logger.info({}, 'Migrated: added feature_id column to tasks');
     }
     _db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_feature ON tasks(feature_id)`);
+    // Pod-ownership / lease columns. Forward-compat for multi-replica scale-out.
+    // Today (single replica) the columns are written by reconcileOrphanedRuns +
+    // autoResumeInterruptedTasks for telemetry only — no enforcement. Scale-out
+    // would gate task claims on `lease_expires_at < now()` to prevent two pods
+    // from racing on the same workspace.
+    if (!cols.some((c) => c.name === 'owner_pod_id')) {
+      _db.exec(`ALTER TABLE tasks ADD COLUMN owner_pod_id TEXT`);
+      logger.info({}, 'Migrated: added owner_pod_id column to tasks');
+    }
+    if (!cols.some((c) => c.name === 'lease_expires_at')) {
+      _db.exec(`ALTER TABLE tasks ADD COLUMN lease_expires_at INTEGER`);
+      logger.info({}, 'Migrated: added lease_expires_at column to tasks');
+    }
+    _db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_lease ON tasks(lease_expires_at)`);
   } catch (err) {
     logger.warn({ err }, 'Workstream migration check failed (non-fatal)');
   }

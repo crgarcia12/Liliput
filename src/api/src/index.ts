@@ -9,10 +9,11 @@ import { createApp } from './app.js';
 import { setupWebSocket } from './ws/handler.js';
 import { stopCopilotClient } from './engine/copilot-client.js';
 import { reconcileOrphanedRuns, backfillDefaultWorkstreams } from './stores/task-store.js';
-import { purgeOrphanWorkspaces, restoreDevRoutesFromStore } from './engine/agent-engine.js';
+import { purgeOrphanWorkspaces, restoreDevRoutesFromStore, autoResumeInterruptedTasks } from './engine/agent-engine.js';
 import { runDeletingSweeper } from './routes/workstreams.js';
 import { ensureAzLogin } from './engine/azure-builder.js';
 import { logger } from './logger.js';
+import { isAutoResumeEnabled, autoResumeConcurrency, getPodId } from './engine/pod-identity.js';
 
 const PORT = parseInt(process.env['PORT'] ?? '5001', 10);
 
@@ -32,6 +33,36 @@ if (reconciled.agentsReset > 0 || reconciled.tasksFailed > 0) {
   logger.warn(reconciled, '🧹 Reconciled orphaned runs from previous container');
 } else {
   logger.info('🧹 No orphaned runs to reconcile');
+}
+
+// Auto-resume tasks that were mid-`building` when we died. See
+// `autoResumeInterruptedTasks` for the multi-pod safety caveat.
+const replicaCount = parseInt(process.env['LILIPUT_REPLICA_COUNT'] ?? '1', 10);
+if (reconciled.resumable.length > 0 && isAutoResumeEnabled()) {
+  if (Number.isFinite(replicaCount) && replicaCount > 1) {
+    logger.warn(
+      { podId: getPodId(), replicaCount, candidates: reconciled.resumable.length },
+      '⚠️  Auto-resume is unsafe with >1 replica (no lease enforcement yet) — skipping',
+    );
+  } else {
+    logger.info(
+      { podId: getPodId(), candidates: reconciled.resumable.length },
+      '🔁 Auto-resuming tasks interrupted by previous container',
+    );
+    autoResumeInterruptedTasks(io, reconciled.resumable, {
+      concurrency: autoResumeConcurrency(),
+    })
+      .then((res) => logger.info(res, '🔁 Auto-resume kicked off'))
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn({ err: msg }, 'Auto-resume failed (non-fatal)');
+      });
+  }
+} else if (reconciled.resumable.length > 0) {
+  logger.info(
+    { candidates: reconciled.resumable.length },
+    '🔁 Auto-resume disabled (LILIPUT_AUTO_RESUME=false) — leaving tasks failed',
+  );
 }
 
 // Backfill the workstream FK for tasks created before workstreams existed.
