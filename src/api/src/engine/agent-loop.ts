@@ -32,9 +32,12 @@ import { buildDeployContract, type DeployContractContext } from './liliput-deplo
 import { logger } from '../logger.js';
 
 const DEFAULT_MODEL = process.env['COPILOT_MODEL'] ?? 'claude-sonnet-4';
-// Default: 15 minutes for a single turn. Bigger repos with multi-file changes
-// can take 8-10+ minutes once the agent is reading files itself.
-const TIMEOUT_MS = parseInt(process.env['AGENT_LOOP_TIMEOUT_MS'] ?? '900000', 10);
+// No wall-clock timeout: the SDK streams an event for every tool call, so a
+// turn that's actively making progress should never be killed. Wedged turns
+// are caught either by the user (Stop button / new chat message → preempt)
+// or by an idle-watchdog (TODO). We pass a paranoid 24h backstop here purely
+// to satisfy the SDK signature — any turn that hits that is genuinely lost.
+const TIMEOUT_MS = parseInt(process.env['AGENT_LOOP_TIMEOUT_MS'] ?? '86400000', 10);
 
 // Truncation limits to keep the activity log readable.
 const ARGS_PREVIEW = 200;
