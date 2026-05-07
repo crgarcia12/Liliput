@@ -104,6 +104,23 @@ export function buildDeployContract(ctx: DeployContractContext): string {
     `- \`PORT\` — the port the Service expects you to listen on${port ? ` (= ${port})` : ''}.`,
     `- \`BASE_PATH\` is **NOT** set by Liliput. If your existing app code reads it, set it to the empty string.`,
     `- \`X-Forwarded-Prefix: ${pathPrefix}\` is set on every inbound request header.`,
+    '',
+    '## Azure CLI access',
+    '',
+    'You can run `az` directly from the shell. The CLI is pre-authenticated on container startup',
+    'via workload identity — you do **not** need to run `az login` yourself.',
+    '',
+    '- **Subscription:** `ac866176-3fcf-43c6-817a-6309be256398` (already set as default).',
+    '- **Identity scope:** `Contributor` at subscription scope. You can:',
+    '  - Create / read / update / delete most resources (RGs, Storage, Key Vault, AKS, ACA, App Insights, …).',
+    '  - `az acr build --registry crgarliliputacr ...` for image builds.',
+    '  - `kubectl` against the `crgar-liliput-aks` cluster (kubeconfig already wired).',
+    '- **You CANNOT:**',
+    '  - Assign roles (`az role assignment create` → 403). Liliput identity is Contributor, not Owner.',
+    '  - Create service principals or app registrations (`az ad sp create-for-rbac` → fails — no Microsoft Graph permission).',
+    '  - Touch resources outside subscription `ac866176-...`.',
+    '',
+    'If you hit a 403 doing one of the above, surface a clear error in your verdict — do NOT loop on retries. The operator must escalate Liliput\'s identity for those.',
   ].join('\n');
 }
 

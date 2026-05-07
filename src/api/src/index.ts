@@ -11,6 +11,7 @@ import { stopCopilotClient } from './engine/copilot-client.js';
 import { reconcileOrphanedRuns, backfillDefaultWorkstreams } from './stores/task-store.js';
 import { purgeOrphanWorkspaces, restoreDevRoutesFromStore } from './engine/agent-engine.js';
 import { runDeletingSweeper } from './routes/workstreams.js';
+import { ensureAzLogin } from './engine/azure-builder.js';
 import { logger } from './logger.js';
 
 const PORT = parseInt(process.env['PORT'] ?? '5001', 10);
@@ -75,6 +76,17 @@ restoreDevRoutesFromStore()
 // (close PR, delete namespace, delete branch, rm workspace) tolerates
 // "already gone".
 runDeletingSweeper(io);
+
+// Eager `az login` via workload identity. Best-effort — if creds aren't
+// present (local dev), we just log a warning. Doing this at startup means
+// the first agent-issued `az ...` command works immediately, instead of
+// having to wait for an `acrBuild` call to lazily authenticate the CLI.
+ensureAzLogin()
+  .then(() => logger.info('🔐 Azure CLI authenticated via workload identity'))
+  .catch((err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn({ err: msg }, 'Eager az login failed (non-fatal — agents will see auth errors if they call `az`)');
+  });
 
 server.listen(PORT, () => {
   logger.info({ port: PORT }, '🏝️  Liliput API listening');
