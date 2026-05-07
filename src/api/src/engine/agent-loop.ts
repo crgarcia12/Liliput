@@ -359,6 +359,10 @@ function buildFollowUpPrompt(opts: RunAgentTurnOptions): string {
 }
 
 function makeEventHandler(callbacks: TurnCallbacks): (event: SessionEvent) => void {
+  // Tool name isn't included on tool.execution_complete by the SDK — only on
+  // tool.execution_start. Track the mapping so downstream consumers (the
+  // checkpoint writer in particular) can filter by tool on completion.
+  const callIdToToolName = new Map<string, string>();
   return (event: SessionEvent) => {
     const ts = event.timestamp ?? new Date().toISOString();
     const { log, toolEvent } = callbacks;
@@ -367,6 +371,7 @@ function makeEventHandler(callbacks: TurnCallbacks): (event: SessionEvent) => vo
       case 'tool.execution_start': {
         callbacks.toolCount += 1;
         const data = event.data;
+        callIdToToolName.set(data.toolCallId, data.toolName);
         const argSummary = summariseArgs(data.arguments);
         const summary = `▶ ${data.toolName}${argSummary ? ` ${argSummary}` : ''}`;
         log('info', summary);
@@ -387,9 +392,12 @@ function makeEventHandler(callbacks: TurnCallbacks): (event: SessionEvent) => vo
         // Persist completion to logs so it appears after-the-fact (not just live wire events).
         log(ok ? 'info' : 'warn', summary, undefined, details);
         if (!ok) log('warn', `Tool ${data.toolCallId} failed: ${data.error?.message ?? ''}`);
+        const toolName = callIdToToolName.get(data.toolCallId);
+        callIdToToolName.delete(data.toolCallId);
         toolEvent({
           callId: data.toolCallId,
           kind: 'tool-complete',
+          tool: toolName,
           summary: truncate(summary, ARGS_PREVIEW),
           details,
           timestamp: ts,

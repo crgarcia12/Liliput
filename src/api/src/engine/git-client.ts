@@ -305,6 +305,87 @@ export async function headSha(handle: RepoHandle): Promise<string> {
   return stdout.trim();
 }
 
+/**
+ * Stage and commit all changes if the working tree has any. Returns the new
+ * commit SHA, or `null` when the working tree was already clean. Unlike
+ * {@link commitAll}, this never throws on "nothing to commit" — it is the
+ * primitive used by the checkpoint writer where a no-op is the common case.
+ */
+export async function commitAllIfChanges(
+  handle: RepoHandle,
+  message: string,
+): Promise<string | null> {
+  await run('git', ['add', '-A'], { cwd: handle.cwd });
+  const { stdout: status } = await run('git', ['status', '--porcelain'], {
+    cwd: handle.cwd,
+  });
+  if (status.trim() === '') return null;
+  await run('git', ['commit', '-m', message], { cwd: handle.cwd });
+  const { stdout: sha } = await run('git', ['rev-parse', 'HEAD'], {
+    cwd: handle.cwd,
+  });
+  return sha.trim();
+}
+
+/**
+ * Force-push the current branch to origin (force-with-lease). Used after a
+ * soft-reset that rewrites history — for example squashing the WIP
+ * checkpoint commits into a single final commit before opening a PR. Safe
+ * because Liliput is the sole writer to ``liliput/task-*`` branches.
+ */
+export async function pushForceWithLease(
+  handle: RepoHandle,
+  opts: { onLog?: RetryLog } = {},
+): Promise<void> {
+  const log = opts.onLog;
+  await runWithRetry(
+    () =>
+      run(
+        'git',
+        ['push', '--force-with-lease', '--set-upstream', 'origin', handle.branch],
+        { cwd: handle.cwd },
+      ),
+    {
+      onAttempt: (n) => {
+        if (n > 1) log?.(`Retrying git push --force-with-lease (attempt ${n})…`);
+      },
+      onRetry: (n, err, waitMs) => {
+        const summary = err.message.split('\n').slice(-2).join(' ').trim();
+        log?.(`Transient failure on force-push attempt ${n}: ${summary}. Retrying in ${Math.round(waitMs / 1000)}s.`);
+      },
+      onGiveUp: (n, err, cls) => {
+        log?.(`force-push failed after ${n} attempt(s) [${cls}]: ${err.message.split('\n').pop()?.trim() ?? ''}`);
+      },
+    },
+  );
+}
+
+/**
+ * Soft-reset HEAD to the given SHA, preserving working-tree state. Used to
+ * collapse a series of WIP checkpoint commits into a single final commit.
+ */
+export async function softResetTo(
+  handle: RepoHandle,
+  sha: string,
+): Promise<void> {
+  await run('git', ['reset', '--soft', sha], { cwd: handle.cwd });
+}
+
+/**
+ * Push the current branch as-is (no commits required) so the branch exists
+ * on origin and can be re-cloned by a recovering pod even before the agent
+ * has produced any output. Used right after ``createBranch`` so the
+ * workstream's branch reference is durable from second one.
+ */
+export async function pushInitialBranch(
+  handle: RepoHandle,
+  opts: { onLog?: RetryLog } = {},
+): Promise<void> {
+  // Same as push() but separated semantically — the activity log line and
+  // any future telemetry can distinguish "branch reservation" from "code push".
+  await push(handle, opts);
+}
+
 /** True when the working tree (tracked files) is clean — no staged or unstaged changes. */
 export async function isWorkingTreeClean(handle: RepoHandle): Promise<boolean> {
   const { stdout } = await run('git', ['status', '--porcelain'], { cwd: handle.cwd });

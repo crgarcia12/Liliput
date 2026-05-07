@@ -23,6 +23,7 @@ import type { AgentRole, Task } from '../../../shared/types/index.js';
 import * as store from '../stores/task-store.js';
 import { logger } from '../logger.js';
 import * as git from './git-client.js';
+import { CheckpointWriter } from './checkpoint-writer.js';
 import {
   createAgentSession,
   runAgentTurn,
@@ -1703,6 +1704,29 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   logPhase(io, taskId, coder, 'info', `Creating branch ${branch}`, `git checkout -b ${branch}`);
   await git.createBranch(handle, branch);
 
+  // Reserve the branch on origin immediately so a pod crash mid-turn can
+  // recover by re-cloning from the remote — without this, ``task.branch``
+  // would only be set after the Builder phase succeeds, and any crash
+  // during the (long) Coder turn would silently lose all work.
+  try {
+    logPhase(io, taskId, coder, 'info', `Reserving branch on origin…`, `git push --set-upstream origin ${branch}`);
+    await git.pushInitialBranch(handle, {
+      onLog: (m) => logPhase(io, taskId, coder, 'info', m),
+    });
+    store.updateTask(taskId, { branch });
+    logPhase(io, taskId, coder, 'info', `📌 Branch ${branch} reserved — checkpoints will push here`);
+  } catch (err) {
+    // Non-fatal: agent can still run, just no resilience to mid-turn crashes.
+    logPhase(
+      io,
+      taskId,
+      coder,
+      'warn',
+      `Could not reserve branch on origin: ${err instanceof Error ? err.message : String(err)}. Continuing without checkpoint protection.`,
+    );
+  }
+  const baselineSha = await git.headSha(handle);
+
   // Drop the Liliput Deploy Contract into the workspace so the agent can
   // re-read the proxy semantics any time. Excluded from git so it never
   // gets committed into the target repo.
@@ -1787,6 +1811,10 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   });
   logPhase(io, taskId, coder, 'info', 'Invoking LLM agent loop…');
   const hb = startHeartbeat(io, taskId, coder);
+  const checkpointer = new CheckpointWriter({
+    handle,
+    onLog: (level, message) => logPhase(io, taskId, coder, level, message),
+  });
   let result;
   try {
     result = await runAgentTurn(agentSession, {
@@ -1801,11 +1829,22 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
       },
       onToolEvent: (event) => {
         hb.bump();
+        checkpointer.observe(event);
         recordToolEvent(io, taskId, coder, event);
       },
     });
   } finally {
     hb.stop();
+    // Flush any pending checkpoint synchronously so we never lose work
+    // queued in the debounce window when the turn ends (success or failure).
+    try {
+      await checkpointer.flush();
+    } catch (err) {
+      logger.warn(
+        { taskId, err: err instanceof Error ? err.message : String(err) },
+        'Final checkpoint flush failed (non-fatal)',
+      );
+    }
   }
   await drainPendingChatMessages(io, taskId, coder, { pathPrefix });
 
@@ -1842,6 +1881,36 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   logPhase(io, taskId, builder, 'info', df.notes);
 
   logPhase(io, taskId, builder, 'info', 'Committing changes…', 'git add -A && git commit');
+
+  // Squash any wip checkpoint commits made during the coder turn back into
+  // a single feat: commit. ``baselineSha`` was captured right after we
+  // created and pushed the empty branch, so resetting --soft to it
+  // collapses the WIP series while preserving the final tree.
+  const headBeforeSquash = await git.headSha(handle);
+  let didSquash = false;
+  if (baselineSha && baselineSha !== headBeforeSquash) {
+    try {
+      await git.softResetTo(handle, baselineSha);
+      didSquash = true;
+      logPhase(
+        io,
+        taskId,
+        builder,
+        'info',
+        `Squashed wip checkpoints (${baselineSha.substring(0, 7)}..${headBeforeSquash.substring(0, 7)}) for clean PR history`,
+      );
+    } catch (err) {
+      // Non-fatal: continue with whatever history we have.
+      logPhase(
+        io,
+        taskId,
+        builder,
+        'warn',
+        `Could not squash checkpoints: ${err instanceof Error ? err.message : String(err)}. Continuing with existing history.`,
+      );
+    }
+  }
+
   let commitFixerAgent: string | undefined;
   const sha = await runGitOpWithFixer<string>({
     agentSession,
@@ -1880,8 +1949,8 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   let pushFixerAgent: string | undefined;
   await runGitOpWithFixer<void>({
     agentSession,
-    op: () => git.push(handle),
-    describe: `git push --set-upstream origin ${branch}`,
+    op: () => (didSquash ? git.pushForceWithLease(handle) : git.push(handle)),
+    describe: `git push${didSquash ? ' --force-with-lease' : ''} --set-upstream origin ${branch}`,
     cwd: handle.cwd,
     branch: handle.branch,
     repo,
