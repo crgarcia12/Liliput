@@ -69,7 +69,9 @@ jobs:
           sed -e "s|__NS__|${NS}|g" \
               -e "s|__DEV_PREFIX__|${DEV_PREFIX}|g" \
               -e "s|__ENV_NAME__|DEV|g" \
-              -e "s|__PUBLIC_BASE_URL__|http://4.165.150.214|g" \
+              -e "s|__PUBLIC_BASE_URL__|http://20.240.60.167|g" \
+              -e "s|__PIP_NAME__|liliput-dev-pip|g" \
+              -e "s|__LB_IP__|20.240.60.167|g" \
               k8s/liliput.yaml > k8s/liliput.rendered.yaml
           # Swap the image references so DEV pulls dev-tagged images
           sed -i "s|liliput-api:latest|liliput-api-${IMAGE_SUFFIX}:latest|g; s|liliput-web:latest|liliput-web-${IMAGE_SUFFIX}:latest|g" k8s/liliput.rendered.yaml

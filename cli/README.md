@@ -23,7 +23,7 @@ GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o liliput.exe ./cmd/liliput
 ## Run
 
 ```sh
-./liliput.exe                                  # default server http://4.165.50.135
+./liliput.exe                                  # default server http://liliput.crgarcia.com.ar
 ./liliput.exe --server http://localhost:5001   # local dev API
 LILIPUT_API_URL=http://my-host ./liliput.exe   # via env
 ```

@@ -14,7 +14,7 @@ import (
 
 const version = "0.1.0"
 
-const defaultServer = "http://4.165.50.135"
+const defaultServer = "http://liliput.crgarcia.com.ar"
 
 func main() {
 	var (

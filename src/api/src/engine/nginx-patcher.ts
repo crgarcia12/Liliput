@@ -2,7 +2,7 @@
  * Patch the `nginx-config` ConfigMap that fronts liliput-gateway so the
  * gateway exposes per-task dev environments at:
  *
- *   http://4.165.50.135/dev/<owner>/<repo>/<branch>/...
+ *   http://liliput.crgarcia.com.ar/dev/<owner>/<repo>/<branch>/...
  *
  * This works by maintaining a Liliput-managed marker block inside nginx.conf:
  *
