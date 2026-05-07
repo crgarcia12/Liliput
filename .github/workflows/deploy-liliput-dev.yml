@@ -69,7 +69,7 @@ jobs:
           sed -e "s|__NS__|${NS}|g" \
               -e "s|__DEV_PREFIX__|${DEV_PREFIX}|g" \
               -e "s|__ENV_NAME__|DEV|g" \
-              -e "s|__PUBLIC_BASE_URL__|http://20.240.60.167|g" \
+              -e "s|__PUBLIC_BASE_URL__|http://dev.liliput.crgarcia.com.ar|g" \
               -e "s|__PIP_NAME__|liliput-dev-pip|g" \
               -e "s|__LB_IP__|20.240.60.167|g" \
               k8s/liliput.yaml > k8s/liliput.rendered.yaml
