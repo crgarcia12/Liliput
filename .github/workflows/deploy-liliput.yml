@@ -113,7 +113,7 @@ jobs:
           sed -e "s|__NS__|liliput|g" \
               -e "s|__DEV_PREFIX__|dev|g" \
               -e "s|__ENV_NAME__|TEST|g" \
-              -e "s|__PUBLIC_BASE_URL__|http://liliput.crgarcia.com.ar|g" \
+              -e "s|__PUBLIC_BASE_URL__|https://liliput.crgarcia.com.ar|g" \
               -e "s|__PIP_NAME__|liliput-test-pip|g" \
               -e "s|__LB_IP__|4.223.107.121|g" \
               k8s/liliput.yaml > k8s/liliput.rendered.yaml
@@ -124,6 +124,16 @@ jobs:
           BUILD_WEB: ${{ steps.flags.outputs.build_web }}
         run: |
           kubectl apply -f k8s/liliput.rendered.yaml
+          # TLS termination: nginx ingress + cert-manager front the gateway.
+          # The gateway Service is patched to ClusterIP (the LoadBalancer-typed
+          # template would otherwise keep recreating a redundant public LB).
+          kubectl apply -f k8s/liliput-tls.yaml
+          kubectl -n liliput patch svc liliput-gateway --type=json -p='[
+            {"op":"replace","path":"/spec/type","value":"ClusterIP"},
+            {"op":"remove","path":"/spec/loadBalancerIP"},
+            {"op":"remove","path":"/metadata/annotations/service.beta.kubernetes.io~1azure-load-balancer-resource-group"},
+            {"op":"remove","path":"/metadata/annotations/service.beta.kubernetes.io~1azure-pip-name"}
+          ]' 2>/dev/null || true
           if [ "$BUILD_API" = "true" ]; then
             kubectl -n liliput set image deployment/liliput-api \
               api=$ACR_LOGIN_SERVER/liliput-api:${{ github.sha }}
@@ -169,12 +179,6 @@ jobs:
           {
             echo "### Liliput Deployed ✅"
             echo ""
-            for i in $(seq 1 30); do
-              EXTERNAL_IP=$(kubectl -n liliput get svc liliput-gateway -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
-              [ -n "$EXTERNAL_IP" ] && break
-              echo "Waiting for LoadBalancer IP... ($i/30)" >&2
-              sleep 10
-            done
-            echo "- **Liliput URL: http://$EXTERNAL_IP**"
+            echo "- **Liliput URL: https://liliput.crgarcia.com.ar**"
             echo "- Image tag: \`${{ github.sha }}\`"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -20,8 +20,19 @@ export default function LogList({ logs, emptyHint, autoScroll = true }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (autoScroll && bottomRef.current) {
-      bottomRef.current.scrollIntoView({ behavior: 'auto', block: 'end' });
+    if (!autoScroll || !bottomRef.current) return;
+    // scrollIntoView walks ALL scrollable ancestors — including <html>, which
+    // jumps the whole page when LogList is rendered inside a multi-pane layout
+    // (e.g. the workstreams list home page). Restrict scrolling to the nearest
+    // scrollable ancestor so the rest of the page stays put.
+    let el: HTMLElement | null = bottomRef.current.parentElement;
+    while (el) {
+      const overflowY = getComputedStyle(el).overflowY;
+      if (overflowY === 'auto' || overflowY === 'scroll') {
+        el.scrollTop = el.scrollHeight;
+        return;
+      }
+      el = el.parentElement;
     }
   }, [logs, autoScroll]);
 

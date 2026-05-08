@@ -1,0 +1,48 @@
+# TLS / Ingress for the TEST environment.
+# Cluster prerequisites (installed once via Helm, not by this manifest):
+#   - ingress-nginx in `ingress-nginx` namespace, bound to the test PIP via
+#     loadBalancerIP=4.223.107.121 + azure-pip-name=liliput-test-pip, with
+#     azure-load-balancer-health-probe-request-path=/healthz and
+#     azure-disable-load-balancer-floating-ip=true on the controller Service.
+#   - cert-manager in `cert-manager` namespace.
+# This manifest only declares the cluster-wide Issuer + the TEST Ingress.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    email: cesar@crgarcia.com.ar
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: letsencrypt-prod-account
+    solvers:
+      - http01:
+          ingress:
+            class: nginx
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: liliput-tls
+  namespace: liliput
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - liliput.crgarcia.com.ar
+      secretName: liliput-tls-cert
+  rules:
+    - host: liliput.crgarcia.com.ar
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: liliput-gateway
+                port:
+                  number: 80
