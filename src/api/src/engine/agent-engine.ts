@@ -61,7 +61,7 @@ import { recordAndDecide as recordStuck, resetStuckHistory } from './stuck-detec
 import { runGherkinChecks } from './gherkin-runner.js';
 
 const ACR_NAME = process.env['ACR_NAME'] ?? '';
-const PUBLIC_BASE_URL = process.env['LILIPUT_PUBLIC_URL'] ?? 'http://liliput.crgarcia.com.ar';
+const PUBLIC_BASE_URL = process.env['LILIPUT_PUBLIC_URL'] ?? 'https://liliput.crgarcia.com.ar';
 const DEFAULT_REPO = process.env['LILIPUT_DEFAULT_TARGET_REPO'];
 /** How many times to invoke the ops-fixer agent for build/deploy failures. */
 const MAX_BUILD_FIX_ATTEMPTS = parseInt(process.env['MAX_BUILD_FIX_ATTEMPTS'] ?? '2', 10);

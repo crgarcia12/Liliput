@@ -69,12 +69,16 @@ jobs:
           sed -e "s|__NS__|${NS}|g" \
               -e "s|__DEV_PREFIX__|${DEV_PREFIX}|g" \
               -e "s|__ENV_NAME__|DEV|g" \
-              -e "s|__PUBLIC_BASE_URL__|http://dev.liliput.crgarcia.com.ar|g" \
+              -e "s|__PUBLIC_BASE_URL__|https://dev.liliput.crgarcia.com.ar|g" \
               -e "s|__PIP_NAME__|liliput-dev-pip|g" \
               -e "s|__LB_IP__|20.240.60.167|g" \
               k8s/liliput.yaml > k8s/liliput.rendered.yaml
           # Swap the image references so DEV pulls dev-tagged images
           sed -i "s|liliput-api:latest|liliput-api-${IMAGE_SUFFIX}:latest|g; s|liliput-web:latest|liliput-web-${IMAGE_SUFFIX}:latest|g" k8s/liliput.rendered.yaml
+          # Render the dev-host TLS Ingress for liliput-dev ns
+          sed -e "s|liliput.crgarcia.com.ar|dev.liliput.crgarcia.com.ar|g" \
+              -e "s|namespace: liliput|namespace: ${NS}|g" \
+              k8s/liliput-tls.yaml > k8s/liliput-tls.rendered.yaml
 
       - name: Sync Copilot GitHub token secret
         env:
@@ -96,6 +100,16 @@ jobs:
         run: |
           kubectl delete deployments --all -n ${NS} --ignore-not-found 2>/dev/null || true
           kubectl apply -f k8s/liliput.rendered.yaml
+          # TLS termination: nginx ingress + cert-manager front the gateway.
+          # The gateway Service is patched to ClusterIP (the LoadBalancer-typed
+          # template would otherwise keep recreating a redundant public LB).
+          kubectl apply -f k8s/liliput-tls.rendered.yaml
+          kubectl -n ${NS} patch svc liliput-gateway --type=json -p='[
+            {"op":"replace","path":"/spec/type","value":"ClusterIP"},
+            {"op":"remove","path":"/spec/loadBalancerIP"},
+            {"op":"remove","path":"/metadata/annotations/service.beta.kubernetes.io~1azure-load-balancer-resource-group"},
+            {"op":"remove","path":"/metadata/annotations/service.beta.kubernetes.io~1azure-pip-name"}
+          ]' 2>/dev/null || true
           kubectl -n ${NS} set image deployment/liliput-api \
             api=$ACR_LOGIN_SERVER/liliput-api-${IMAGE_SUFFIX}:${{ github.sha }}
           kubectl -n ${NS} set image deployment/liliput-web \
@@ -128,13 +142,7 @@ jobs:
           {
             echo "### Liliput DEV Deployed ✅"
             echo ""
-            for i in $(seq 1 30); do
-              EXTERNAL_IP=$(kubectl -n ${NS} get svc liliput-gateway -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
-              [ -n "$EXTERNAL_IP" ] && break
-              echo "Waiting for LoadBalancer IP... ($i/30)" >&2
-              sleep 10
-            done
-            echo "- **DEV URL: http://$EXTERNAL_IP**"
+            echo "- **DEV URL: https://dev.liliput.crgarcia.com.ar**"
             echo "- Namespace: \`${NS}\`"
             echo "- Image tag: \`${{ github.sha }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
