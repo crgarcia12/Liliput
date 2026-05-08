@@ -81,9 +81,24 @@ export type LogFn = (
 ) => void;
 export type ToolEventFn = (event: ToolEvent) => void;
 
+/** Token-usage delta from a single LLM API call within a turn.
+ *  Mirrors the SDK's `assistant.usage` event shape. */
+export interface UsageEvent {
+  model: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  /** Copilot "nano-AIU" cost when the SDK provides it. */
+  nanoAiu?: number;
+  durationMs?: number;
+}
+export type UsageFn = (event: UsageEvent) => void;
+
 interface TurnCallbacks {
   log: LogFn;
   toolEvent: ToolEventFn;
+  usage: UsageFn;
   toolCount: number;
 }
 
@@ -142,6 +157,7 @@ export interface RunAgentTurnOptions {
   recap?: string;
   onLog?: LogFn;
   onToolEvent?: ToolEventFn;
+  onUsage?: UsageFn;
 }
 
 export interface RunAgentResult {
@@ -484,8 +500,33 @@ function makeEventHandler(callbacks: TurnCallbacks): (event: SessionEvent) => vo
         });
         break;
       }
+      case 'assistant.usage': {
+        // SDK reports per-LLM-call token usage. We forward to the usage
+        // callback so the engine can aggregate onto the owning Turn.
+        const d = event.data as {
+          model: string;
+          inputTokens?: number;
+          outputTokens?: number;
+          cacheReadTokens?: number;
+          cacheWriteTokens?: number;
+          duration?: number;
+          copilotUsage?: { totalNanoAiu?: number };
+        };
+        callbacks.usage({
+          model: d.model,
+          ...(d.inputTokens != null ? { inputTokens: d.inputTokens } : {}),
+          ...(d.outputTokens != null ? { outputTokens: d.outputTokens } : {}),
+          ...(d.cacheReadTokens != null ? { cacheReadTokens: d.cacheReadTokens } : {}),
+          ...(d.cacheWriteTokens != null ? { cacheWriteTokens: d.cacheWriteTokens } : {}),
+          ...(d.copilotUsage?.totalNanoAiu != null
+            ? { nanoAiu: d.copilotUsage.totalNanoAiu }
+            : {}),
+          ...(d.duration != null ? { durationMs: d.duration } : {}),
+        });
+        break;
+      }
       default:
-        // Many other events exist (deltas, usage, lifecycle); ignore for now.
+        // Many other events exist (deltas, lifecycle); ignore for now.
         break;
     }
   };
@@ -493,6 +534,7 @@ function makeEventHandler(callbacks: TurnCallbacks): (event: SessionEvent) => vo
 
 const noLog: LogFn = () => {};
 const noEvent: ToolEventFn = () => {};
+const noUsage: UsageFn = () => {};
 
 /**
  * Creates a fresh SDK session bound to the given workspace.
@@ -510,6 +552,7 @@ export async function createAgentSession(
   const callbacks: TurnCallbacks = {
     log: noLog,
     toolEvent: noEvent,
+    usage: noUsage,
     toolCount: 0,
   };
   const model = modelOverride && modelOverride.trim() ? modelOverride.trim() : DEFAULT_MODEL;
@@ -665,6 +708,7 @@ export async function runAgentTurn(
 ): Promise<RunAgentResult> {
   const log = opts.onLog ?? noLog;
   const onEvent = opts.onToolEvent ?? noEvent;
+  const onUsage = opts.onUsage ?? noUsage;
 
   // Idle watchdog: every SDK event (tool call, reasoning, message, log line)
   // resets `lastEventAt`. A 30s interval checks for idle; if the gap exceeds
@@ -679,11 +723,16 @@ export async function runAgentTurn(
     lastEventAt = Date.now();
     onEvent(event);
   };
+  const wrappedUsage: UsageFn = (event) => {
+    lastEventAt = Date.now();
+    onUsage(event);
+  };
 
   // Swap the live callbacks so the session-level event handler routes events
   // to this turn's destinations.
   handle._callbacks.log = wrappedLog;
   handle._callbacks.toolEvent = wrappedEvent;
+  handle._callbacks.usage = wrappedUsage;
   const before = handle._callbacks.toolCount;
 
   const prompt = opts.promptOverride
@@ -811,6 +860,7 @@ export interface RunAgentOptions {
   spec?: string;
   onLog?: LogFn;
   onToolEvent?: ToolEventFn;
+  onUsage?: UsageFn;
 }
 
 export async function runAgent(opts: RunAgentOptions): Promise<RunAgentResult> {
@@ -823,6 +873,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunAgentResult> {
       isInitial: true,
       onLog: opts.onLog,
       onToolEvent: opts.onToolEvent,
+      onUsage: opts.onUsage,
     });
   } finally {
     await disposeAgentSession(session);

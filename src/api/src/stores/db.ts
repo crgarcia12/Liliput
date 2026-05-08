@@ -139,6 +139,32 @@ CREATE TABLE IF NOT EXISTS agent_verdicts (
 CREATE INDEX IF NOT EXISTS idx_agent_verdicts_task ON agent_verdicts(task_id);
 CREATE INDEX IF NOT EXISTS idx_agent_verdicts_status ON agent_verdicts(status);
 CREATE INDEX IF NOT EXISTS idx_agent_verdicts_ts ON agent_verdicts(ts);
+
+-- Turns: each user chat input opens one. Agents/activity entries inherit
+-- turn_id so the UI can group them. Token + duration rollups happen on
+-- this table; workstream/repo aggregates are SUMs across rows here.
+CREATE TABLE IF NOT EXISTS turns (
+  id              TEXT PRIMARY KEY,
+  task_id         TEXT NOT NULL,
+  position        INTEGER NOT NULL,
+  status          TEXT NOT NULL, -- 'open' | 'completed'
+  title           TEXT NOT NULL,
+  user_message    TEXT NOT NULL,
+  model           TEXT,
+  reasoning_effort TEXT,
+  started_at      TEXT NOT NULL,
+  completed_at    TEXT,
+  duration_ms     INTEGER,
+  input_tokens    INTEGER NOT NULL DEFAULT 0,
+  output_tokens   INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+  nano_aiu        REAL,
+  call_count      INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_turns_task ON turns(task_id, position);
+CREATE INDEX IF NOT EXISTS idx_turns_status ON turns(status);
 `;
 
 export function getDb(): Database.Database {
@@ -179,6 +205,41 @@ export function getDb(): Database.Database {
       logger.info({}, 'Migrated: added lease_expires_at column to tasks');
     }
     _db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_lease ON tasks(lease_expires_at)`);
+
+    // Turn entity: add turn_id columns to child tables so existing rows can be
+    // backfilled, then synthesise one initial turn per task that doesn't have
+    // any turns yet.
+    const agentCols = _db
+      .prepare(`PRAGMA table_info(agents)`)
+      .all() as Array<{ name: string }>;
+    if (!agentCols.some((c) => c.name === 'turn_id')) {
+      _db.exec(`ALTER TABLE agents ADD COLUMN turn_id TEXT`);
+      logger.info({}, 'Migrated: added turn_id column to agents');
+    }
+    _db.exec(`CREATE INDEX IF NOT EXISTS idx_agents_turn ON agents(turn_id)`);
+
+    const activityCols = _db
+      .prepare(`PRAGMA table_info(activity_entries)`)
+      .all() as Array<{ name: string }>;
+    if (!activityCols.some((c) => c.name === 'turn_id')) {
+      _db.exec(`ALTER TABLE activity_entries ADD COLUMN turn_id TEXT`);
+      logger.info({}, 'Migrated: added turn_id column to activity_entries');
+    }
+    _db.exec(`CREATE INDEX IF NOT EXISTS idx_activity_turn ON activity_entries(turn_id)`);
+
+    const chatCols = _db
+      .prepare(`PRAGMA table_info(chat_messages)`)
+      .all() as Array<{ name: string }>;
+    if (!chatCols.some((c) => c.name === 'turn_id')) {
+      _db.exec(`ALTER TABLE chat_messages ADD COLUMN turn_id TEXT`);
+      logger.info({}, 'Migrated: added turn_id column to chat_messages');
+    }
+    _db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_turn ON chat_messages(turn_id)`);
+
+    // Backfill: every task that has no turn yet gets one synthetic "Initial
+    // turn" containing all its existing agents/activity/chat. This is run
+    // every startup but is a no-op once each task has at least one turn.
+    backfillInitialTurns(_db);
   } catch (err) {
     logger.warn({ err }, 'Workstream migration check failed (non-fatal)');
   }
@@ -197,6 +258,7 @@ export function resetDb(): void {
     DELETE FROM tool_wishes;
     DELETE FROM agent_verdicts;
     DELETE FROM features;
+    DELETE FROM turns;
     DELETE FROM tasks;
     DELETE FROM workstreams;
   `);
@@ -207,4 +269,110 @@ export function closeDb(): void {
     _db.close();
     _db = null;
   }
+}
+
+/** Backfill: synth a single "Initial turn" for any task that has no turns yet.
+ *
+ *  - userMessage = task.description (best-effort from the JSON `data` blob)
+ *  - title       = task.title (truncated)
+ *  - model       = task.model
+ *  - status      = 'completed' if the task itself is in a terminal state; 'open' otherwise
+ *  - completedAt = task.updatedAt for completed
+ *
+ *  All existing agents / activity_entries / chat_messages of that task get
+ *  turn_id pointed at the new turn. This makes the UI immediately useful for
+ *  pre-existing data without re-hydrating history into per-message turns. */
+function backfillInitialTurns(db: Database.Database): void {
+  type TaskRow = {
+    id: string;
+    status: string;
+    data: string;
+    created_at: string;
+    updated_at: string;
+  };
+  const taskRows = db
+    .prepare(
+      `SELECT t.id, t.status, t.data, t.created_at, t.updated_at
+         FROM tasks t
+         LEFT JOIN turns tu ON tu.task_id = t.id
+         WHERE tu.id IS NULL
+         GROUP BY t.id`,
+    )
+    .all() as TaskRow[];
+
+  if (taskRows.length === 0) return;
+
+  const insertTurn = db.prepare(
+    `INSERT INTO turns (
+       id, task_id, position, status, title, user_message, model, reasoning_effort,
+       started_at, completed_at, duration_ms,
+       input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+       nano_aiu, call_count
+     ) VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, NULL, 0)`,
+  );
+  const setAgentTurn = db.prepare(
+    `UPDATE agents SET turn_id = ? WHERE task_id = ? AND (turn_id IS NULL OR turn_id = '')`,
+  );
+  const setActivityTurn = db.prepare(
+    `UPDATE activity_entries SET turn_id = ? WHERE task_id = ? AND (turn_id IS NULL OR turn_id = '')`,
+  );
+  const setChatTurn = db.prepare(
+    `UPDATE chat_messages SET turn_id = ? WHERE task_id = ? AND (turn_id IS NULL OR turn_id = '')`,
+  );
+
+  // Lazy uuid import to avoid pulling it into hot path for fresh DBs.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { v4: uuidV4 } = require('uuid') as { v4: () => string };
+
+  const TERMINAL = new Set(['completed', 'failed', 'review', 'reviewing']);
+
+  const txn = db.transaction((rows: TaskRow[]) => {
+    for (const row of rows) {
+      let title = 'Initial turn';
+      let description = '';
+      let model: string | null = null;
+      let reasoningEffort: string | null = null;
+      try {
+        const parsed = JSON.parse(row.data) as {
+          title?: string;
+          description?: string;
+          model?: string;
+          reasoningEffort?: string;
+        };
+        if (parsed.title) title = parsed.title.slice(0, 80);
+        description = parsed.description ?? '';
+        model = parsed.model ?? null;
+        reasoningEffort = parsed.reasoningEffort ?? null;
+      } catch {
+        // ignore malformed task data — synth a turn anyway
+      }
+      const turnId = uuidV4();
+      const isTerminal = TERMINAL.has(row.status);
+      const startedAt = row.created_at;
+      const completedAt = isTerminal ? row.updated_at : null;
+      let durationMs: number | null = null;
+      if (completedAt) {
+        const dur = new Date(completedAt).getTime() - new Date(startedAt).getTime();
+        durationMs = Number.isFinite(dur) && dur > 0 ? dur : null;
+      }
+      insertTurn.run(
+        turnId,
+        row.id,
+        isTerminal ? 'completed' : 'open',
+        title,
+        description.slice(0, 4000), // cap to keep size sane
+        model,
+        reasoningEffort,
+        startedAt,
+        completedAt,
+        durationMs,
+      );
+      setAgentTurn.run(turnId, row.id);
+      setActivityTurn.run(turnId, row.id);
+      setChatTurn.run(turnId, row.id);
+    }
+  });
+
+  txn(taskRows);
+  logger.info({ count: taskRows.length }, 'Backfilled initial turns for legacy tasks');
 }

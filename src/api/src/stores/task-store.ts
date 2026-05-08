@@ -23,6 +23,7 @@ import type {
 } from '../../../shared/types/index.js';
 import { getDb } from './db.js';
 import * as wsStore from './workstream-store.js';
+import * as turnStore from './turn-store.js';
 import { captureFromText as captureToolWishes } from './tool-wish-store.js';
 import { captureFromText as captureVerdict } from './verdict-store.js';
 import { getPodId, LEASE_DURATION_MS } from '../engine/pod-identity.js';
@@ -82,7 +83,7 @@ function hydrateAgent(row: AgentRow, logs: AgentLogEntry[]): Agent {
 /** Hydrate a Task including its agents (+logs) and chat history. */
 function hydrateTask(row: TaskRow): Task {
   const db = getDb();
-  const base = JSON.parse(row.data) as Omit<Task, 'agents' | 'chatHistory' | 'activityHistory'>;
+  const base = JSON.parse(row.data) as Omit<Task, 'agents' | 'chatHistory' | 'activityHistory' | 'turns' | 'currentTurnId'>;
   // Column is source of truth for the FK in case the JSON blob predates it.
   if (row.workstream_id && !base.workstreamId) {
     base.workstreamId = row.workstream_id;
@@ -136,7 +137,17 @@ function hydrateTask(row: TaskRow): Task {
     (r) => JSON.parse(r.data) as ActivityEntry,
   );
 
-  return { ...base, agents, chatHistory, activityHistory } as Task;
+  const turns = turnStore.listTurnsForTask(row.id);
+  const currentTurn = turns.find((t) => t.status === 'open');
+
+  return {
+    ...base,
+    agents,
+    chatHistory,
+    activityHistory,
+    turns,
+    ...(currentTurn ? { currentTurnId: currentTurn.id } : {}),
+  } as Task;
 }
 
 // ─── Tasks ───────────────────────────────────────────────────
@@ -190,6 +201,17 @@ export function createTask(
       ts,
       ts,
     );
+
+  // Open the first turn so all agents/activity spawned during initial work
+  // (spec gen, build, deploy) attach to it. Defensive coerce — some callers
+  // (and a few legacy tests) pass non-string titles.
+  const safeTitle = typeof title === 'string' ? title : String(title ?? '');
+  const safeDesc = typeof description === 'string' ? description : String(description ?? '');
+  turnStore.createTurn(task.id, safeDesc, {
+    title: safeTitle.slice(0, 60),
+    ...(options.model ? { model: options.model } : {}),
+    ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
+  });
 
   return task;
 }
@@ -261,6 +283,23 @@ export function updateTask(
     id,
   );
 
+  // Close the open turn when the task lands in a terminal state. This stamps
+  // the duration so the UI can show wall-clock time per turn. Idempotent:
+  // closeCurrentTurn is a no-op when no open turn exists.
+  if (
+    rest.status &&
+    rest.status !== row.status &&
+    (rest.status === 'completed' ||
+      rest.status === 'failed' ||
+      rest.status === 'review')
+  ) {
+    try {
+      turnStore.closeCurrentTurn(id);
+    } catch {
+      // closing must never break a status update
+    }
+  }
+
   return hydrateTask({
     ...row,
     repository: merged.repository ?? null,
@@ -316,9 +355,14 @@ export function addAgent(taskId: string, name: string, role: AgentRole): Agent |
   if (!taskRow) return undefined;
 
   const ts = now();
+  // Attach to the currently-open turn. Fall back to the most recent turn
+  // (rare race during status transitions) so we never orphan an agent.
+  const turn = turnStore.getCurrentTurn(taskId) ?? turnStore.getLastTurn(taskId);
+
   const agent: Agent = {
     id: uuid(),
     taskId,
+    ...(turn ? { turnId: turn.id } : {}),
     name,
     role,
     status: 'idle',
@@ -335,9 +379,10 @@ export function addAgent(taskId: string, name: string, role: AgentRole): Agent |
     .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS next FROM agents WHERE task_id = ?')
     .get(taskId) as { next: number };
 
+  // turn_id is now a column, but we also keep it on the JSON blob for fast hydration.
   db.prepare(
-    `INSERT INTO agents (id, task_id, position, data) VALUES (?, ?, ?, ?)`,
-  ).run(agent.id, taskId, positionRow.next, JSON.stringify(rest));
+    `INSERT INTO agents (id, task_id, position, data, turn_id) VALUES (?, ?, ?, ?, ?)`,
+  ).run(agent.id, taskId, positionRow.next, JSON.stringify(rest), turn?.id ?? null);
 
   // Bump task's updated_at so the tree view re-sorts.
   db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run(ts, taskId);
@@ -447,15 +492,42 @@ export function addChatMessage(
   agentName?: string,
 ): ChatMessage | undefined {
   const db = getDb();
-  const exists = db.prepare('SELECT 1 AS x FROM tasks WHERE id = ?').get(taskId) as
-    | { x: number }
+  const taskRow = db.prepare('SELECT data FROM tasks WHERE id = ?').get(taskId) as
+    | { data: string }
     | undefined;
-  if (!exists) return undefined;
+  if (!taskRow) return undefined;
+
+  // Gulliver (user) messages open a new turn — closing the previously-open one.
+  // Other roles attach to the currently-open turn (or the most recent one).
+  let turnId: string | undefined;
+  if (role === 'gulliver') {
+    let model: string | undefined;
+    let reasoningEffort: 'low' | 'medium' | 'high' | 'xhigh' | undefined;
+    try {
+      const parsed = JSON.parse(taskRow.data) as {
+        model?: string;
+        reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+      };
+      model = parsed.model;
+      reasoningEffort = parsed.reasoningEffort;
+    } catch {
+      // ignore
+    }
+    const newTurn = turnStore.createTurn(taskId, content, {
+      ...(model ? { model } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+    });
+    turnId = newTurn?.id;
+  } else {
+    turnId =
+      turnStore.getCurrentTurn(taskId)?.id ?? turnStore.getLastTurn(taskId)?.id;
+  }
 
   const ts = now();
   const msg: ChatMessage = {
     id: uuid(),
     taskId,
+    ...(turnId ? { turnId } : {}),
     role,
     ...(agentId ? { agentId } : {}),
     ...(agentName ? { agentName } : {}),
@@ -464,8 +536,8 @@ export function addChatMessage(
   };
 
   db.prepare(
-    `INSERT INTO chat_messages (id, task_id, ts, data) VALUES (?, ?, ?, ?)`,
-  ).run(msg.id, taskId, ts, JSON.stringify(msg));
+    `INSERT INTO chat_messages (id, task_id, ts, data, turn_id) VALUES (?, ?, ?, ?, ?)`,
+  ).run(msg.id, taskId, ts, JSON.stringify(msg), turnId ?? null);
   db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run(ts, taskId);
 
   // Scan agent/system messages for TOOL-WISH and VERDICT directives. We don't
@@ -505,9 +577,16 @@ export function addActivityEntry(
   if (!exists) return undefined;
 
   const ts = entry.timestamp ?? now();
+  // Resolve the owning turn. Caller may pass it explicitly (rare); otherwise
+  // fall back to the currently-open turn or the most recent one.
+  const turnId =
+    entry.turnId ??
+    turnStore.getCurrentTurn(taskId)?.id ??
+    turnStore.getLastTurn(taskId)?.id;
   const full: ActivityEntry = {
     id: uuid(),
     taskId,
+    ...(turnId ? { turnId } : {}),
     timestamp: ts,
     kind: entry.kind,
     message: entry.message,
@@ -519,8 +598,8 @@ export function addActivityEntry(
   };
 
   db.prepare(
-    `INSERT INTO activity_entries (id, task_id, ts, data) VALUES (?, ?, ?, ?)`,
-  ).run(full.id, taskId, ts, JSON.stringify(full));
+    `INSERT INTO activity_entries (id, task_id, ts, data, turn_id) VALUES (?, ?, ?, ?, ?)`,
+  ).run(full.id, taskId, ts, JSON.stringify(full), turnId ?? null);
 
   return full;
 }
@@ -537,6 +616,7 @@ export function resetStore(): void {
     DELETE FROM agents;
     DELETE FROM chat_messages;
     DELETE FROM activity_entries;
+    DELETE FROM turns;
     DELETE FROM tasks;
     DELETE FROM workstreams;
   `);

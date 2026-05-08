@@ -12,6 +12,7 @@ import { startBuild, shipTask, discardTask, iterateTask, canIterate, enqueueChat
 import { verifyRepositoryAccess } from '../engine/github-pr.js';
 import { runFeatureDecomposer } from '../engine/feature-decomposer-runner.js';
 import * as featureStore from '../stores/feature-store.js';
+import * as turnStore from '../stores/turn-store.js';
 import { logger } from '../logger.js';
 
 /**
@@ -252,6 +253,12 @@ export function createTasksRouter(
       // Record the user (Gulliver) message
       const userMsg = store.addChatMessage(task.id, 'gulliver', message);
       io.to(`task:${task.id}`).emit('chat:message', userMsg);
+      // addChatMessage opens a new turn for every gulliver message; emit it so
+      // the UI can render the new node immediately.
+      const openedTurn = turnStore.getCurrentTurn(task.id);
+      if (openedTurn) {
+        io.to(`task:${task.id}`).emit('turn:opened', openedTurn);
+      }
       logger.info(
         { taskId: task.id, status: task.status, msgPreview: message.substring(0, 80) },
         'Chat message received',
@@ -736,6 +743,30 @@ export function createTasksRouter(
       logger.warn({ err: message }, 'deleteDevEnv failed');
       res.status(409).json({ error: 'Failed to delete dev environment', details: message });
     }
+  });
+
+  // ─── Turns + usage rollups ──────────────────────────────────────────────
+  router.get('/api/tasks/:id/turns', (req: Request, res: Response) => {
+    const id = String(req.params['id'] ?? '');
+    res.json({ turns: turnStore.listTurnsForTask(id) });
+  });
+
+  router.get('/api/workstreams/:id/usage', (req: Request, res: Response) => {
+    const id = String(req.params['id'] ?? '');
+    res.json(turnStore.rollupForWorkstream(id));
+  });
+
+  router.get('/api/repos/:repo/usage', (req: Request, res: Response) => {
+    const repo = decodeURIComponent(String(req.params['repo'] ?? ''));
+    res.json(turnStore.rollupForRepo(repo));
+  });
+
+  router.get('/api/repos-usage', (_req: Request, res: Response) => {
+    res.json(Object.fromEntries(turnStore.rollupAllRepos()));
+  });
+
+  router.get('/api/workstreams-usage', (_req: Request, res: Response) => {
+    res.json(Object.fromEntries(turnStore.rollupAllWorkstreams()));
   });
 
   return router;
