@@ -258,14 +258,14 @@ export interface ModelOption {
  *  array is only used when the SDK call fails (no auth, offline, etc).
  *  Keep ids here strictly to ones the Copilot SDK actually accepts. */
 export const MODEL_OPTIONS: readonly ModelOption[] = [
-  { id: 'claude-sonnet-4',   label: 'Claude Sonnet 4',       family: 'claude', note: 'default fallback' },
-  { id: 'claude-sonnet-4.5', label: 'Claude Sonnet 4.5',     family: 'claude' },
+  { id: 'claude-sonnet-4.5', label: 'Claude Sonnet 4.5',     family: 'claude', note: 'default fallback' },
+  { id: 'claude-sonnet-4.6', label: 'Claude Sonnet 4.6',     family: 'claude' },
   { id: 'claude-haiku-4.5',  label: 'Claude Haiku 4.5',      family: 'claude', note: 'fast / cheap' },
   { id: 'gpt-5-mini',        label: 'GPT-5 mini',            family: 'gpt',    note: 'fast / cheap' },
   { id: 'gpt-4.1',           label: 'GPT-4.1',               family: 'gpt' },
 ];
 
-export const DEFAULT_MODEL_ID = 'claude-sonnet-4';
+export const DEFAULT_MODEL_ID = 'claude-sonnet-4.5';
 
 /** Reasoning-effort hint passed to the Copilot SDK. Some models REQUIRE a
  *  specific value (e.g. `claude-opus-4.7-xhigh` only accepts `'xhigh'`); for

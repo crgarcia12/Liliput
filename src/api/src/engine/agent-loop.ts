@@ -31,7 +31,7 @@ import { setForceEffort } from './force-effort.js';
 import { buildDeployContract, type DeployContractContext } from './liliput-deploy-contract.js';
 import { logger } from '../logger.js';
 
-const DEFAULT_MODEL = process.env['COPILOT_MODEL'] ?? 'claude-sonnet-4';
+const DEFAULT_MODEL = process.env['COPILOT_MODEL'] ?? 'claude-sonnet-4.5';
 // No wall-clock timeout: the SDK streams an event for every tool call, so a
 // turn that's actively making progress should never be killed. Wedged turns
 // are caught either by the user (Stop button / new chat message → preempt)

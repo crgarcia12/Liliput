@@ -12,7 +12,7 @@ import { deriveReasoningEffort } from '../../../shared/types/index.js';
 import { setForceEffort } from './force-effort.js';
 import { logger } from '../logger.js';
 
-const DEFAULT_MODEL = process.env['COPILOT_MODEL'] ?? 'claude-sonnet-4';
+const DEFAULT_MODEL = process.env['COPILOT_MODEL'] ?? 'claude-sonnet-4.5';
 const DEFAULT_TIMEOUT_MS = parseInt(process.env['COPILOT_TIMEOUT_MS'] ?? '120000', 10);
 const PROBE_TIMEOUT_MS = parseInt(process.env['COPILOT_PROBE_TIMEOUT_MS'] ?? '30000', 10);
 
