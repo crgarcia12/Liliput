@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import Link from 'next/link';
 import LogList from '../components/LogList';
 import TopBar from '../components/TopBar';
-import TokenBadge from '../components/TokenBadge';
+import TokenBadge, { formatDuration, formatTokens } from '../components/TokenBadge';
 import { useSocket } from '../hooks/useSocket';
 import { useTasks } from '../hooks/useTasks';
 import { useUsageRollups } from '../hooks/useUsageRollups';
@@ -78,6 +78,7 @@ export default function RequestsPage() {
   const [collapsedRepos, setCollapsedRepos] = useState<Set<string>>(new Set());
   const [collapsedWorkstreams, setCollapsedWorkstreams] = useState<Set<string>>(new Set());
   const [collapsedTasks, setCollapsedTasks] = useState<Set<string>>(new Set());
+  const [collapsedTurns, setCollapsedTurns] = useState<Set<string>>(new Set());
   const [sel, setSel] = useState<Selection | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
 
@@ -415,45 +416,118 @@ export default function RequestsPage() {
                                       🗑
                                     </button>
                                   </div>
-                                  {!taskCollapsed && t.agents && t.agents.length > 0 && (
+                                  {!taskCollapsed && (
                                     <ul>
-                                      {t.agents.map((a) => {
-                                        const isAgentSel =
-                                          sel?.kind === 'agent' && sel.agentId === a.id;
-                                        return (
-                                          <li key={a.id}>
-                                            <button
-                                              onClick={() =>
-                                                setSel({
-                                                  kind: 'agent',
-                                                  repo,
-                                                  workstreamKey: bucket.key,
-                                                  taskId: t.id,
-                                                  agentId: a.id,
-                                                })
-                                              }
-                                              className={`w-full flex items-center gap-1.5 pl-16 pr-2 py-0.5 text-[11px] hover:bg-[#10101a] ${
-                                                isAgentSel
-                                                  ? 'bg-cyan-900/30 text-cyan-200'
-                                                  : 'text-gray-400'
-                                              }`}
-                                            >
-                                              <span
-                                                className={`w-1.5 h-1.5 rounded-full ${
-                                                  AGENT_STATUS_DOT[a.status] ?? 'bg-gray-500'
-                                                }`}
-                                              />
-                                              <span>{ROLE_ICON[a.role] ?? '🤖'}</span>
-                                              <span className="truncate flex-1 text-left">
-                                                {a.name}
-                                              </span>
-                                              <span className="text-[9px] text-gray-600">
-                                                {a.logs?.length ?? 0}
-                                              </span>
-                                            </button>
-                                          </li>
-                                        );
-                                      })}
+                                      {(() => {
+                                        const turns = t.turns ?? [];
+                                        const agents = t.agents ?? [];
+                                        const agentById = new Map(agents.map((a) => [a.id, a]));
+                                        // Group agents under turns by agentIds; collect orphans (agents not in any turn) at end.
+                                        const usedAgentIds = new Set<string>();
+                                        const groups: Array<{
+                                          turn: typeof turns[number] | null;
+                                          agents: typeof agents;
+                                        }> = [];
+                                        for (const turn of turns) {
+                                          const turnAgents = (turn.agentIds ?? [])
+                                            .map((id) => agentById.get(id))
+                                            .filter((a): a is NonNullable<typeof a> => Boolean(a));
+                                          for (const a of turnAgents) usedAgentIds.add(a.id);
+                                          groups.push({ turn, agents: turnAgents });
+                                        }
+                                        const orphans = agents.filter((a) => !usedAgentIds.has(a.id));
+                                        if (orphans.length > 0) groups.push({ turn: null, agents: orphans });
+                                        return groups.map((group, gi) => {
+                                          const turn = group.turn;
+                                          const turnKey = turn ? turn.id : `${t.id}::orphans`;
+                                          const turnCollapsed = collapsedTurns.has(turnKey);
+                                          const turnDuration =
+                                            turn?.durationMs ??
+                                            (turn?.startedAt
+                                              ? Date.now() - new Date(turn.startedAt).getTime()
+                                              : 0);
+                                          const tokens = turn?.usage.totalTokens ?? 0;
+                                          return (
+                                            <li key={turnKey}>
+                                              <button
+                                                onClick={() =>
+                                                  setCollapsedTurns((s) => toggleSet(s, turnKey))
+                                                }
+                                                className="w-full flex items-center gap-1 pl-12 pr-2 py-0.5 text-[10px] hover:bg-[#10101a] text-gray-400 text-left"
+                                                title={turn?.userMessage ?? 'Untracked agents'}
+                                              >
+                                                <span className="text-gray-500 w-3 text-center">
+                                                  {group.agents.length > 0
+                                                    ? turnCollapsed
+                                                      ? '▶'
+                                                      : '▼'
+                                                    : ' '}
+                                                </span>
+                                                <span>💬</span>
+                                                <span className="truncate flex-1">
+                                                  {turn
+                                                    ? `Turn ${turn.index} · ${turn.title || turn.userMessage || ''}`
+                                                    : `Untracked (${group.agents.length})`}
+                                                </span>
+                                                {turn?.status === 'open' && (
+                                                  <span className="text-[8px] text-cyan-400">●</span>
+                                                )}
+                                                {turn && turnDuration > 0 && (
+                                                  <span className="font-mono text-[9px] text-gray-500">
+                                                    {formatDuration(turnDuration)}
+                                                  </span>
+                                                )}
+                                                {tokens > 0 && (
+                                                  <span className="font-mono text-[9px] text-purple-300 bg-purple-500/10 border border-purple-500/20 px-1 rounded">
+                                                    🪙{formatTokens(tokens)}
+                                                  </span>
+                                                )}
+                                              </button>
+                                              {!turnCollapsed && group.agents.length > 0 && (
+                                                <ul>
+                                                  {group.agents.map((a) => {
+                                                    const isAgentSel =
+                                                      sel?.kind === 'agent' && sel.agentId === a.id;
+                                                    return (
+                                                      <li key={a.id}>
+                                                        <button
+                                                          onClick={() =>
+                                                            setSel({
+                                                              kind: 'agent',
+                                                              repo,
+                                                              workstreamKey: bucket.key,
+                                                              taskId: t.id,
+                                                              agentId: a.id,
+                                                            })
+                                                          }
+                                                          className={`w-full flex items-center gap-1.5 pl-20 pr-2 py-0.5 text-[11px] hover:bg-[#10101a] ${
+                                                            isAgentSel
+                                                              ? 'bg-cyan-900/30 text-cyan-200'
+                                                              : 'text-gray-400'
+                                                          }`}
+                                                        >
+                                                          <span
+                                                            className={`w-1.5 h-1.5 rounded-full ${
+                                                              AGENT_STATUS_DOT[a.status] ?? 'bg-gray-500'
+                                                            }`}
+                                                          />
+                                                          <span>{ROLE_ICON[a.role] ?? '🤖'}</span>
+                                                          <span className="truncate flex-1 text-left">
+                                                            {a.name}
+                                                          </span>
+                                                          <span className="text-[9px] text-gray-600">
+                                                            {a.logs?.length ?? 0}
+                                                          </span>
+                                                        </button>
+                                                      </li>
+                                                    );
+                                                  })}
+                                                </ul>
+                                              )}
+                                            </li>
+                                          );
+                                        });
+                                      })()}
                                     </ul>
                                   )}
                                 </li>
