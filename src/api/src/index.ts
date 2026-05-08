@@ -14,6 +14,7 @@ import { runDeletingSweeper } from './routes/workstreams.js';
 import { ensureAzLogin } from './engine/azure-builder.js';
 import { logger } from './logger.js';
 import { isAutoResumeEnabled, autoResumeConcurrency, getPodId } from './engine/pod-identity.js';
+import { startInternalServer } from './internal-server.js';
 
 const PORT = parseInt(process.env['PORT'] ?? '5001', 10);
 
@@ -123,9 +124,13 @@ server.listen(PORT, () => {
   logger.info({ port: PORT }, '🏝️  Liliput API listening');
 });
 
+// Privileged loopback-only listener for orchestrator-driven tools.
+const internalServer = startInternalServer();
+
 async function shutdown(signal: string): Promise<void> {
   logger.info({ signal }, 'Shutting down');
   await stopCopilotClient();
+  if (internalServer) internalServer.close();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(1), 5000).unref();
 }
