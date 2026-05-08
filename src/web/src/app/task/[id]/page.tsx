@@ -6,6 +6,7 @@ import dynamic from 'next/dynamic';
 import Terminal from '../../../components/Terminal';
 import AgentPanel from '../../../components/AgentPanel';
 import ActivityLog from '../../../components/ActivityLog';
+import TurnList from '../../../components/TurnList';
 import PhaseStepper from '../../../components/PhaseStepper';
 import ResizableSplit from '../../../components/ResizableSplit';
 import { useSocket } from '../../../hooks/useSocket';
@@ -570,6 +571,12 @@ export default function TaskPage() {
             <div className="h-full pl-1.5 flex flex-col gap-3">
               <div className="h-[40%]">
                 <LiliputIsland agents={agents} />
+              </div>
+              <div className="bg-[#0d0d14] border border-[#1a1a2e] rounded-lg overflow-hidden">
+                <div className="px-3 py-1.5 text-[11px] font-semibold text-gray-400 border-b border-[#1a1a2e]">
+                  Turns
+                </div>
+                <TurnList taskId={taskId} />
               </div>
               <div className="flex-1 bg-[#0d0d14] border border-[#1a1a2e] rounded-lg overflow-hidden">
                 <AgentPanel agents={agents} />

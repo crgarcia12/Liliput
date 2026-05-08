@@ -4,8 +4,10 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import Link from 'next/link';
 import LogList from '../components/LogList';
 import TopBar from '../components/TopBar';
+import TokenBadge from '../components/TokenBadge';
 import { useSocket } from '../hooks/useSocket';
 import { useTasks } from '../hooks/useTasks';
+import { useUsageRollups } from '../hooks/useUsageRollups';
 import type {
   Task,
   TaskStatus,
@@ -67,6 +69,7 @@ interface DeleteTarget {
 export default function RequestsPage() {
   const { connected } = useSocket();
   const { getTasks } = useTasks();
+  const usage = useUsageRollups();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [workstreams, setWorkstreams] = useState<Workstream[]>([]);
   const [loading, setLoading] = useState(true);
@@ -267,6 +270,7 @@ export default function RequestsPage() {
                     <span className="text-gray-500 w-3 text-center">{repoCollapsed ? '▶' : '▼'}</span>
                     <span>📁</span>
                     <span className="truncate flex-1 font-medium">{repo}</span>
+                    <TokenBadge rollup={usage.repos[repo]} compact />
                     <span className="text-[10px] text-gray-500">{taskCount}</span>
                   </button>
                   {isRealRepo && (
@@ -332,6 +336,9 @@ export default function RequestsPage() {
                             >
                               {bucket.name}
                             </span>
+                            {bucket.workstream && (
+                              <TokenBadge rollup={usage.workstreams[bucket.workstream.id]} compact />
+                            )}
                             <span className="text-[10px] text-gray-600">
                               {bucket.tasks.length}
                             </span>
