@@ -97,8 +97,61 @@ export interface Task {
   agents: Agent[];
   chatHistory: ChatMessage[];
   activityHistory?: ActivityEntry[];
+  /** Conversation turns. Each user chat input opens a turn; agents/activity spawned
+   *  by it inherit `turnId`. The most recent open turn (no `completedAt`) is the
+   *  "current" turn that newly-spawned agents attach to. */
+  turns?: Turn[];
+  /** ID of the currently-open turn, if any. Convenience field hydrated by the store. */
+  currentTurnId?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/** A "Turn" groups everything that happened in response to a single user input.
+ *
+ *  Hierarchy: Repo → Workstream → Task → Turn → Agents.
+ *
+ *  A turn is opened when the task is created (the original description acts as
+ *  the first user message) and on every subsequent `gulliver` chat message.
+ *  When the next user message arrives or the task moves to a terminal status,
+ *  the previous turn is closed (gets a `completedAt`).
+ *
+ *  Token usage is captured by listening to the SDK's `assistant.usage` event in
+ *  `agent-loop.ts` and aggregating onto the agent's owning turn. */
+export interface Turn {
+  id: string;
+  taskId: string;
+  /** 1-based ordinal within the task — useful for display ("Turn 3"). */
+  index: number;
+  /** First-pass human-readable title; today truncated user message, later LLM-generated. */
+  title: string;
+  /** The full user message that opened this turn. */
+  userMessage: string;
+  /** Snapshot of `task.model` at the time the turn was opened. */
+  model?: string;
+  reasoningEffort?: ReasoningEffort;
+  status: 'open' | 'completed';
+  startedAt: string;
+  completedAt?: string;
+  /** Wall-clock duration. Set when the turn is closed; undefined while open. */
+  durationMs?: number;
+  /** Aggregated token usage across all agents+SDK calls of this turn. */
+  usage: TurnUsage;
+  /** IDs of agents spawned during this turn — for quick scoping in the UI. */
+  agentIds: string[];
+}
+
+export interface TurnUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  /** Sum of (input+output+cacheRead+cacheWrite) — handy single-number display. */
+  totalTokens: number;
+  /** Total Copilot "nano-AIU" cost when the SDK reports it. */
+  nanoAiu?: number;
+  /** Number of LLM API calls aggregated into this turn (one per `assistant.usage` event). */
+  callCount: number;
 }
 
 /** A single event in the persistent activity feed for a task. Surfaced in the
@@ -107,6 +160,8 @@ export interface Task {
 export interface ActivityEntry {
   id: string;
   taskId: string;
+  /** Owning turn — set when the entry was created. Older rows may be undefined. */
+  turnId?: string;
   timestamp: string;
   kind:
     | 'agent-spawned'
@@ -141,6 +196,8 @@ export type AgentStatus = 'idle' | 'working' | 'completed' | 'failed' | 'waiting
 export interface Agent {
   id: string;
   taskId: string;
+  /** Owning turn (the user message that triggered this agent). Undefined for legacy rows. */
+  turnId?: string;
   name: string;
   role: AgentRole;
   status: AgentStatus;
@@ -196,6 +253,9 @@ export type AgentEventType =
   | 'agent:failed'
   | 'task:status'
   | 'task:spec'
+  | 'turn:opened'
+  | 'turn:updated'
+  | 'turn:closed'
   | 'chat:message';
 
 export interface AgentEvent {
@@ -221,6 +281,8 @@ export type ChatRole = 'gulliver' | 'liliput' | 'agent' | 'system';
 export interface ChatMessage {
   id: string;
   taskId: string;
+  /** Owning turn. For `gulliver` messages this is the turn they themselves open. */
+  turnId?: string;
   role: ChatRole;
   agentId?: string;
   agentName?: string;
@@ -362,4 +424,26 @@ export interface AuthStatus {
   errorKind?: AuthErrorKind;
   message?: string;
   hasToken: boolean;
+}
+
+// ─── Token & duration rollups ────────────────────────────────
+
+/** Aggregate usage across all turns of a workstream or repo. */
+export interface UsageRollup {
+  turns: number;
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  durationMs: number;
+  nanoAiu?: number;
+}
+
+export interface WorkstreamUsageResponse extends UsageRollup {
+  workstreamId: string;
+}
+
+export interface RepoUsageResponse extends UsageRollup {
+  repository: string;
 }

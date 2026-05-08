@@ -18,7 +18,7 @@
  *   - on continued failure, may invoke the fixer again (capped attempts).
  */
 
-import { runAgentTurn, type AgentSession, type LogFn, type ToolEventFn, type RunAgentResult } from './agent-loop.js';
+import { runAgentTurn, type AgentSession, type LogFn, type ToolEventFn, type UsageFn, type RunAgentResult } from './agent-loop.js';
 import { buildDeployContract } from './liliput-deploy-contract.js';
 
 const FIXER_TIMEOUT_MS = parseInt(
@@ -55,6 +55,7 @@ export interface OpsFixerOptions {
   escalationBlock?: string;
   onLog?: LogFn;
   onToolEvent?: ToolEventFn;
+  onUsage?: UsageFn;
 }
 
 const ERROR_OUTPUT_LIMIT = 4000;
@@ -202,5 +203,6 @@ export async function runOpsFixer(opts: OpsFixerOptions): Promise<RunAgentResult
     timeoutMs: FIXER_TIMEOUT_MS,
     ...(opts.onLog ? { onLog: opts.onLog } : {}),
     ...(opts.onToolEvent ? { onToolEvent: opts.onToolEvent } : {}),
+    ...(opts.onUsage ? { onUsage: opts.onUsage } : {}),
   });
 }

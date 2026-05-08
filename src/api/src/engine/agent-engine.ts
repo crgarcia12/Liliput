@@ -21,6 +21,7 @@ import { promises as fs } from 'fs';
 import * as path from 'path';
 import type { AgentRole, Task } from '../../../shared/types/index.js';
 import * as store from '../stores/task-store.js';
+import * as turnStore from '../stores/turn-store.js';
 import { logger } from '../logger.js';
 import * as git from './git-client.js';
 import { CheckpointWriter } from './checkpoint-writer.js';
@@ -317,6 +318,7 @@ async function drainPendingChatMessages(
             hb.bump();
             recordToolEvent(io, taskId, agentId, event);
           },
+          onUsage: (event) => recordUsageEvent(io, taskId, agentId, event),
         });
       } finally {
         hb.stop();
@@ -873,6 +875,40 @@ function recordToolEvent(
   });
 }
 
+/** Aggregate one SDK `assistant.usage` event onto the agent's owning turn.
+ *  No-op when we cannot resolve the agent's turn (legacy rows). */
+function recordUsageEvent(
+  io: SocketServer,
+  taskId: string,
+  agentId: string,
+  event: {
+    model: string;
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+    nanoAiu?: number;
+  },
+): void {
+  // Resolve owning turn from the agent (preferred) or the task's current turn
+  // (fallback). Either way, it must exist for legacy data.
+  const agent = store.getAgent(taskId, agentId);
+  const turnId =
+    agent?.turnId ?? turnStore.getCurrentTurn(taskId)?.id ?? turnStore.getLastTurn(taskId)?.id;
+  if (!turnId) return;
+  const updated = turnStore.recordUsage(turnId, {
+    ...(event.inputTokens != null ? { inputTokens: event.inputTokens } : {}),
+    ...(event.outputTokens != null ? { outputTokens: event.outputTokens } : {}),
+    ...(event.cacheReadTokens != null ? { cacheReadTokens: event.cacheReadTokens } : {}),
+    ...(event.cacheWriteTokens != null ? { cacheWriteTokens: event.cacheWriteTokens } : {}),
+    ...(event.nanoAiu != null ? { nanoAiu: event.nanoAiu } : {}),
+    calls: 1,
+  });
+  if (updated) {
+    io.to(`task:${taskId}`).emit('turn:updated', updated);
+  }
+}
+
 function truncateAction(s: string): string {
   if (!s) return '';
   const oneLine = s.split('\n')[0] ?? '';
@@ -1051,6 +1087,7 @@ async function buildWithFixer(ctx: BuildContext): Promise<BuildOutcome> {
           },
           onLog: (level, msg, cmd, out) => logPhase(ctx.io, ctx.taskId, fixer, level, msg, cmd, out),
           onToolEvent: (event) => recordToolEvent(ctx.io, ctx.taskId, fixer, event),
+          onUsage: (event) => recordUsageEvent(ctx.io, ctx.taskId, fixer, event),
         });
       } catch (fixerErr) {
         const m = fixerErr instanceof Error ? fixerErr.message : String(fixerErr);
@@ -1192,6 +1229,7 @@ async function deployWithFixer(ctx: DeployContext): Promise<DeployOutcome> {
           },
           onLog: (level, msg, cmd, out) => logPhase(ctx.io, ctx.taskId, fixer, level, msg, cmd, out),
           onToolEvent: (event) => recordToolEvent(ctx.io, ctx.taskId, fixer, event),
+          onUsage: (event) => recordUsageEvent(ctx.io, ctx.taskId, fixer, event),
         });
       } catch (fixerErr) {
         const m = fixerErr instanceof Error ? fixerErr.message : String(fixerErr);
@@ -1768,6 +1806,7 @@ async function validateAndHealLoop(ctx: ValidateContext): Promise<ValidateOutcom
             hb.bump();
             recordToolEvent(io, taskId, fixer, event);
           },
+          onUsage: (event) => recordUsageEvent(io, taskId, fixer, event),
         });
       } finally {
         hb.stop();
@@ -2139,6 +2178,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
         checkpointer.observe(event);
         recordToolEvent(io, taskId, coder, event);
       },
+      onUsage: (event) => recordUsageEvent(io, taskId, coder, event),
     });
   } finally {
     hb.stop();
@@ -2908,6 +2948,7 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
         hb.bump();
         recordToolEvent(io, taskId, coder, event);
       },
+      onUsage: (event) => recordUsageEvent(io, taskId, coder, event),
     });
   } finally {
     hb.stop();
