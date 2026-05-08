@@ -2,7 +2,9 @@
 
 **Describe a software change in plain English. Liliput's agents — the "Liliputians" — clone your repo, write the code, build it, deploy a preview, and open a pull request. Watch every tool call live and steer the agent mid-flight by chatting.**
 
-> Live: **https://liliput.crgarcia.com.ar**
+> Live: **https://liliput.crgarcia.com.ar** · DEV: **https://dev.liliput.crgarcia.com.ar**
+
+![Liliput home](docs/screenshots/home.png)
 
 ---
 
@@ -205,19 +207,22 @@ Two side-channels run alongside every turn:
 - **Tool wishes** — agents emit `TOOL-WISH: <tool> — <why>` lines when they want a CLI that isn't in the image (e.g., `gh`, `jq`, `playwright`). Wishes accumulate at `/tool-wishes` so the operator sees what to bake into the next image revision.
 - **Verdicts** — every `VERDICT:` line is captured and visible at `/verdicts`, so you can see exactly when and why a task self-terminated.
 
-#### Workstream → Feature → Task hierarchy
+#### Workstream → Feature → Task → Turn hierarchy
 
 A single English request can be too big for one PR. Liliput's hierarchy is:
 
 ```
-Repo  →  Workstream  →  Feature  →  Task  →  Agent (Copilot SDK session)
+Repo  →  Workstream  →  Feature  →  Task  →  Turn  →  Agent (Copilot SDK session)
 ```
 
 - **Repo** — the GitHub target.
 - **Workstream** — one user-facing request ("add multi-tenant billing"). Holds the spec.
 - **Feature** — a slice of the workstream that can ship independently. The decomposer agent reads the spec and proposes a feature breakdown (e.g. `01-tenant-model`, `02-billing-api`, `03-admin-ui`, plus a `99-integration` feature that wires them together). Features carry their own `dependsOn` graph.
 - **Task** — one execution attempt for a feature, with its own clone, branch, and preview namespace.
-- **Agent** — the Copilot SDK session driving a task.
+- **Turn** — one chat round-trip inside a task. Every user message opens a new turn; agents and activity entries spawned by that message are scoped to it. Turns capture model, duration, and token usage (in/out/cache + nano-AIU).
+- **Agent** — the Copilot SDK session driving a turn.
+
+Token, duration, and call counts roll up Turn → Task → Workstream → Repo, so the home page shows live token spend per repo and workstream, and the task page lists every turn with its cost and timing.
 
 Decomposition is **best-effort and behind a flag** (`AUTOPILOT_DECOMPOSE=1`): if the LLM returns nothing parseable, the workstream just runs as a single feature. Persisted features are not yet consumed for parallel fan-out — that's the next milestone. For now decomposition is an observability surface so we can see how the LLM chooses to split real specs.
 

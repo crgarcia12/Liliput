@@ -112,7 +112,7 @@ jobs:
           # template can deploy multiple instances (e.g. liliput + liliput-dev).
           sed -e "s|__NS__|liliput|g" \
               -e "s|__DEV_PREFIX__|dev|g" \
-              -e "s|__ENV_NAME__|TEST|g" \
+              -e "s|__ENV_NAME__|PROD|g" \
               -e "s|__PUBLIC_BASE_URL__|https://liliput.crgarcia.com.ar|g" \
               -e "s|__PIP_NAME__|liliput-test-pip|g" \
               -e "s|__LB_IP__|4.223.107.121|g" \
