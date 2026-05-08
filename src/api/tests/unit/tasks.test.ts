@@ -137,7 +137,7 @@ describe('PATCH /api/tasks/:id/model', () => {
     const { app } = buildApp();
     const created = await request(app)
       .post('/api/tasks')
-      .send({ title: 'T', description: 'D', model: 'claude-sonnet-4' });
+      .send({ title: 'T', description: 'D', model: 'claude-sonnet-4.5' });
     expect(created.status).toBe(201);
     const id = created.body.task.id as string;
 
