@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { useAuthStatus } from '../hooks/useAuthStatus';
 import type { AuthErrorKind } from '@shared/types';
 
@@ -25,9 +26,14 @@ const ACTIONS: Partial<Record<AuthErrorKind, string>> = {
 
 export function AuthStatusBanner(): React.JSX.Element | null {
   const { status, refresh, refreshing } = useAuthStatus();
+  const [dismissedAt, setDismissedAt] = useState<string | null>(null);
 
   // Hide while initial state unknown or healthy.
   if (!status || status.ok !== false) return null;
+
+  // Hide if the user already dismissed THIS failure. A newer failure
+  // (different lastCheckedAt) re-shows the banner.
+  if (status.lastCheckedAt && dismissedAt === status.lastCheckedAt) return null;
 
   const kind: AuthErrorKind = status.errorKind ?? 'unknown';
   const title = TITLES[kind];
@@ -57,6 +63,15 @@ export function AuthStatusBanner(): React.JSX.Element | null {
           className="shrink-0 rounded border border-red-600 px-3 py-1 text-xs font-medium text-red-100 hover:bg-red-900 disabled:opacity-50"
         >
           {refreshing ? 'Checking…' : 'Re-check'}
+        </button>
+        <button
+          type="button"
+          aria-label="Dismiss"
+          title="Dismiss"
+          onClick={() => setDismissedAt(status.lastCheckedAt ?? '')}
+          className="shrink-0 rounded border border-red-600 px-2 py-1 text-xs font-medium text-red-100 hover:bg-red-900"
+        >
+          ✕
         </button>
       </div>
     </div>

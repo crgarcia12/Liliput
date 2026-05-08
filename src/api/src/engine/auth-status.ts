@@ -3,6 +3,8 @@
  * The UI consumes this to show "Token expired", "No Copilot subscription", etc.
  */
 
+import { logger } from '../logger.js';
+
 export type AuthErrorKind =
   | 'missing_token'
   | 'unauthorized'
@@ -80,6 +82,7 @@ export function recordAuthFailure(kind: AuthErrorKind, message: string): void {
     message,
     hasToken: hasTokenInEnv(),
   };
+  logger.warn({ kind, message }, `[Red banner] ${message}`);
   notify();
 }
 
