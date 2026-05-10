@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
 import LogList from '../components/LogList';
 import TopBar from '../components/TopBar';
@@ -188,6 +188,24 @@ export default function RequestsPage() {
     result.sort((a, b) => a.repo.localeCompare(b.repo));
     return result;
   }, [tasks, workstreams, showInactive]);
+
+  // Auto-collapse repos by default — when this page mounts (or a brand-new
+  // repo appears mid-session), force it into `collapsedRepos`. Tracks "seen"
+  // repos in a ref so the user's manual expansions are preserved during the
+  // current mount; navigating away and back resets the ref → all collapsed
+  // again, which matches the user's request that the tree always opens
+  // collapsed for fast scanning.
+  const seenReposRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const newOnes = tree.map((b) => b.repo).filter((r) => !seenReposRef.current.has(r));
+    if (newOnes.length === 0) return;
+    setCollapsedRepos((prev) => {
+      const next = new Set(prev);
+      for (const r of newOnes) next.add(r);
+      return next;
+    });
+    for (const r of newOnes) seenReposRef.current.add(r);
+  }, [tree]);
 
   // Auto-select first node on first load.
   useEffect(() => {
