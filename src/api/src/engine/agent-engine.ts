@@ -2196,18 +2196,21 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   await drainPendingChatMessages(io, taskId, coder, { pathPrefix });
 
   const changedFiles = await git.changedFiles(handle);
+  const headSha = await git.headSha(handle);
+  const hasCheckpointCommits = Boolean(baselineSha) && baselineSha !== headSha;
+  const hasAnyChanges = changedFiles.length > 0 || hasCheckpointCommits;
   logPhase(
     io,
     taskId,
     coder,
     'info',
-    `Agent made ${result.toolCallCount} tool calls — ${changedFiles.length} file(s) changed`,
+    `Agent made ${result.toolCallCount} tool calls — ${changedFiles.length} working-tree file(s) changed${hasCheckpointCommits ? ` (+ checkpoint commits ${baselineSha.substring(0, 7)}..${headSha.substring(0, 7)})` : ''}`,
     undefined,
     (result.summary ?? '') +
       (changedFiles.length ? `\n\nChanged files:\n${changedFiles.join('\n')}` : ''),
   );
 
-  if (changedFiles.length === 0) {
+  if (!hasAnyChanges) {
     const summary = (result.summary ?? '').trim();
     const verdict = summary
       ? summary.split('\n').find((l) => /VERDICT:/i.test(l)) ?? summary.split('\n').slice(-3).join(' ')
