@@ -2208,10 +2208,19 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   );
 
   if (changedFiles.length === 0) {
-    failPhase(io, taskId, coder, 'Agent produced no file changes — nothing to build.');
+    const summary = (result.summary ?? '').trim();
+    const verdict = summary
+      ? summary.split('\n').find((l) => /VERDICT:/i.test(l)) ?? summary.split('\n').slice(-3).join(' ')
+      : '';
+    const detail = [
+      `Agent produced no file changes after ${result.toolCallCount} tool call(s) — nothing to build.`,
+      verdict ? `Agent's last words: ${verdict.trim().slice(0, 400)}` : 'Agent did not emit a verdict line.',
+      'Common causes: agent gave up without writing code, only ran read-only tools, or hit a tool error it could not recover from.',
+    ].join(' ');
+    failPhase(io, taskId, coder, detail);
     clearInFlightAgent(taskId);
     await disposeAgentSession(agentSession);
-    throw new Error('Agent produced no file changes');
+    throw new Error(detail);
   }
 
   // Coder is done — mark it completed BEFORE the builder spawns so the UI
