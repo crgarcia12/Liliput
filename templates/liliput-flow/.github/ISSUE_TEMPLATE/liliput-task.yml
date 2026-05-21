@@ -1,0 +1,96 @@
+name: 🏰 Liliput task
+description: A small, actionable unit of work created by the PM agent (or a human) for a Liliputian dev to pick up.
+title: "[liliput] "
+labels: ["pm:ready"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > This issue is the **contract** between PM, Dev, and Release Manager agents.
+        > Keep it small and concrete. If it feels large, split it. Details captured here are the only thing that survives across agent sessions.
+
+  - type: input
+    id: parent_frd
+    attributes:
+      label: Parent FRD / PRD section
+      description: Link or path (e.g. `specs/frd-auth.md#login` or a URL). Required for traceability.
+      placeholder: specs/frd-auth.md#login
+    validations:
+      required: true
+
+  - type: dropdown
+    id: complexity
+    attributes:
+      label: Estimated complexity
+      description: |
+        - **S** — single file or a few lines, < ~50 LoC change, one test.
+        - **M** — a handful of files, focused scope, a few tests.
+        - **L** — _not allowed_. Split into multiple issues before submitting.
+      options:
+        - S
+        - M
+        - "L (must be split — do not submit)"
+      default: 0
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why this matters. Link related issues/PRs. Keep to a few sentences.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance criteria (Gherkin)
+      description: |
+        Each criterion is a `Given / When / Then`. These become the PR's checklist and the RM's verification list.
+        Every criterion must be covered by at least one automated test in the resulting PR.
+      value: |
+        ```gherkin
+        Scenario: <short name>
+          Given <precondition>
+          When <action>
+          Then <observable outcome>
+        ```
+    validations:
+      required: true
+
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of scope
+      description: Explicit non-goals. RM will reject scope creep against this list.
+      placeholder: |
+        - No DB schema changes.
+        - No UI changes — API only.
+    validations:
+      required: true
+
+  - type: textarea
+    id: definition_of_done
+    attributes:
+      label: Definition of done
+      value: |
+        - [ ] All acceptance criteria above have at least one automated test.
+        - [ ] `npm run lint` and `npm run build` pass for changed packages.
+        - [ ] Full test suite passes locally.
+        - [ ] No new `test.skip` / `it.only` / `describe.only`.
+        - [ ] Docs updated if user-visible behavior changed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: hints
+    attributes:
+      label: Suggested approach (optional)
+      description: PM or architect hint. Dev agent is free to deviate but must justify in PR.
+
+  - type: input
+    id: liliput_run
+    attributes:
+      label: Liliput run / task id (optional)
+      description: Backreference to the Liliput task that produced this issue, if any.

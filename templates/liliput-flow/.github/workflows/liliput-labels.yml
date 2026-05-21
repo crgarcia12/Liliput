@@ -1,0 +1,64 @@
+name: Liliput labels sync
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/liliput/labels.yml"
+      - ".github/workflows/liliput-labels.yml"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconcile labels from .github/liliput/labels.yml
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          python3 - <<'PY'
+          import json, os, subprocess
+          import yaml
+          with open(".github/liliput/labels.yml") as f:
+              labels = yaml.safe_load(f) or []
+          repo = os.environ["GITHUB_REPOSITORY"]
+          existing = json.loads(subprocess.check_output(
+              ["gh", "api", f"repos/{repo}/labels?per_page=100", "--paginate"]
+          ))
+          existing_by_name = {l["name"]: l for l in existing}
+          for spec in labels:
+              name = spec["name"]
+              color = spec["color"].lstrip("#")
+              desc = spec.get("description", "")
+              if name in existing_by_name:
+                  cur = existing_by_name[name]
+                  if cur["color"].lower() != color.lower() or (cur.get("description") or "") != desc:
+                      print(f"update: {name}")
+                      subprocess.check_call([
+                          "gh", "api", "-X", "PATCH",
+                          f"repos/{repo}/labels/{name}",
+                          "-f", f"new_name={name}",
+                          "-f", f"color={color}",
+                          "-f", f"description={desc}",
+                      ])
+                  else:
+                      print(f"ok:     {name}")
+              else:
+                  print(f"create: {name}")
+                  subprocess.check_call([
+                      "gh", "api", "-X", "POST",
+                      f"repos/{repo}/labels",
+                      "-f", f"name={name}",
+                      "-f", f"color={color}",
+                      "-f", f"description={desc}",
+                  ])
+          PY
