@@ -11,6 +11,7 @@ import { listDevPods, getPodLogs } from '../engine/k8s-deployer.js';
 import { startBuild, shipTask, discardTask, iterateTask, canIterate, enqueueChatForAgent, hasInFlightAgent, stopDevEnvForTask, startDevEnvForTask, deleteDevEnvForTask } from '../engine/agent-engine.js';
 import { verifyRepositoryAccess } from '../engine/github-pr.js';
 import { runFeatureDecomposer } from '../engine/feature-decomposer-runner.js';
+import { emitIssuesForWorkstream } from '../engine/pm-issue-flow.js';
 import * as featureStore from '../stores/feature-store.js';
 import * as turnStore from '../stores/turn-store.js';
 import { logger } from '../logger.js';
@@ -73,6 +74,33 @@ async function decomposeAndPersist(
     },
     'decomposer: persisted features',
   );
+
+  // PM emit (gated): once features are in the DB, hand them off to GitHub
+  // as one issue per Feature so the Dev/RM loop can pick them up. Gate via
+  // env var so existing deployments keep their current behaviour until the
+  // operator opts in. Fire-and-forget so a slow GitHub response can't stall
+  // task creation.
+  if (process.env['LILIPUT_PM_EMIT_ENABLED'] === '1') {
+    const ws = wsStore.getWorkstream(workstreamId);
+    if (!ws) {
+      logger.warn({ workstreamId }, 'pm-emit: workstream not found — skipping');
+      return;
+    }
+    const persisted = featureStore.listFeaturesByWorkstream(workstreamId);
+    void emitIssuesForWorkstream(ws.repository, ws, persisted)
+      .then((stats) =>
+        logger.info(
+          { workstreamId, repo: ws.repository, ...stats },
+          'pm-emit: batch complete',
+        ),
+      )
+      .catch((err) =>
+        logger.warn(
+          { workstreamId, err: err instanceof Error ? err.message : String(err) },
+          'pm-emit: batch threw — features persisted, issues missing',
+        ),
+      );
+  }
 }
 
 export function createTasksRouter(

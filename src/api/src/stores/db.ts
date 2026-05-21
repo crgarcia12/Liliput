@@ -360,6 +360,9 @@ export function resetDb(): void {
     DELETE FROM turns;
     DELETE FROM tasks;
     DELETE FROM workstreams;
+    DELETE FROM target_repos;
+    DELETE FROM github_deliveries;
+    DELETE FROM github_jobs;
   `);
 }
 

@@ -117,6 +117,9 @@ export interface UpdateFeatureInput {
   description?: string;
   position?: number;
   dependsOn?: string[];
+  githubIssueNumber?: number;
+  githubIssueUrl?: string;
+  githubPrNumber?: number;
 }
 
 export function updateFeature(
@@ -137,12 +140,22 @@ export function updateFeature(
       : {}),
     ...(patch.position !== undefined ? { position: patch.position } : {}),
     ...(patch.dependsOn !== undefined ? { dependsOn: patch.dependsOn } : {}),
+    ...(patch.githubIssueNumber !== undefined
+      ? { githubIssueNumber: patch.githubIssueNumber }
+      : {}),
+    ...(patch.githubIssueUrl !== undefined
+      ? { githubIssueUrl: patch.githubIssueUrl }
+      : {}),
+    ...(patch.githubPrNumber !== undefined
+      ? { githubPrNumber: patch.githubPrNumber }
+      : {}),
     updatedAt: ts,
   };
   getDb()
     .prepare(
       `UPDATE features
-          SET status = ?, branch = ?, namespace = ?, spec_path = ?, data = ?, position = ?, updated_at = ?
+          SET status = ?, branch = ?, namespace = ?, spec_path = ?, data = ?, position = ?,
+              github_issue_number = ?, github_issue_url = ?, github_pr_number = ?, updated_at = ?
         WHERE id = ?`,
     )
     .run(
@@ -152,10 +165,55 @@ export function updateFeature(
       merged.specPath ?? null,
       JSON.stringify(merged),
       merged.position,
+      merged.githubIssueNumber ?? null,
+      merged.githubIssueUrl ?? null,
+      merged.githubPrNumber ?? null,
       ts,
       id,
     );
   return merged;
+}
+
+/**
+ * Look up a Feature by (repository, github issue number) — the webhook
+ * receiver uses this to map an inbound `issues.*` event back to a Feature
+ * row without scanning the JSON blob. Indexed via `idx_features_issue`.
+ *
+ * Returns undefined when no Feature has been tagged with this issue number,
+ * which happens when the webhook beats `createIssueForFeature`'s persist
+ * step. Callers must tolerate the null and retry / fall through.
+ */
+export function findByGithubIssue(
+  repository: string,
+  issueNumber: number,
+): Feature | undefined {
+  const row = getDb()
+    .prepare(
+      `SELECT f.* FROM features f
+         JOIN workstreams w ON w.id = f.workstream_id
+         WHERE w.repository = ? AND f.github_issue_number = ?`,
+    )
+    .get(repository, issueNumber) as FeatureRow | undefined;
+  return row ? hydrate(row) : undefined;
+}
+
+/**
+ * Look up a Feature by (repository, github PR number). Used by the RM
+ * dispatcher when a `pull_request.*` event fires. Indexed via
+ * `idx_features_pr`.
+ */
+export function findByGithubPr(
+  repository: string,
+  prNumber: number,
+): Feature | undefined {
+  const row = getDb()
+    .prepare(
+      `SELECT f.* FROM features f
+         JOIN workstreams w ON w.id = f.workstream_id
+         WHERE w.repository = ? AND f.github_pr_number = ?`,
+    )
+    .get(repository, prNumber) as FeatureRow | undefined;
+  return row ? hydrate(row) : undefined;
 }
 
 export function deleteFeature(id: string): boolean {
