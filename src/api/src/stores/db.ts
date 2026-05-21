@@ -236,6 +236,105 @@ export function getDb(): Database.Database {
     }
     _db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_turn ON chat_messages(turn_id)`);
 
+    // ─── PM / Dev / RM agent loop — issue + webhook tracking ───────────────
+    //
+    // Per-repo bootstrap state: tracks whether the Liliput overlay has been
+    // installed on a target repo (labels created, webhook configured, etc).
+    // Dev/RM agents only act on a repo whose state is 'ready'.
+    _db.exec(`
+      CREATE TABLE IF NOT EXISTS target_repos (
+        repository      TEXT PRIMARY KEY,
+        bootstrap_state TEXT NOT NULL,           -- 'pending' | 'pending_setup_pr' | 'ready' | 'failed'
+        webhook_status  TEXT NOT NULL DEFAULT 'unconfigured',
+                                                  -- 'unconfigured' | 'active' | 'polling_fallback' | 'failed'
+        webhook_id      INTEGER,                  -- GitHub webhook id, if created
+        last_error      TEXT,
+        last_poll_at    TEXT,
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL
+      );
+    `);
+    _db.exec(`CREATE INDEX IF NOT EXISTS idx_target_repos_state ON target_repos(bootstrap_state);`);
+
+    // Webhook delivery dedup: GitHub redelivers events; the X-GitHub-Delivery
+    // header is a stable uuid per delivery. We persist every accepted delivery
+    // so a redelivery is a no-op.
+    _db.exec(`
+      CREATE TABLE IF NOT EXISTS github_deliveries (
+        delivery_id   TEXT PRIMARY KEY,           -- X-GitHub-Delivery header
+        event         TEXT NOT NULL,              -- X-GitHub-Event header
+        action        TEXT,                       -- payload.action if present
+        repository    TEXT,                       -- owner/repo
+        received_at   TEXT NOT NULL,
+        processed_at  TEXT,
+        status        TEXT NOT NULL,              -- 'received' | 'processed' | 'skipped' | 'error'
+        error         TEXT
+      );
+    `);
+    _db.exec(`CREATE INDEX IF NOT EXISTS idx_github_deliveries_repo ON github_deliveries(repository);`);
+    _db.exec(`CREATE INDEX IF NOT EXISTS idx_github_deliveries_received ON github_deliveries(received_at);`);
+
+    // Idempotent action queue: every Dev pickup / RM review is claimed via a
+    // row here so webhook + reconciler can't race. state_key is unique per
+    // (repo, kind, target).
+    _db.exec(`
+      CREATE TABLE IF NOT EXISTS github_jobs (
+        id              TEXT PRIMARY KEY,
+        repository      TEXT NOT NULL,
+        kind            TEXT NOT NULL,            -- 'dev-pickup' | 'rm-review'
+        state_key       TEXT NOT NULL,            -- repo + kind + issue_or_pr_number
+        issue_number    INTEGER,
+        pr_number       INTEGER,
+        status          TEXT NOT NULL,            -- 'queued' | 'running' | 'done' | 'failed'
+        locked_by       TEXT,
+        locked_until    INTEGER,
+        last_error      TEXT,
+        attempts        INTEGER NOT NULL DEFAULT 0,
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL,
+        UNIQUE(state_key)
+      );
+    `);
+    _db.exec(`CREATE INDEX IF NOT EXISTS idx_github_jobs_repo_kind ON github_jobs(repository, kind, status);`);
+    _db.exec(`CREATE INDEX IF NOT EXISTS idx_github_jobs_locked ON github_jobs(locked_until);`);
+
+    // Forward-compat columns on workstreams + features. Issue/PR identifiers
+    // are kept as first-class columns so webhook lookups by (repo,number) are
+    // an index hit, not a JSON-blob scan.
+    const wsCols = _db
+      .prepare(`PRAGMA table_info(workstreams)`)
+      .all() as Array<{ name: string }>;
+    if (!wsCols.some((c) => c.name === 'github_label')) {
+      _db.exec(`ALTER TABLE workstreams ADD COLUMN github_label TEXT`);
+      logger.info({}, 'Migrated: added github_label column to workstreams');
+    }
+    if (!wsCols.some((c) => c.name === 'tracker_issue_number')) {
+      _db.exec(`ALTER TABLE workstreams ADD COLUMN tracker_issue_number INTEGER`);
+      logger.info({}, 'Migrated: added tracker_issue_number column to workstreams');
+    }
+
+    const featureCols = _db
+      .prepare(`PRAGMA table_info(features)`)
+      .all() as Array<{ name: string }>;
+    if (!featureCols.some((c) => c.name === 'github_issue_number')) {
+      _db.exec(`ALTER TABLE features ADD COLUMN github_issue_number INTEGER`);
+      logger.info({}, 'Migrated: added github_issue_number column to features');
+    }
+    if (!featureCols.some((c) => c.name === 'github_issue_url')) {
+      _db.exec(`ALTER TABLE features ADD COLUMN github_issue_url TEXT`);
+      logger.info({}, 'Migrated: added github_issue_url column to features');
+    }
+    if (!featureCols.some((c) => c.name === 'github_pr_number')) {
+      _db.exec(`ALTER TABLE features ADD COLUMN github_pr_number INTEGER`);
+      logger.info({}, 'Migrated: added github_pr_number column to features');
+    }
+    _db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_features_issue ON features(github_issue_number);`,
+    );
+    _db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_features_pr ON features(github_pr_number);`,
+    );
+
     // Backfill: every task that has no turn yet gets one synthetic "Initial
     // turn" containing all its existing agents/activity/chat. This is run
     // every startup but is a no-op once each task has at least one turn.

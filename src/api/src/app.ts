@@ -11,11 +11,14 @@ import { createVerdictsRouter } from './routes/verdicts.js';
 import { createFeaturesRouter } from './routes/features.js';
 import { createProjectsRouter } from './routes/projects.js';
 import { createTitleSuggestRouter } from './routes/title-suggest.js';
+import { createGitHubWebhookRouter } from './routes/github-webhook.js';
 import type { SpecGenerator } from './engine/spec-generator.js';
 
 export interface AppOptions {
   /** Override the spec generator (used by tests to inject a mock). */
   specGenerator?: SpecGenerator;
+  /** Override the GitHub webhook secret (tests). */
+  githubWebhookSecret?: string;
 }
 
 export function createApp(io: SocketServer, options: AppOptions = {}): express.Express {
@@ -23,6 +26,18 @@ export function createApp(io: SocketServer, options: AppOptions = {}): express.E
 
   // Middleware
   app.use(cors());
+
+  // GitHub webhook MUST be mounted BEFORE express.json() — HMAC verification
+  // requires the raw request body. The webhook router installs its own
+  // express.raw() middleware for the /api/github/webhook path only.
+  if (options.githubWebhookSecret ?? process.env['GITHUB_WEBHOOK_SECRET']) {
+    app.use(
+      createGitHubWebhookRouter(
+        options.githubWebhookSecret ? { secret: options.githubWebhookSecret } : {},
+      ),
+    );
+  }
+
   app.use(express.json());
 
   // Routes
