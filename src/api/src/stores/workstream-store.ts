@@ -97,3 +97,35 @@ export function listWorkstreamIdsForRepo(repository: string): string[] {
     .all(repository) as { id: string }[];
   return rows.map((r) => r.id);
 }
+
+/**
+ * Persist the GitHub label that groups every PM-emitted Feature issue for
+ * this workstream. Writes both the indexed `github_label` column and the
+ * `data` JSON blob so callers reading via `getWorkstream()` see the value.
+ */
+export function setGithubLabel(id: string, label: string): Workstream | undefined {
+  const existing = getWorkstream(id);
+  if (!existing) return undefined;
+  const ts = now();
+  const merged: Workstream = { ...existing, githubLabel: label, updatedAt: ts };
+  getDb()
+    .prepare(
+      `UPDATE workstreams SET github_label = ?, data = ?, updated_at = ? WHERE id = ?`,
+    )
+    .run(label, JSON.stringify(merged), ts, id);
+  return merged;
+}
+
+/** Persist the umbrella/tracker issue number for a workstream. */
+export function setTrackerIssue(id: string, issueNumber: number): Workstream | undefined {
+  const existing = getWorkstream(id);
+  if (!existing) return undefined;
+  const ts = now();
+  const merged: Workstream = { ...existing, trackerIssueNumber: issueNumber, updatedAt: ts };
+  getDb()
+    .prepare(
+      `UPDATE workstreams SET tracker_issue_number = ?, data = ?, updated_at = ? WHERE id = ?`,
+    )
+    .run(issueNumber, JSON.stringify(merged), ts, id);
+  return merged;
+}

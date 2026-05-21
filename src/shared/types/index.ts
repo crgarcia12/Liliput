@@ -7,6 +7,13 @@ export interface Workstream {
   repository: string;          // Owner/repo this workstream belongs to
   name: string;                // Short label (e.g. "auth", "billing")
   description?: string;
+  /** GitHub label applied to every issue/PR that belongs to this workstream
+   *  on the target repo (e.g. `workstream:billing`). Set by the PM flow once
+   *  the label has been ensured on GitHub. */
+  githubLabel?: string;
+  /** Issue number of the optional umbrella/tracker issue that groups all
+   *  Feature issues for this workstream. Empty until PR-7 wires it. */
+  trackerIssueNumber?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -39,6 +46,15 @@ export interface Feature {
   specPath?: string;           // e.g. specs/features/01-user-login.feature.md
   position: number;            // Display order
   dependsOn?: string[];        // Feature IDs that must complete first
+  /** GitHub issue number created by the PM flow for this Feature on the
+   *  target repo. Empty until the PM flow runs. The webhook receiver looks
+   *  up Features by this column when an issue/PR event fires. */
+  githubIssueNumber?: number;
+  /** Full html_url of the GitHub issue — handy for activity messages. */
+  githubIssueUrl?: string;
+  /** PR number opened against this Feature's branch (set when dev opens the
+   *  PR; used by RM to find the feature on `pull_request.*` events). */
+  githubPrNumber?: number;
   createdAt: string;
   updatedAt: string;
 }
