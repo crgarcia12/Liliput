@@ -34,6 +34,7 @@ import {
   GitHubApiError,
   type FetchImpl,
 } from './github-rest.js';
+import { ensureTargetRepoBootstrapped } from './target-repo-bootstrap.js';
 import type { Feature, Workstream } from '../../../shared/types/index.js';
 
 /** Label colours we use when CREATING (existing labels are left alone). */
@@ -187,7 +188,21 @@ export async function emitIssuesForWorkstream(
   workstream: Workstream,
   features: Feature[],
   deps: PmEmitDeps = {},
-): Promise<{ created: number; existing: number; failed: number }> {
+): Promise<{ created: number; existing: number; failed: number; bootstrap?: string }> {
+  // Ensure the target repo has its labels + webhook in place. This is cheap
+  // when state='ready' (single DB read). On first call per repo this hits
+  // GitHub. Failure here only blocks the batch when labels couldn't be
+  // created (loop literally can't function without `pm:ready`).
+  const bootstrap = await ensureTargetRepoBootstrapped(repository, {
+    ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+  });
+  if (bootstrap.bootstrapState !== 'ready') {
+    logger.warn(
+      { repo: repository, state: bootstrap.bootstrapState, warnings: bootstrap.warnings },
+      'pm-emit: target repo not ready — aborting batch',
+    );
+    return { created: 0, existing: 0, failed: features.length, bootstrap: bootstrap.bootstrapState };
+  }
   let created = 0;
   let existing = 0;
   let failed = 0;
@@ -209,7 +224,7 @@ export async function emitIssuesForWorkstream(
       );
     }
   }
-  return { created, existing, failed };
+  return { created, existing, failed, bootstrap: bootstrap.bootstrapState };
 }
 
 export function renderIssueTitle(feature: Feature): string {

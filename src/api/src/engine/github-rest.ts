@@ -213,3 +213,69 @@ export async function addComment(opts: AddCommentOptions): Promise<void> {
     );
   }
 }
+
+// ─── Webhooks ─────────────────────────────────────────────────────────
+
+export interface ListWebhooksOptions {
+  repo: string;
+  fetchImpl?: FetchImpl;
+}
+
+export interface RepoWebhook {
+  id: number;
+  active: boolean;
+  events: string[];
+  config: { url?: string; content_type?: string; insecure_ssl?: string };
+}
+
+/** List the webhooks installed on a repo. Used to skip recreating one we
+ *  already own (idempotent bootstrap). Returns the full GitHub payload. */
+export async function listWebhooks(opts: ListWebhooksOptions): Promise<RepoWebhook[]> {
+  const f = opts.fetchImpl ?? fetch;
+  const res = await f(`${API}/repos/${opts.repo}/hooks?per_page=100`, {
+    method: 'GET',
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    throw new GitHubApiError(res.status, 'GET /hooks', await res.text());
+  }
+  return (await res.json()) as RepoWebhook[];
+}
+
+export interface CreateWebhookOptions {
+  repo: string;
+  url: string;            // payload destination — `${PUBLIC_BASE_URL}/api/github/webhook`
+  secret: string;         // HMAC secret — must match GITHUB_WEBHOOK_SECRET
+  events?: string[];      // default: ['issues','pull_request','check_suite','check_run']
+  fetchImpl?: FetchImpl;
+}
+
+const DEFAULT_WEBHOOK_EVENTS = ['issues', 'pull_request', 'check_suite', 'check_run'];
+
+/** Create a "web" hook on the target repo. Caller is responsible for not
+ *  recreating an existing one (use `listWebhooks` first). */
+export async function createWebhook(
+  opts: CreateWebhookOptions,
+): Promise<{ id: number }> {
+  const f = opts.fetchImpl ?? fetch;
+  const res = await f(`${API}/repos/${opts.repo}/hooks`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: 'web',
+      active: true,
+      events: opts.events ?? DEFAULT_WEBHOOK_EVENTS,
+      config: {
+        url: opts.url,
+        content_type: 'json',
+        insecure_ssl: '0',
+        secret: opts.secret,
+      },
+    }),
+  });
+  if (!res.ok) {
+    throw new GitHubApiError(res.status, 'POST /hooks', await res.text());
+  }
+  const data = (await res.json()) as { id: number };
+  return { id: data.id };
+}
