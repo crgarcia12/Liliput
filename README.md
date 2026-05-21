@@ -459,6 +459,40 @@ Releases are automated. Push a tag matching `cli-v*` (e.g., `cli-v0.1.0`) and Gi
 
 ---
 
+## PM → Dev → RM agent loop (GitHub Issues)
+
+Beyond one-shot tasks, Liliput supports a durable multi-agent loop that uses
+**GitHub Issues** as the contract between three roles:
+
+- **PM agent** (`pm-issue-author` skill) — turns FRD/PRD intent into small,
+  actionable issues with Gherkin acceptance criteria, explicit out-of-scope,
+  and a definition of done. Refuses to create oversized work.
+- **Dev liliputian** (`dev-implementer` skill) — picks `pm:ready` issues,
+  writes tests first, opens a PR using the Liliput PR template that mirrors
+  the issue's AC checkbox-for-checkbox.
+- **Release Manager** (`release-manager` skill) — runs a deterministic
+  checklist (`.github/liliput/rm-checklist.md`); either squash-merges and
+  closes the issue, or bounces back to the dev with structured feedback.
+  Enforces a per-PR retry budget and escalates to `blocked:human`.
+
+State lives in **GitHub labels** (`pm:ready` → `dev:in-progress` → `rm:review`
+→ `rm:changes-requested` ↺ → `done` / `blocked:human`), which survives
+across agent sessions. The full issue timeline is the audit log.
+
+### Bootstrapping a target repo (new or existing)
+
+The overlay lives in `templates/liliput-flow/`. To install it idempotently
+(never clobbers existing files):
+
+```bash
+bash scripts/bootstrap-liliput-flow.sh /path/to/target-repo --apply-labels
+```
+
+See `templates/liliput-flow/.github/liliput/FLOW.md` for the human-readable
+overview that ships into each target repo.
+
+---
+
 ## License
 
 [ISC](LICENSE)

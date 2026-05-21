@@ -1,0 +1,48 @@
+# Liliput PM/Dev/RM flow — label state machine.
+# Synced into the target repo by .github/workflows/liliput-labels.yml.
+# Edit here, push to main, workflow reconciles labels.
+
+- name: "pm:ready"
+  color: "0E8A16"
+  description: "PM has authored this issue. Ready for a Liliputian dev to pick up."
+
+- name: "dev:in-progress"
+  color: "FBCA04"
+  description: "A dev agent (or human) is actively working on this. PR may not yet exist."
+
+- name: "rm:review"
+  color: "1D76DB"
+  description: "PR is open and awaiting Release Manager review."
+
+- name: "rm:changes-requested"
+  color: "D93F0B"
+  description: "RM bounced the PR back to dev. See the latest RM review comment."
+
+- name: "dev:rebase-needed"
+  color: "B60205"
+  description: "PR has merge conflicts or stale base. Dev must rebase before RM looks again."
+
+- name: "blocked:human"
+  color: "5319E7"
+  description: "Auto-loop exhausted retry budget OR an agent could not make a deterministic call. Human, please intervene."
+
+- name: "done"
+  color: "0E8A16"
+  description: "Issue closed via merged PR after RM approval."
+
+# Path-tag labels (optional, helpful for routing):
+- name: "area:api"
+  color: "C5DEF5"
+  description: "Backend / API changes."
+
+- name: "area:web"
+  color: "C5DEF5"
+  description: "Frontend / web changes."
+
+- name: "area:infra"
+  color: "C5DEF5"
+  description: "Infra / k8s / Bicep changes."
+
+- name: "area:docs"
+  color: "C5DEF5"
+  description: "Documentation-only change."

@@ -72,6 +72,19 @@ All specialized logic lives in `.github/skills/` following the [agentskills.io](
 | `adr` | Generate and manage Architecture Decision Records |
 | `bug-fix` | Lightweight bug fix with FRD traceability |
 
+### Target-Repo Delivery Loop Skills (PM → Dev → RM, via GitHub Issues)
+
+These skills run **inside a target repo** (new or existing) that has been
+bootstrapped with the Liliput flow overlay from `templates/liliput-flow/`
+(see `scripts/bootstrap-liliput-flow.sh`). The loop is durable across agent
+sessions because the GitHub Issue + PR + labels carry all state.
+
+| Skill | Purpose |
+|-------|---------|
+| `pm-issue-author` | Turns FRD/PRD intent into small (S/M) GitHub Issues with Gherkin AC, out-of-scope, DoD. Refuses L-sized work. |
+| `dev-implementer` | Picks `pm:ready` issues, branches, writes tests-first, opens a PR using the Liliput PR template. |
+| `release-manager` | Runs the deterministic checklist in `.github/liliput/rm-checklist.md`; squash-merges + closes, or bounces with structured feedback; enforces a per-PR retry budget. |
+
 ### Brownfield Common Trunk Skills (Phase B0-B2 — always run)
 
 | Phase | Skill | Purpose |
