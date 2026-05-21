@@ -13,6 +13,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { resetDb } from '../../src/stores/db.js';
 import * as workstreamStore from '../../src/stores/workstream-store.js';
 import * as featureStore from '../../src/stores/feature-store.js';
+import * as targetRepoStore from '../../src/stores/target-repo-store.js';
 import {
   createIssueForFeature,
   emitIssuesForWorkstream,
@@ -202,6 +203,12 @@ describe('pm-issue-flow', () => {
 
   describe('emitIssuesForWorkstream', () => {
     it('skips integration kind, counts per-feature outcomes, and survives individual failures', async () => {
+      // Pre-mark the repo bootstrap as ready so emit doesn't try to hit the
+      // labels/webhook endpoints (those are tested separately in
+      // target-repo-bootstrap.test.ts).
+      targetRepoStore.ensureTargetRepo('owner/repo');
+      targetRepoStore.updateTargetRepo('owner/repo', { bootstrapState: 'ready' });
+
       const ws = workstreamStore.createWorkstream('owner/repo', 'mix', 'ws');
       const f1 = featureStore.createFeature({ workstreamId: ws.id, name: 'A', slug: '01-a', kind: 'feature' });
       const f2 = featureStore.createFeature({ workstreamId: ws.id, name: 'B', slug: '02-b', kind: 'feature' });
