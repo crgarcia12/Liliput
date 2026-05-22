@@ -458,3 +458,72 @@ export async function listIssueComments(
   }
   return (await res.json()) as IssueComment[];
 }
+
+export interface ListIssuesByLabelOptions {
+  repo: string;
+  labels: string[];           // e.g. ['pm:ready']
+  state?: 'open' | 'closed' | 'all';
+  fetchImpl?: FetchImpl;
+}
+
+export interface IssueSummary {
+  number: number;
+  state: 'open' | 'closed';
+  title: string;
+  body: string | null;
+  html_url: string;
+  labels: Array<{ name: string }>;
+  pull_request?: unknown; // present when this "issue" is actually a PR
+}
+
+/** GET /repos/{r}/issues?labels=... — returns issues AND PRs (GitHub's API
+ *  conflates them). Callers must filter by `!item.pull_request` to skip PRs.
+ *  Used by the reconciler to find issues we missed because a webhook never
+ *  arrived (token without admin:repo_hook ⇒ webhook in polling_fallback). */
+export async function listIssuesByLabel(
+  opts: ListIssuesByLabelOptions,
+): Promise<IssueSummary[]> {
+  const f = opts.fetchImpl ?? fetch;
+  const labels = encodeURIComponent(opts.labels.join(','));
+  const state = opts.state ?? 'open';
+  const res = await f(
+    `${API}/repos/${opts.repo}/issues?state=${state}&labels=${labels}&per_page=100`,
+    { headers: authHeaders() },
+  );
+  if (!res.ok) {
+    throw new GitHubApiError(res.status, 'GET /issues?labels=...', await res.text());
+  }
+  return (await res.json()) as IssueSummary[];
+}
+
+export interface ListPullsOptions {
+  repo: string;
+  state?: 'open' | 'closed' | 'all';
+  fetchImpl?: FetchImpl;
+}
+
+export interface PullSummary {
+  number: number;
+  state: 'open' | 'closed';
+  draft: boolean;
+  title: string;
+  html_url: string;
+  labels: Array<{ name: string }>;
+  head: { sha: string };
+}
+
+/** GET /repos/{r}/pulls — used by the reconciler to find PRs with rm:review
+ *  that the webhook missed. Filtering by label requires the search API; we
+ *  list all open PRs (100/page) and filter client-side. */
+export async function listPulls(opts: ListPullsOptions): Promise<PullSummary[]> {
+  const f = opts.fetchImpl ?? fetch;
+  const state = opts.state ?? 'open';
+  const res = await f(
+    `${API}/repos/${opts.repo}/pulls?state=${state}&per_page=100`,
+    { headers: authHeaders() },
+  );
+  if (!res.ok) {
+    throw new GitHubApiError(res.status, 'GET /pulls', await res.text());
+  }
+  return (await res.json()) as PullSummary[];
+}
