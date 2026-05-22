@@ -222,7 +222,8 @@ describe('createWebhookDispatcher', () => {
     it('queues an rm-review job on labeled(rm:review) non-draft', async () => {
       seedFeatureWithPr();
       const spawn = vi.fn();
-      const dispatch = createWebhookDispatcher(fakeIo, { spawnDevTask: spawn });
+      const rm = vi.fn().mockResolvedValue({ action: 'merge' });
+      const dispatch = createWebhookDispatcher(fakeIo, { spawnDevTask: spawn, runRmReview: rm });
       await dispatch({
         deliveryId: 'd6',
         event: 'pull_request',
@@ -231,21 +232,30 @@ describe('createWebhookDispatcher', () => {
         payload: {
           action: 'labeled',
           label: { name: 'rm:review' },
-          pull_request: { number: 33, draft: false, html_url: 'https://x/pr/33' },
+          pull_request: {
+            number: 33,
+            draft: false,
+            html_url: 'https://x/pr/33',
+            head: { sha: 'abc123def456' },
+          },
         },
       });
       const jobs = listJobs();
       expect(jobs).toHaveLength(1);
       expect(jobs[0].kind).toBe('rm-review');
-      expect(jobs[0].state_key).toBe('rm-review:owner/repo#33');
-      expect(jobs[0].status).toBe('pending');
+      expect(jobs[0].state_key).toBe('rm-review:owner/repo#33@abc123def456');
+      expect(jobs[0].status).toBe('completed');
+      expect(rm).toHaveBeenCalledWith('owner/repo', 33);
       // No spawnDevTask call on RM events.
       expect(spawn).not.toHaveBeenCalled();
     });
 
     it('ignores labeled(rm:review) on draft PRs', async () => {
       seedFeatureWithPr();
-      const dispatch = createWebhookDispatcher(fakeIo, { spawnDevTask: vi.fn() });
+      const dispatch = createWebhookDispatcher(fakeIo, {
+        spawnDevTask: vi.fn(),
+        runRmReview: vi.fn(),
+      });
       await dispatch({
         deliveryId: 'd7',
         event: 'pull_request',
@@ -254,7 +264,7 @@ describe('createWebhookDispatcher', () => {
         payload: {
           action: 'labeled',
           label: { name: 'rm:review' },
-          pull_request: { number: 33, draft: true },
+          pull_request: { number: 33, draft: true, head: { sha: 'aaa' } },
         },
       });
       expect(listJobs()).toHaveLength(0);
@@ -262,7 +272,11 @@ describe('createWebhookDispatcher', () => {
 
     it('queues on ready_for_review even without explicit label', async () => {
       seedFeatureWithPr();
-      const dispatch = createWebhookDispatcher(fakeIo, { spawnDevTask: vi.fn() });
+      const rm = vi.fn().mockResolvedValue({ action: 'merge' });
+      const dispatch = createWebhookDispatcher(fakeIo, {
+        spawnDevTask: vi.fn(),
+        runRmReview: rm,
+      });
       await dispatch({
         deliveryId: 'd8',
         event: 'pull_request',
@@ -270,15 +284,19 @@ describe('createWebhookDispatcher', () => {
         repository: 'owner/repo',
         payload: {
           action: 'ready_for_review',
-          pull_request: { number: 33, draft: false },
+          pull_request: { number: 33, draft: false, head: { sha: 'bbb' } },
         },
       });
       expect(listJobs()).toHaveLength(1);
+      expect(rm).toHaveBeenCalledWith('owner/repo', 33);
     });
 
     it('ignores synchronize on draft PRs', async () => {
       seedFeatureWithPr();
-      const dispatch = createWebhookDispatcher(fakeIo, { spawnDevTask: vi.fn() });
+      const dispatch = createWebhookDispatcher(fakeIo, {
+        spawnDevTask: vi.fn(),
+        runRmReview: vi.fn(),
+      });
       await dispatch({
         deliveryId: 'd9',
         event: 'pull_request',
@@ -286,7 +304,7 @@ describe('createWebhookDispatcher', () => {
         repository: 'owner/repo',
         payload: {
           action: 'synchronize',
-          pull_request: { number: 33, draft: true },
+          pull_request: { number: 33, draft: true, head: { sha: 'ccc' } },
         },
       });
       expect(listJobs()).toHaveLength(0);
@@ -294,7 +312,10 @@ describe('createWebhookDispatcher', () => {
 
     it('does nothing when PR cannot be mapped to a Feature', async () => {
       seedFeature(); // no PR mapping
-      const dispatch = createWebhookDispatcher(fakeIo, { spawnDevTask: vi.fn() });
+      const dispatch = createWebhookDispatcher(fakeIo, {
+        spawnDevTask: vi.fn(),
+        runRmReview: vi.fn(),
+      });
       await dispatch({
         deliveryId: 'd10',
         event: 'pull_request',
@@ -303,10 +324,33 @@ describe('createWebhookDispatcher', () => {
         payload: {
           action: 'labeled',
           label: { name: 'rm:review' },
-          pull_request: { number: 999, draft: false },
+          pull_request: { number: 999, draft: false, head: { sha: 'ddd' } },
         },
       });
       expect(listJobs()).toHaveLength(0);
+    });
+
+    it('marks job failed when RM review throws', async () => {
+      seedFeatureWithPr();
+      const rm = vi.fn().mockRejectedValue(new Error('boom'));
+      const dispatch = createWebhookDispatcher(fakeIo, {
+        spawnDevTask: vi.fn(),
+        runRmReview: rm,
+      });
+      await dispatch({
+        deliveryId: 'd6b',
+        event: 'pull_request',
+        action: 'labeled',
+        repository: 'owner/repo',
+        payload: {
+          action: 'labeled',
+          label: { name: 'rm:review' },
+          pull_request: { number: 33, draft: false, head: { sha: 'eee' } },
+        },
+      });
+      const jobs = listJobs();
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0].status).toBe('failed');
     });
   });
 
