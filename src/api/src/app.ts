@@ -12,6 +12,7 @@ import { createFeaturesRouter } from './routes/features.js';
 import { createProjectsRouter } from './routes/projects.js';
 import { createTitleSuggestRouter } from './routes/title-suggest.js';
 import { createGitHubWebhookRouter } from './routes/github-webhook.js';
+import { createWebhookDispatcher } from './engine/webhook-dispatcher.js';
 import type { SpecGenerator } from './engine/spec-generator.js';
 
 export interface AppOptions {
@@ -19,6 +20,8 @@ export interface AppOptions {
   specGenerator?: SpecGenerator;
   /** Override the GitHub webhook secret (tests). */
   githubWebhookSecret?: string;
+  /** Disable the real webhook dispatcher (tests use the default no-op). */
+  disableWebhookDispatcher?: boolean;
 }
 
 export function createApp(io: SocketServer, options: AppOptions = {}): express.Express {
@@ -31,10 +34,14 @@ export function createApp(io: SocketServer, options: AppOptions = {}): express.E
   // requires the raw request body. The webhook router installs its own
   // express.raw() middleware for the /api/github/webhook path only.
   if (options.githubWebhookSecret ?? process.env['GITHUB_WEBHOOK_SECRET']) {
+    const dispatcher = options.disableWebhookDispatcher
+      ? undefined
+      : createWebhookDispatcher(io);
     app.use(
-      createGitHubWebhookRouter(
-        options.githubWebhookSecret ? { secret: options.githubWebhookSecret } : {},
-      ),
+      createGitHubWebhookRouter({
+        ...(options.githubWebhookSecret ? { secret: options.githubWebhookSecret } : {}),
+        ...(dispatcher ? { dispatcher } : {}),
+      }),
     );
   }
 
