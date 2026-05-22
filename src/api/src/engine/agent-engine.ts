@@ -53,6 +53,8 @@ import {
 } from './k8s-deployer.js';
 import { syncRoutes, type DevRoute } from './nginx-patcher.js';
 import { openPullRequest, markPullRequestReady, closePullRequest } from './github-pr.js';
+import { linkPrToFeature } from './pm-issue-flow.js';
+import * as featureStore from '../stores/feature-store.js';
 import { pathPrefixFor, writeContractIntoWorkspace } from './liliput-deploy-contract.js';
 import { writeAcceptanceFeature } from './acceptance-feature-writer.js';
 import { installCucumberIfMissing } from './cucumber-installer.js';
@@ -2424,6 +2426,9 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
       prUrl = pr.htmlUrl;
       prNumber = pr.number;
       logPhase(io, taskId, reviewer, 'info', `Draft PR opened: ${pr.htmlUrl}`);
+      // Link PR back to Feature so the RM dispatcher can find it. The PR is
+      // still draft — we apply `dev:in-progress` on the issue, not rm:review.
+      await linkPrToFeatureForTask(task, pr.number, pr.htmlUrl, /*isDraft*/ true);
       completePhase(io, taskId, reviewer);
     } catch (err) {
       const m = err instanceof Error ? err.message : String(err);
@@ -2541,12 +2546,16 @@ export async function shipTask(io: SocketServer, taskId: string): Promise<Task> 
       prUrl = pr.htmlUrl;
       prNumber = pr.number;
       logPhase(io, taskId, reviewer, 'info', `Pull request opened: ${pr.htmlUrl}`);
+      // Link PR back to Feature + apply rm:review so the RM dispatcher fires.
+      await linkPrToFeatureForTask(task, pr.number, pr.htmlUrl, /*isDraft*/ false);
     } else {
       // PR already exists as a draft — mark it ready for review.
       logPhase(io, taskId, reviewer, 'info', `Marking PR #${prNumber} ready for review…`);
       try {
         await markPullRequestReady(task.repository, prNumber);
         logPhase(io, taskId, reviewer, 'info', `PR ready for review: ${prUrl}`);
+        // After mark-ready, transition the issue + PR labels to rm:review.
+        await linkPrToFeatureForTask(task, prNumber, prUrl ?? '', /*isDraft*/ false);
       } catch (err) {
         const m = err instanceof Error ? err.message : String(err);
         logPhase(io, taskId, reviewer, 'warn', `Mark-ready failed (PR still open as draft): ${m}`);
@@ -3543,5 +3552,40 @@ async function mergePullRequest(repo: string, prNumber: number): Promise<void> {
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`PR merge failed (${res.status}): ${text}`);
+  }
+}
+
+/**
+ * Best-effort wrapper around \linkPrToFeature\ that resolves the linked
+ * Feature + Issue from the Task.featureId. Silently no-ops when the Task
+ * is not feature-linked (legacy or freeform tasks) or when PM emit is off.
+ */
+async function linkPrToFeatureForTask(
+  task: { repository?: string; featureId?: string },
+  prNumber: number,
+  prUrl: string,
+  isDraft: boolean,
+): Promise<void> {
+  if (process.env['LILIPUT_PM_EMIT_ENABLED'] !== '1') return;
+  if (!task.repository || !task.featureId) return;
+  try {
+    const feature = featureStore.getFeature(task.featureId);
+    if (!feature) return;
+    await linkPrToFeature({
+      repo: task.repository,
+      featureId: feature.id,
+      prNumber,
+      prUrl,
+      isDraft,
+      ...(feature.githubIssueNumber !== undefined
+        ? { issueNumber: feature.githubIssueNumber }
+        : {}),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // Logging only -- this hook must NEVER crash the Dev pipeline.
+    // The reconciler will repair any missed state on its next pass.
+    // eslint-disable-next-line no-console
+    console.warn('[agent-engine] linkPrToFeatureForTask failed (ignored):', msg);
   }
 }

@@ -273,3 +273,63 @@ export function extractFeatureIdMarker(body: string | null | undefined): string 
   const m = body.match(FEATURE_MARKER_RE);
   return m ? (m[1] ?? null) : null;
 }
+
+/**
+ * Called by the Dev pipeline after `openPullRequest` succeeds. Wires the PR
+ * into the state machine so the RM dispatcher can pick it up:
+ *
+ *   1. Persist `feature.githubPrNumber` for webhook lookups.
+ *   2. When the PR is non-draft, apply `rm:review` on the PR + linked issue.
+ *   3. When the PR is draft, apply `dev:in-progress` on the linked issue so
+ *      the GitHub timeline reflects progress.
+ *
+ * Best-effort: every GitHub call is wrapped so a transient failure does not
+ * crash the Dev pipeline — the reconciler will retry. Skipped silently if
+ * the Task is not linked to a Feature (legacy / freeform tasks).
+ */
+export interface LinkPrToFeatureOptions {
+  repo: string;
+  featureId: string;
+  prNumber: number;
+  prUrl: string;
+  /** Linked issue number — when absent we skip the issue-side labels. */
+  issueNumber?: number;
+  isDraft?: boolean;
+  fetchImpl?: FetchImpl;
+}
+
+export async function linkPrToFeature(opts: LinkPrToFeatureOptions): Promise<void> {
+  const { repo, featureId, prNumber } = opts;
+  void opts.prUrl;
+  const fOpt = opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {};
+
+  try {
+    featureStore.updateFeature(featureId, { githubPrNumber: prNumber });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error({ repo, featureId, prNumber, err: msg }, 'linkPrToFeature: store update failed');
+    return;
+  }
+
+  if (opts.isDraft === false) {
+    try {
+      await addLabels({ repo, issueNumber: prNumber, labels: ['rm:review'], ...fOpt });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn({ repo, prNumber, err: msg }, 'linkPrToFeature: addLabels(rm:review) on PR failed (ignored)');
+    }
+  }
+
+  if (opts.issueNumber !== undefined) {
+    const issueLabels = opts.isDraft === false ? ['rm:review'] : ['dev:in-progress'];
+    try {
+      await addLabels({ repo, issueNumber: opts.issueNumber, labels: issueLabels, ...fOpt });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn(
+        { repo, issueNumber: opts.issueNumber, err: msg },
+        'linkPrToFeature: addLabels on issue failed (ignored)',
+      );
+    }
+  }
+}
