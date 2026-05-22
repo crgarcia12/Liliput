@@ -25,6 +25,7 @@ import * as taskStore from '../stores/task-store.js';
 import { getDb } from '../stores/db.js';
 import { extractFeatureIdMarker } from './pm-issue-flow.js';
 import { startBuild } from './agent-engine.js';
+import { runRmReview as realRunRmReview } from './rm-review.js';
 import { logger } from '../logger.js';
 import type { WebhookDispatcher } from '../routes/github-webhook.js';
 
@@ -56,6 +57,9 @@ export interface DispatcherDeps {
    *  Defaults to the real `createTask + startBuild` pair. Tests inject a
    *  spy so they don't actually try to run the agent loop. */
   spawnDevTask?: (args: SpawnDevTaskArgs) => Promise<{ taskId: string }> | { taskId: string };
+  /** Run the Release Manager review for a PR. Defaults to the real
+   *  `runRmReview`. Tests inject a spy so they don't hit GitHub. */
+  runRmReview?: (repo: string, prNumber: number) => Promise<unknown>;
 }
 
 export interface SpawnDevTaskArgs {
@@ -118,6 +122,8 @@ export function createWebhookDispatcher(
   deps: DispatcherDeps = {},
 ): WebhookDispatcher {
   const spawn = deps.spawnDevTask ?? defaultSpawnDevTask(io);
+  const rmReview =
+    deps.runRmReview ?? ((repo: string, n: number) => realRunRmReview(repo, n));
 
   return async function dispatch({ deliveryId, event, action, repository, payload }) {
     const repo = repository;
@@ -240,21 +246,36 @@ export function createWebhookDispatcher(
         return;
       }
 
-      // Claim an RM job. The actual review runs in PR-6.
+      // Claim an RM job. Include the head SHA so re-pushes (synchronize)
+      // get a fresh UNIQUE state_key and re-run the review.
+      const headSha =
+        typeof (pr as { head?: { sha?: string } }).head?.sha === 'string'
+          ? (pr as { head?: { sha?: string } }).head!.sha!.slice(0, 12)
+          : 'unknown';
       const claimed = claimJob({
         repository: repo,
         kind: 'rm-review',
-        stateKey: `rm-review:${repo}#${pr.number}`,
+        stateKey: `rm-review:${repo}#${pr.number}@${headSha}`,
         issueNumber: feature.githubIssueNumber ?? null,
         prNumber: pr.number,
       });
       if (!claimed) return;
 
-      logger.info(
-        { deliveryId, repo, prNumber: pr.number, jobId: claimed },
-        'dispatcher: RM review queued (handler lands in PR-6)',
-      );
-      markJobStatus(claimed, 'pending', null);
+      try {
+        await rmReview(repo, pr.number);
+        markJobStatus(claimed, 'completed', null);
+        logger.info(
+          { deliveryId, repo, prNumber: pr.number, jobId: claimed },
+          'dispatcher: RM review completed',
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        markJobStatus(claimed, 'failed', null, msg);
+        logger.error(
+          { deliveryId, repo, prNumber: pr.number, err: msg },
+          'dispatcher: RM review failed',
+        );
+      }
       return;
     }
 

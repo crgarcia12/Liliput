@@ -279,3 +279,182 @@ export async function createWebhook(
   const data = (await res.json()) as { id: number };
   return { id: data.id };
 }
+
+// ─── Pull requests + checks + merge (Release Manager) ─────────────────
+
+export interface GetPullRequestOptions {
+  repo: string;
+  number: number;
+  fetchImpl?: FetchImpl;
+}
+
+export interface PullRequestData {
+  number: number;
+  state: 'open' | 'closed';
+  draft: boolean;
+  merged: boolean;
+  mergeable: boolean | null;
+  mergeable_state: string; // 'clean' | 'dirty' | 'blocked' | 'behind' | 'unknown' | ...
+  title: string;
+  body: string | null;
+  html_url: string;
+  labels: Array<{ name: string }>;
+  head: { sha: string; ref: string };
+  base: { ref: string };
+  user: { login: string } | null;
+}
+
+/** GET /repos/{repo}/pulls/{n}. Includes mergeable + mergeable_state which
+ *  GitHub computes asynchronously after open — may be `null` / `"unknown"`
+ *  on the first call after a push. Callers retry on the next event. */
+export async function getPullRequest(opts: GetPullRequestOptions): Promise<PullRequestData> {
+  const f = opts.fetchImpl ?? fetch;
+  const res = await f(`${API}/repos/${opts.repo}/pulls/${opts.number}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    throw new GitHubApiError(res.status, `GET /pulls/${opts.number}`, await res.text());
+  }
+  return (await res.json()) as PullRequestData;
+}
+
+export interface ListCheckRunsOptions {
+  repo: string;
+  ref: string; // commit SHA
+  fetchImpl?: FetchImpl;
+}
+
+export interface CheckRun {
+  id: number;
+  name: string;
+  status: 'queued' | 'in_progress' | 'completed';
+  conclusion:
+    | 'success'
+    | 'failure'
+    | 'neutral'
+    | 'cancelled'
+    | 'timed_out'
+    | 'action_required'
+    | 'stale'
+    | 'skipped'
+    | null;
+  html_url: string;
+}
+
+/** List the check runs for a commit SHA (typically the PR head). Returns
+ *  the merged list across paginated pages up to `per_page=100`. */
+export async function listCheckRunsForRef(opts: ListCheckRunsOptions): Promise<CheckRun[]> {
+  const f = opts.fetchImpl ?? fetch;
+  const res = await f(
+    `${API}/repos/${opts.repo}/commits/${opts.ref}/check-runs?per_page=100`,
+    { headers: authHeaders() },
+  );
+  if (!res.ok) {
+    throw new GitHubApiError(res.status, `GET /commits/${opts.ref}/check-runs`, await res.text());
+  }
+  const data = (await res.json()) as { check_runs?: CheckRun[] };
+  return data.check_runs ?? [];
+}
+
+export interface MergePullRequestOptions {
+  repo: string;
+  number: number;
+  /** Merge commit title. Default: GitHub uses the PR title. */
+  commitTitle?: string;
+  /** Merge commit body. */
+  commitMessage?: string;
+  /** "merge" | "squash" | "rebase". Default: "squash". */
+  mergeMethod?: 'merge' | 'squash' | 'rebase';
+  /** Required: the SHA we believe is at HEAD. GitHub rejects with 409 if the
+   *  branch advanced since we checked. The RM passes the SHA it just reviewed. */
+  sha?: string;
+  fetchImpl?: FetchImpl;
+}
+
+export interface MergeResult {
+  merged: boolean;
+  sha: string;
+  message: string;
+}
+
+/** PUT /repos/{repo}/pulls/{n}/merge. Throws on conflict (409 — branch moved)
+ *  so the caller can re-fetch and retry on the next webhook. */
+export async function mergePullRequest(opts: MergePullRequestOptions): Promise<MergeResult> {
+  const f = opts.fetchImpl ?? fetch;
+  const body: Record<string, unknown> = {
+    merge_method: opts.mergeMethod ?? 'squash',
+  };
+  if (opts.commitTitle) body['commit_title'] = opts.commitTitle;
+  if (opts.commitMessage) body['commit_message'] = opts.commitMessage;
+  if (opts.sha) body['sha'] = opts.sha;
+  const res = await f(`${API}/repos/${opts.repo}/pulls/${opts.number}/merge`, {
+    method: 'PUT',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new GitHubApiError(res.status, `PUT /pulls/${opts.number}/merge`, await res.text());
+  }
+  return (await res.json()) as MergeResult;
+}
+
+export interface CloseIssueOptions {
+  repo: string;
+  number: number;
+  reason?: 'completed' | 'not_planned' | 'reopened';
+  fetchImpl?: FetchImpl;
+}
+
+/** PATCH /repos/{repo}/issues/{n} to close an issue explicitly. We do this
+ *  in addition to the PR's `Closes #N` because GitHub will NOT auto-close
+ *  when the PR targets a non-default branch (Liliput integration branches). */
+export async function closeIssue(opts: CloseIssueOptions): Promise<void> {
+  const f = opts.fetchImpl ?? fetch;
+  const res = await f(`${API}/repos/${opts.repo}/issues/${opts.number}`, {
+    method: 'PATCH',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      state: 'closed',
+      state_reason: opts.reason ?? 'completed',
+    }),
+  });
+  // 404 is already-gone; treat as success for idempotency.
+  if (res.status === 404) return;
+  if (!res.ok) {
+    throw new GitHubApiError(res.status, `PATCH /issues/${opts.number}`, await res.text());
+  }
+}
+
+export interface ListIssueCommentsOptions {
+  repo: string;
+  issueNumber: number;
+  fetchImpl?: FetchImpl;
+}
+
+export interface IssueComment {
+  id: number;
+  body: string;
+  user: { login: string } | null;
+  created_at: string;
+}
+
+/** List comments on an issue or PR (issues + PRs share the same endpoint).
+ *  Used by the RM to count past `rm:changes-requested` attempts via a
+ *  hidden marker, without needing a new DB column. */
+export async function listIssueComments(
+  opts: ListIssueCommentsOptions,
+): Promise<IssueComment[]> {
+  const f = opts.fetchImpl ?? fetch;
+  const res = await f(
+    `${API}/repos/${opts.repo}/issues/${opts.issueNumber}/comments?per_page=100`,
+    { headers: authHeaders() },
+  );
+  if (!res.ok) {
+    throw new GitHubApiError(
+      res.status,
+      `GET /issues/${opts.issueNumber}/comments`,
+      await res.text(),
+    );
+  }
+  return (await res.json()) as IssueComment[];
+}
