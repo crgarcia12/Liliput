@@ -12,6 +12,7 @@ import { reconcileOrphanedRuns, backfillDefaultWorkstreams } from './stores/task
 import { purgeOrphanWorkspaces, restoreDevRoutesFromStore, autoResumeInterruptedTasks } from './engine/agent-engine.js';
 import { runDeletingSweeper } from './routes/workstreams.js';
 import { ensureAzLogin } from './engine/azure-builder.js';
+import { startReconciler } from './engine/loop-reconciler.js';
 import { logger } from './logger.js';
 import { isAutoResumeEnabled, autoResumeConcurrency, getPodId } from './engine/pod-identity.js';
 import { startInternalServer } from './internal-server.js';
@@ -123,6 +124,14 @@ ensureAzLogin()
 server.listen(PORT, () => {
   logger.info({ port: PORT }, '🏝️  Liliput API listening');
 });
+
+// PM/Dev/RM loop reconciler — polls GitHub for issues/PRs we might have
+// missed (webhook down, polling_fallback repos, dropped deliveries). Opt-in
+// so unit/integration tests don't accidentally start the timer.
+if (process.env['LILIPUT_RECONCILER_ENABLED'] === '1') {
+  const interval = parseInt(process.env['LILIPUT_RECONCILER_INTERVAL_MS'] ?? '', 10);
+  startReconciler(io, Number.isFinite(interval) && interval > 0 ? { intervalMs: interval } : {});
+}
 
 // Privileged loopback-only listener for orchestrator-driven tools.
 const internalServer = startInternalServer();
