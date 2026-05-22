@@ -177,6 +177,21 @@ spec:
                   name: liliput-secrets
                   key: COPILOT_GITHUB_TOKEN
                   optional: true
+            # PM/Dev/RM autonomous loop — PRs #84..#91.
+            # PM emits one GitHub issue per Feature; webhook dispatcher spawns
+            # Dev tasks; RM reviews PRs deterministically; reconciler heals
+            # missed webhooks. The loop is off-by-default so existing tasks
+            # keep using the legacy clarify→build flow until we turn this on.
+            - name: LILIPUT_PM_EMIT_ENABLED
+              value: "1"
+            - name: LILIPUT_RECONCILER_ENABLED
+              value: "1"
+            - name: GITHUB_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: liliput-secrets
+                  key: GITHUB_WEBHOOK_SECRET
+                  optional: true
           volumeMounts:
             - name: data
               mountPath: /data

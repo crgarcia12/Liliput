@@ -91,20 +91,21 @@ jobs:
       - name: Sync Copilot GitHub token secret
         env:
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          GITHUB_WEBHOOK_SECRET: ${{ secrets.GITHUB_WEBHOOK_SECRET }}
         run: |
           # Ensure the namespace exists before applying the manifest below
           kubectl create namespace liliput --dry-run=client -o yaml | kubectl apply -f -
 
           if [ -z "$COPILOT_GITHUB_TOKEN" ]; then
             echo "::warning::COPILOT_GITHUB_TOKEN secret is not set. The API will start without LLM access; the UI will show an auth banner."
-            kubectl -n liliput create secret generic liliput-secrets \
-              --from-literal=COPILOT_GITHUB_TOKEN="" \
-              --dry-run=client -o yaml | kubectl apply -f -
-          else
-            kubectl -n liliput create secret generic liliput-secrets \
-              --from-literal=COPILOT_GITHUB_TOKEN="$COPILOT_GITHUB_TOKEN" \
-              --dry-run=client -o yaml | kubectl apply -f -
           fi
+          if [ -z "$GITHUB_WEBHOOK_SECRET" ]; then
+            echo "::warning::GITHUB_WEBHOOK_SECRET secret is not set — webhook router will not mount; loop falls back to polling."
+          fi
+          kubectl -n liliput create secret generic liliput-secrets \
+            --from-literal=COPILOT_GITHUB_TOKEN="$COPILOT_GITHUB_TOKEN" \
+            --from-literal=GITHUB_WEBHOOK_SECRET="$GITHUB_WEBHOOK_SECRET" \
+            --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Render manifest
         run: |
