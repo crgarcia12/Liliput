@@ -18,6 +18,15 @@ import { logger } from '../logger.js';
 
 let _db: Database.Database | null = null;
 
+/** Read BCRYPT_ROUNDS from env, defaulting to 12. Honoured by the default
+ *  admin seeder so tests can speed up bcrypt without changing production. */
+function bcryptRounds(): number {
+  const raw = process.env['BCRYPT_ROUNDS'];
+  if (!raw) return 12;
+  const parsed = parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 4 ? parsed : 12;
+}
+
 /** Resolve DB path, creating parent dir if needed. */
 function resolveDbPath(): string {
   const raw = process.env['DB_PATH'] ?? './liliput.db';
@@ -29,6 +38,16 @@ function resolveDbPath(): string {
 }
 
 const SCHEMA = `
+CREATE TABLE IF NOT EXISTS users (
+  id          TEXT PRIMARY KEY,
+  username    TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  role        TEXT NOT NULL DEFAULT 'USER',
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+
 CREATE TABLE IF NOT EXISTS workstreams (
   id          TEXT PRIMARY KEY,
   repository  TEXT NOT NULL,
@@ -339,6 +358,9 @@ export function getDb(): Database.Database {
     // turn" containing all its existing agents/activity/chat. This is run
     // every startup but is a no-op once each task has at least one turn.
     backfillInitialTurns(_db);
+
+    // Initialize default admin user if no users exist yet
+    ensureDefaultAdminUser(_db);
   } catch (err) {
     logger.warn({ err }, 'Workstream migration check failed (non-fatal)');
   }
@@ -477,4 +499,67 @@ function backfillInitialTurns(db: Database.Database): void {
 
   txn(taskRows);
   logger.info({ count: taskRows.length }, 'Backfilled initial turns for legacy tasks');
+}
+
+/** Ensure default admin user exists if no users are present. */
+function ensureDefaultAdminUser(db: Database.Database): void {
+  try {
+    // Check if any users exist
+    const userCount = (
+      db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number }
+    ).count;
+
+    if (userCount > 0) {
+      return; // Users already exist
+    }
+
+    // Import bcryptjs for hashing
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const bcryptjs = require('bcryptjs') as {
+      hashSync(password: string, rounds: number): string;
+    };
+
+    // Import uuid for ID generation
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { v4: uuidV4 } = require('uuid') as { v4: () => string };
+
+    // The default admin password is read from DEFAULT_ADMIN_PASSWORD. If not
+    // set we generate a random one and log it once — the operator must capture
+    // it from the logs and change it via the UI. We deliberately do NOT bake a
+    // default password into source: the only canonical store for the password
+    // is the bcrypt hash in the users table.
+    let adminPassword = process.env['DEFAULT_ADMIN_PASSWORD'];
+    let passwordSource: 'env' | 'generated' = 'env';
+    if (!adminPassword || adminPassword.length < 8) {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const crypto = require('crypto') as typeof import('crypto');
+      // 18 random bytes → 24 url-safe base64 chars. Plenty of entropy and
+      // does not contain characters that get mangled by shells or YAML.
+      adminPassword = crypto.randomBytes(18).toString('base64url');
+      passwordSource = 'generated';
+    }
+
+    const passwordHash = bcryptjs.hashSync(adminPassword, bcryptRounds());
+    const now = new Date().toISOString();
+
+    db.prepare(
+      `INSERT INTO users (id, username, password_hash, role, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(uuidV4(), 'admin', passwordHash, 'ADMIN', now, now);
+
+    if (passwordSource === 'generated') {
+      // Print the generated password to stdout exactly once so an operator
+      // can capture it on first boot. Subsequent boots will not regenerate
+      // it because the users table will no longer be empty.
+      logger.warn(
+        { username: 'admin', generatedPassword: adminPassword },
+        '🔐 Default admin user created with generated password — change it via the UI immediately',
+      );
+    } else {
+      logger.info('🔐 Default admin user initialized from DEFAULT_ADMIN_PASSWORD');
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn({ err: msg }, 'Failed to initialize default admin user (non-fatal)');
+  }
 }

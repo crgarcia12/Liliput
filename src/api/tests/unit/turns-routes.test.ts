@@ -6,7 +6,7 @@ import { resetStore, createTask, addChatMessage } from '../../src/stores/task-st
 import * as turnStore from '../../src/stores/turn-store.js';
 
 const io = new Server();
-const app = createApp(io);
+const app = createApp(io, { disableAuthMiddleware: true });
 
 beforeEach(() => {
   resetStore();

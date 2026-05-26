@@ -74,29 +74,89 @@ data:
       server {
         listen 80;
 
-        # API routes
-        location /api/ {
+        # Public auth + health endpoints
+        location = /api/login {
           proxy_pass http://api;
           proxy_set_header Host $host;
           proxy_set_header X-Real-IP $remote_addr;
         }
 
+        location = /api/health {
+          proxy_pass http://api;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+        }
+
+        # Internal subrequest used by NGINX to protect web + API routes.
+        # Hits a dedicated lightweight endpoint that never returns 304 — using
+        # a cacheable resource here (e.g. /api/tasks) causes nginx to fail
+        # the auth_request with "unexpected status: 304" when the browser
+        # sends If-None-Match. We also strip conditional headers as a belt
+        # and suspenders against any future cacheable target.
+        location = /__liliput_auth_check {
+          internal;
+          proxy_pass http://api/api/auth/verify;
+          proxy_method GET;
+          proxy_pass_request_body off;
+          proxy_set_header Content-Length "";
+          proxy_set_header If-Modified-Since "";
+          proxy_set_header If-None-Match "";
+          proxy_set_header Authorization $http_authorization;
+          proxy_set_header Cookie $http_cookie;
+        }
+
+        # API routes
+        location /api/ {
+          auth_request /__liliput_auth_check;
+          proxy_pass http://api;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header Authorization $http_authorization;
+          proxy_set_header Cookie $http_cookie;
+        }
+
         # Socket.io (WebSocket + polling)
         location /socket.io/ {
+          auth_request /__liliput_auth_check;
           proxy_pass http://api;
           proxy_http_version 1.1;
           proxy_set_header Upgrade $http_upgrade;
           proxy_set_header Connection $connection_upgrade;
           proxy_set_header Host $host;
           proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header Authorization $http_authorization;
+          proxy_set_header Cookie $http_cookie;
           proxy_read_timeout 86400;
         }
 
         # === LILIPUT-DEV-ENVS-BEGIN ===
         # === LILIPUT-DEV-ENVS-END ===
 
-        # Everything else → web
+        # Public login page
+        location = /login {
+          proxy_pass http://web;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+        }
+
+        # Public Next.js build assets (content-hashed, no user data) so the
+        # /login page can render with CSS/JS before the user has a session.
+        location /_next/static/ {
+          proxy_pass http://web;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+        }
+
+        # Public favicon and Next.js auto-emitted public files.
+        location = /favicon.ico {
+          proxy_pass http://web;
+          proxy_set_header Host $host;
+        }
+
+        # Everything else → web and requires an authenticated session.
         location / {
+          auth_request /__liliput_auth_check;
+          error_page 401 =302 /login;
           proxy_pass http://web;
           proxy_set_header Host $host;
           proxy_set_header X-Real-IP $remote_addr;
@@ -196,6 +256,17 @@ spec:
                 secretKeyRef:
                   name: liliput-secrets
                   key: GITHUB_WEBHOOK_SECRET
+                  optional: true
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: liliput-secrets
+                  key: JWT_SECRET
+            - name: BCRYPT_ROUNDS
+              valueFrom:
+                secretKeyRef:
+                  name: liliput-secrets
+                  key: BCRYPT_ROUNDS
                   optional: true
           volumeMounts:
             - name: data

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { usePathname } from 'next/navigation';
 import { useAuthStatus } from '../hooks/useAuthStatus';
 import type { AuthErrorKind } from '@shared/types';
 
@@ -25,6 +26,16 @@ const ACTIONS: Partial<Record<AuthErrorKind, string>> = {
 };
 
 export function AuthStatusBanner(): React.JSX.Element | null {
+  const pathname = usePathname();
+  // Don't poll Copilot auth status on the public login route — the page
+  // has no session yet, so the gateway would 401 and the socket.io
+  // handshake would be a wasted connection.
+  if (pathname === '/login') return null;
+
+  return <AuthStatusBannerInner />;
+}
+
+function AuthStatusBannerInner(): React.JSX.Element | null {
   const { status, refresh, refreshing } = useAuthStatus();
   const [dismissedAt, setDismissedAt] = useState<string | null>(null);
 

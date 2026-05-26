@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 )
@@ -165,4 +166,223 @@ func (c *HTTP) DevLogs(ctx context.Context, id, pod string, lines int, previous 
 		return "", err
 	}
 	return out.Logs, nil
+}
+
+// ─── Workstreams ─────────────────────────────────────────────
+
+func (c *HTTP) ListWorkstreams(ctx context.Context) ([]Workstream, error) {
+	var out struct {
+		Workstreams []Workstream `json:"workstreams"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/workstreams", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Workstreams, nil
+}
+
+func (c *HTTP) CreateWorkstream(ctx context.Context, req CreateWorkstreamRequest) (*Workstream, error) {
+	var out struct {
+		Workstream Workstream `json:"workstream"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/api/workstreams", req, &out); err != nil {
+		return nil, err
+	}
+	return &out.Workstream, nil
+}
+
+func (c *HTTP) DeleteWorkstream(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodDelete, "/api/workstreams/"+id, nil, nil)
+}
+
+func (c *HTTP) DeleteRepoGroup(ctx context.Context, repo string) error {
+	return c.do(ctx, http.MethodDelete, "/api/repo-groups/"+url.PathEscape(repo), nil, nil)
+}
+
+// ─── Delete previews ─────────────────────────────────────────
+
+func (c *HTTP) PreviewTaskDelete(ctx context.Context, id string) (*DeletePreview, error) {
+	var out struct {
+		Preview DeletePreview `json:"preview"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/tasks/"+id+"/delete-preview", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out.Preview, nil
+}
+
+func (c *HTTP) PreviewWorkstreamDelete(ctx context.Context, id string) (*DeletePreview, error) {
+	var out struct {
+		Preview DeletePreview `json:"preview"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/workstreams/"+id+"/delete-preview", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out.Preview, nil
+}
+
+func (c *HTTP) PreviewRepoDelete(ctx context.Context, repo string) (*DeletePreview, error) {
+	var out struct {
+		Preview DeletePreview `json:"preview"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/repo-groups/"+url.PathEscape(repo)+"/delete-preview", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out.Preview, nil
+}
+
+// ─── Models / metadata mutations ─────────────────────────────
+
+func (c *HTTP) ListModels(ctx context.Context) (*ModelsResponse, error) {
+	var out ModelsResponse
+	if err := c.do(ctx, http.MethodGet, "/api/models", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *HTTP) PatchTitle(ctx context.Context, id, title string) (*Task, error) {
+	var out struct {
+		Task Task `json:"task"`
+	}
+	if err := c.do(ctx, http.MethodPatch, "/api/tasks/"+id+"/title",
+		map[string]string{"title": title}, &out); err != nil {
+		return nil, err
+	}
+	return &out.Task, nil
+}
+
+func (c *HTTP) PatchModel(ctx context.Context, id, model string) (*Task, error) {
+	var out struct {
+		Task Task `json:"task"`
+	}
+	if err := c.do(ctx, http.MethodPatch, "/api/tasks/"+id+"/model",
+		map[string]string{"model": model}, &out); err != nil {
+		return nil, err
+	}
+	return &out.Task, nil
+}
+
+func (c *HTTP) PatchReasoningEffort(ctx context.Context, id, effort string) (*Task, error) {
+	var out struct {
+		Task Task `json:"task"`
+	}
+	body := map[string]any{"reasoningEffort": effort}
+	if effort == "" {
+		body["reasoningEffort"] = nil
+	}
+	if err := c.do(ctx, http.MethodPatch, "/api/tasks/"+id+"/reasoning-effort",
+		body, &out); err != nil {
+		return nil, err
+	}
+	return &out.Task, nil
+}
+
+// ─── Dev environment lifecycle ───────────────────────────────
+
+func (c *HTTP) DevEnvStop(ctx context.Context, id string) (*Task, error) {
+	var out struct {
+		Task Task `json:"task"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/dev-env/stop", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out.Task, nil
+}
+
+func (c *HTTP) DevEnvStart(ctx context.Context, id string) (*Task, error) {
+	var out struct {
+		Task Task `json:"task"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/dev-env/start", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out.Task, nil
+}
+
+func (c *HTTP) DevEnvDelete(ctx context.Context, id string) (*Task, error) {
+	var out struct {
+		Task Task `json:"task"`
+	}
+	if err := c.do(ctx, http.MethodDelete, "/api/tasks/"+id+"/dev-env", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out.Task, nil
+}
+
+// ─── Verdicts / tool wishes / usage ─────────────────────────
+
+func (c *HTTP) ListVerdicts(ctx context.Context, taskID string) ([]Verdict, error) {
+	var out struct {
+		Verdicts []Verdict `json:"verdicts"`
+	}
+	path := "/api/verdicts"
+	if taskID != "" {
+		path = "/api/tasks/" + taskID + "/verdicts"
+	}
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Verdicts, nil
+}
+
+func (c *HTTP) LatestVerdict(ctx context.Context, taskID string) (*Verdict, error) {
+	var out struct {
+		Verdict Verdict `json:"verdict"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/tasks/"+taskID+"/verdicts/latest", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out.Verdict, nil
+}
+
+func (c *HTTP) ListToolWishes(ctx context.Context) ([]ToolWishAggregate, error) {
+	var out struct {
+		Aggregates []ToolWishAggregate `json:"aggregates"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/tool-wishes", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Aggregates, nil
+}
+
+func (c *HTTP) WorkstreamUsage(ctx context.Context, id string) (*UsageRollup, error) {
+	var out UsageRollup
+	if err := c.do(ctx, http.MethodGet, "/api/workstreams/"+id+"/usage", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *HTTP) RepoUsage(ctx context.Context, repo string) (*UsageRollup, error) {
+	var out UsageRollup
+	if err := c.do(ctx, http.MethodGet, "/api/repos/"+url.PathEscape(repo)+"/usage", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *HTTP) AllReposUsage(ctx context.Context) (map[string]UsageRollup, error) {
+	out := map[string]UsageRollup{}
+	if err := c.do(ctx, http.MethodGet, "/api/repos-usage", nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *HTTP) AllWorkstreamsUsage(ctx context.Context) (map[string]UsageRollup, error) {
+	out := map[string]UsageRollup{}
+	if err := c.do(ctx, http.MethodGet, "/api/workstreams-usage", nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *HTTP) ListTurns(ctx context.Context, taskID string) ([]Turn, error) {
+	var out struct {
+		Turns []Turn `json:"turns"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/tasks/"+taskID+"/turns", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Turns, nil
 }
