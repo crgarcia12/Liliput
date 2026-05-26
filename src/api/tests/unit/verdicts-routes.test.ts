@@ -6,7 +6,7 @@ import { resetStore, createTask } from '../../src/stores/task-store.js';
 import { recordVerdict } from '../../src/stores/verdict-store.js';
 
 const io = new Server();
-const app = createApp(io);
+const app = createApp(io, { disableAuthMiddleware: true });
 
 beforeEach(() => {
   resetStore();

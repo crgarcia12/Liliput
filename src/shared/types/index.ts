@@ -442,6 +442,24 @@ export interface AuthStatus {
   hasToken: boolean;
 }
 
+// ─── User Authentication ─────────────────────────────────────
+
+export interface User {
+  id: string;
+  username: string;
+  role: string;
+}
+
+export interface LoginRequest {
+  username: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  token: string;
+  user: User;
+}
+
 // ─── Token & duration rollups ────────────────────────────────
 
 /** Aggregate usage across all turns of a workstream or repo. */

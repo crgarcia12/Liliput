@@ -13,6 +13,7 @@ import { createProjectsRouter } from './routes/projects.js';
 import { createTitleSuggestRouter } from './routes/title-suggest.js';
 import { createGitHubWebhookRouter } from './routes/github-webhook.js';
 import { createWebhookDispatcher } from './engine/webhook-dispatcher.js';
+import { authMiddleware } from './middleware/auth-middleware.js';
 import type { SpecGenerator } from './engine/spec-generator.js';
 
 export interface AppOptions {
@@ -22,6 +23,8 @@ export interface AppOptions {
   githubWebhookSecret?: string;
   /** Disable the real webhook dispatcher (tests use the default no-op). */
   disableWebhookDispatcher?: boolean;
+  /** Disable authentication middleware (tests only). */
+  disableAuthMiddleware?: boolean;
 }
 
 export function createApp(io: SocketServer, options: AppOptions = {}): express.Express {
@@ -50,6 +53,12 @@ export function createApp(io: SocketServer, options: AppOptions = {}): express.E
   // Routes
   app.use(healthRouter);
   app.use(createAuthRouter(io));
+
+  // All routes below require authentication (unless disabled for tests)
+  if (!options.disableAuthMiddleware) {
+    app.use(authMiddleware);
+  }
+
   app.use('/api/agent', createAgentRouter());
   // Workstreams routes register before the tasks router so DELETE /api/tasks/:id
   // (the hard-delete with cleanup) takes precedence over the legacy stub.
