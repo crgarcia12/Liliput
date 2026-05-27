@@ -8,6 +8,13 @@ import AgentPanel from '../../components/AgentPanel';
 import TopBar from '../../components/TopBar';
 import { useSocket } from '../../hooks/useSocket';
 import { useTasks } from '../../hooks/useTasks';
+import {
+  CHAT_CONFIG_STORAGE_KEYS,
+  readStoredEffort,
+  readStoredString,
+  writeStoredString,
+  type ReasoningEffortSelection,
+} from '../../lib/chat-config-storage';
 import type { ChatMessage, Agent, Task, ModelOption, ModelsResponse } from '@shared/types';
 
 const LiliputIsland = dynamic(() => import('../../components/LiliputIsland'), {
@@ -21,38 +28,6 @@ const LiliputIsland = dynamic(() => import('../../components/LiliputIsland'), {
     </div>
   ),
 });
-
-// Safe localStorage helpers — return '' on any error (SSR, private mode,
-// quota, etc.) so the form still renders with sensible defaults.
-function readStoredString(key: string): string {
-  if (typeof window === 'undefined') return '';
-  try {
-    return window.localStorage.getItem(key) ?? '';
-  } catch {
-    return '';
-  }
-}
-
-const EFFORT_VALUES = ['', 'low', 'medium', 'high', 'xhigh'] as const;
-type Effort = (typeof EFFORT_VALUES)[number];
-
-function readStoredEffort(key: string): Effort {
-  const raw = readStoredString(key);
-  return (EFFORT_VALUES as readonly string[]).includes(raw) ? (raw as Effort) : '';
-}
-
-function writeStoredString(key: string, value: string): void {
-  if (typeof window === 'undefined') return;
-  try {
-    if (value === '') {
-      window.localStorage.removeItem(key);
-    } else {
-      window.localStorage.setItem(key, value);
-    }
-  } catch {
-    // Non-fatal — picker still works for the current session.
-  }
-}
 
 export default function Home() {
   const router = useRouter();
@@ -79,17 +54,19 @@ export default function Home() {
   // Read last-used picker values from localStorage so the user's selections
   // persist across new-task creations and page reloads. Falls back to '' (and
   // the server default is applied once /api/models responds).
-  const [model, setModel] = useState<string>(() => readStoredString('liliput:lastModel'));
+  const [model, setModel] = useState<string>(() =>
+    readStoredString(CHAT_CONFIG_STORAGE_KEYS.model),
+  );
   // '' means "auto-derive" — server picks based on model id suffix.
-  const [reasoningEffort, setReasoningEffort] = useState<'' | 'low' | 'medium' | 'high' | 'xhigh'>(
-    () => readStoredEffort('liliput:lastReasoningEffort'),
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffortSelection>(
+    () => readStoredEffort(CHAT_CONFIG_STORAGE_KEYS.reasoningEffort),
   );
   // Reviewer-agent picks. '' for reviewerModel means "no reviewer".
   const [reviewerModel, setReviewerModel] = useState<string>(
-    () => readStoredString('liliput:lastReviewerModel'),
+    () => readStoredString(CHAT_CONFIG_STORAGE_KEYS.reviewerModel),
   );
-  const [reviewerReasoningEffort, setReviewerReasoningEffort] = useState<'' | 'low' | 'medium' | 'high' | 'xhigh'>(
-    () => readStoredEffort('liliput:lastReviewerReasoningEffort'),
+  const [reviewerReasoningEffort, setReviewerReasoningEffort] = useState<ReasoningEffortSelection>(
+    () => readStoredEffort(CHAT_CONFIG_STORAGE_KEYS.reviewerReasoningEffort),
   );
   // Greenfield ("Create new project") state.
   const [projectMode, setProjectMode] = useState<'existing' | 'create'>('existing');
@@ -130,16 +107,19 @@ export default function Home() {
   // Persist each picker value to localStorage whenever it changes so the
   // next New Task page (or page reload) starts from the user's last pick.
   useEffect(() => {
-    writeStoredString('liliput:lastModel', model);
+    writeStoredString(CHAT_CONFIG_STORAGE_KEYS.model, model);
   }, [model]);
   useEffect(() => {
-    writeStoredString('liliput:lastReasoningEffort', reasoningEffort);
+    writeStoredString(CHAT_CONFIG_STORAGE_KEYS.reasoningEffort, reasoningEffort);
   }, [reasoningEffort]);
   useEffect(() => {
-    writeStoredString('liliput:lastReviewerModel', reviewerModel);
+    writeStoredString(CHAT_CONFIG_STORAGE_KEYS.reviewerModel, reviewerModel);
   }, [reviewerModel]);
   useEffect(() => {
-    writeStoredString('liliput:lastReviewerReasoningEffort', reviewerReasoningEffort);
+    writeStoredString(
+      CHAT_CONFIG_STORAGE_KEYS.reviewerReasoningEffort,
+      reviewerReasoningEffort,
+    );
   }, [reviewerReasoningEffort]);
 
   // Merge local + socket messages

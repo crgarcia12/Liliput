@@ -171,6 +171,8 @@ CREATE TABLE IF NOT EXISTS turns (
   user_message    TEXT NOT NULL,
   model           TEXT,
   reasoning_effort TEXT,
+  reviewer_model  TEXT,
+  reviewer_reasoning_effort TEXT,
   started_at      TEXT NOT NULL,
   completed_at    TEXT,
   duration_ms     INTEGER,
@@ -254,6 +256,18 @@ export function getDb(): Database.Database {
       logger.info({}, 'Migrated: added turn_id column to chat_messages');
     }
     _db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_turn ON chat_messages(turn_id)`);
+
+    const turnCols = _db
+      .prepare(`PRAGMA table_info(turns)`)
+      .all() as Array<{ name: string }>;
+    if (!turnCols.some((c) => c.name === 'reviewer_model')) {
+      _db.exec(`ALTER TABLE turns ADD COLUMN reviewer_model TEXT`);
+      logger.info({}, 'Migrated: added reviewer_model column to turns');
+    }
+    if (!turnCols.some((c) => c.name === 'reviewer_reasoning_effort')) {
+      _db.exec(`ALTER TABLE turns ADD COLUMN reviewer_reasoning_effort TEXT`);
+      logger.info({}, 'Migrated: added reviewer_reasoning_effort column to turns');
+    }
 
     // ─── PM / Dev / RM agent loop — issue + webhook tracking ───────────────
     //

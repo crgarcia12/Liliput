@@ -225,8 +225,14 @@ export function createTask(
   const safeDesc = typeof description === 'string' ? description : String(description ?? '');
   turnStore.createTurn(task.id, safeDesc, {
     title: safeTitle.slice(0, 60),
-    ...(options.model ? { model: options.model } : {}),
-    ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
+    ...(task.model ? { model: task.model } : {}),
+    ...(task.reasoningEffort ? { reasoningEffort: task.reasoningEffort } : {}),
+    ...(task.reviewerEnabled !== false && task.reviewerModel
+      ? { reviewerModel: task.reviewerModel }
+      : {}),
+    ...(task.reviewerEnabled !== false && task.reviewerModel && task.reviewerReasoningEffort
+      ? { reviewerReasoningEffort: task.reviewerReasoningEffort }
+      : {}),
   });
 
   return task;
@@ -524,19 +530,30 @@ export function addChatMessage(
   if (role === 'gulliver') {
     let model: string | undefined;
     let reasoningEffort: 'low' | 'medium' | 'high' | 'xhigh' | undefined;
+    let reviewerModel: string | undefined;
+    let reviewerReasoningEffort: 'low' | 'medium' | 'high' | 'xhigh' | undefined;
     try {
       const parsed = JSON.parse(taskRow.data) as {
         model?: string;
         reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+        reviewerModel?: string;
+        reviewerReasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+        reviewerEnabled?: boolean;
       };
       model = parsed.model;
       reasoningEffort = parsed.reasoningEffort;
+      if (parsed.reviewerEnabled !== false && parsed.reviewerModel) {
+        reviewerModel = parsed.reviewerModel;
+        reviewerReasoningEffort = parsed.reviewerReasoningEffort;
+      }
     } catch {
       // ignore
     }
     const newTurn = turnStore.createTurn(taskId, content, {
       ...(model ? { model } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
+      ...(reviewerModel ? { reviewerModel } : {}),
+      ...(reviewerModel && reviewerReasoningEffort ? { reviewerReasoningEffort } : {}),
     });
     turnId = newTurn?.id;
   } else {

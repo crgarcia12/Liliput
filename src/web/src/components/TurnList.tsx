@@ -9,9 +9,16 @@ interface TurnListProps {
   taskId: string;
 }
 
+function shortModel(model: string | undefined): string {
+  if (!model) return 'default';
+  const parts = model.split('-');
+  const short = parts.length >= 2 ? parts.slice(0, 2).join('-') : model;
+  return short.length > 18 ? `${short.slice(0, 15)}…` : short;
+}
+
 /**
  * Compact list of all Turns belonging to a task.
- * Each turn shows: title · model · duration · tokens (with breakdown tooltip).
+ * Each turn shows: title · config snapshots · duration · tokens.
  * Polls every 4s plus refreshes immediately on `turn:opened` / `turn:updated` /
  * `turn:closed` socket events. We use polling rather than full socket-driven
  * state because turn:updated fires very frequently per assistant token usage.
@@ -74,11 +81,32 @@ export default function TurnList({ taskId }: TurnListProps): ReactElement {
             <span className="flex-1 truncate" title={t.userMessage ?? t.title}>
               {t.title || t.userMessage || '(no title)'}
             </span>
-            {t.model && (
-              <span className="font-mono text-[10px] text-gray-500" title={t.model}>
-                {t.model.split('-').slice(0, 2).join('-')}
-              </span>
-            )}
+            <span
+              className="font-mono text-[10px] text-cyan-200 bg-cyan-500/10 border border-cyan-500/20 px-1 rounded whitespace-nowrap"
+              title={[
+                `Coding model: ${t.model ?? 'server default'}`,
+                `Coding reasoning: ${t.reasoningEffort ?? 'auto'}`,
+              ].join('\n')}
+            >
+              code {shortModel(t.model)}/{t.reasoningEffort ?? 'auto'}
+            </span>
+            <span
+              className="font-mono text-[10px] text-violet-200 bg-violet-500/10 border border-violet-500/20 px-1 rounded whitespace-nowrap"
+              title={
+                t.reviewerModel
+                  ? [
+                      `Checking model: ${t.reviewerModel}`,
+                      `Checking reasoning: ${t.reviewerReasoningEffort ?? 'auto'}`,
+                    ].join('\n')
+                  : 'Checking model: off'
+              }
+            >
+              {t.reviewerModel ? (
+                <>check {shortModel(t.reviewerModel)}/{t.reviewerReasoningEffort ?? 'auto'}</>
+              ) : (
+                'check off'
+              )}
+            </span>
             {t.durationMs != null && (
               <span className="font-mono text-[10px] text-gray-500">
                 ⏱ {formatDuration(t.durationMs)}

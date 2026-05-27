@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -14,17 +16,25 @@ import (
 
 const version = "0.1.0"
 
-const defaultServer = "http://liliput.crgarcia.com.ar"
+const defaultServer = "https://liliput.crgarcia.com.ar"
 
 func main() {
 	var (
 		serverFlag  string
+		tokenFlag   string
+		username    string
+		login       bool
+		logout      bool
 		showVersion bool
 	)
 	flag.StringVar(&serverFlag, "server", "", "Liliput API base URL (overrides $LILIPUT_API_URL; default "+defaultServer+")")
+	flag.StringVar(&tokenFlag, "token", "", "JWT session token (prefer $LILIPUT_TOKEN; not saved)")
+	flag.StringVar(&username, "username", "", "username for --login (overrides $LILIPUT_USERNAME)")
+	flag.BoolVar(&login, "login", false, "prompt for username/password, save the session token, then launch the TUI")
+	flag.BoolVar(&logout, "logout", false, "delete the saved session token for this server and exit")
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "liliput — k9s-style TUI for the Liliput backend\n\nUsage:\n  liliput [--server URL]\n\nFlags:\n")
+		fmt.Fprintf(os.Stderr, "liliput — k9s-style TUI for the Liliput backend\n\nUsage:\n  liliput [--server URL]\n  liliput --login [--server URL]\n  liliput --logout [--server URL]\n\nFlags:\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -44,6 +54,56 @@ func main() {
 	server = strings.TrimRight(server, "/")
 
 	api := client.New(server)
+	if logout {
+		if err := deleteSavedToken(server); err != nil {
+			fmt.Fprintln(os.Stderr, "logout failed:", err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "Deleted saved Liliput session for %s\n", server)
+		return
+	}
+
+	if tokenFlag == "" {
+		tokenFlag = os.Getenv("LILIPUT_TOKEN")
+	}
+	if tokenFlag == "" {
+		if saved, ok, err := loadSavedToken(server); err != nil {
+			fmt.Fprintln(os.Stderr, "warning: could not read saved auth token:", err)
+		} else if ok {
+			tokenFlag = saved.Token
+		}
+	}
+	if tokenFlag != "" {
+		api.SetToken(tokenFlag)
+	}
+
+	if login {
+		if username == "" {
+			username = os.Getenv("LILIPUT_USERNAME")
+		}
+		username, err := promptUsername(username)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "login failed:", err)
+			os.Exit(1)
+		}
+		password, err := promptPassword()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "login failed:", err)
+			os.Exit(1)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		resp, err := api.Login(ctx, username, password)
+		cancel()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "login failed:", err)
+			os.Exit(1)
+		}
+		api.SetToken(resp.Token)
+		if err := saveToken(server, resp.User.Username, resp.Token); err != nil {
+			fmt.Fprintln(os.Stderr, "warning: could not save auth token:", err)
+		}
+	}
+
 	app := ui.NewApp(api, version)
 
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())

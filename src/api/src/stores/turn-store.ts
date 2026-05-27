@@ -28,6 +28,8 @@ interface TurnRow {
   user_message: string;
   model: string | null;
   reasoning_effort: string | null;
+  reviewer_model: string | null;
+  reviewer_reasoning_effort: string | null;
   started_at: string;
   completed_at: string | null;
   duration_ms: number | null;
@@ -63,6 +65,10 @@ function rowToTurn(row: TurnRow): Turn {
   };
   if (row.model) turn.model = row.model;
   if (row.reasoning_effort) turn.reasoningEffort = row.reasoning_effort as ReasoningEffort;
+  if (row.reviewer_model) turn.reviewerModel = row.reviewer_model;
+  if (row.reviewer_reasoning_effort) {
+    turn.reviewerReasoningEffort = row.reviewer_reasoning_effort as ReasoningEffort;
+  }
   if (row.completed_at) turn.completedAt = row.completed_at;
   if (row.duration_ms != null) turn.durationMs = row.duration_ms;
   return turn;
@@ -99,7 +105,13 @@ function makeTitle(userMessage: string): string {
 export function createTurn(
   taskId: string,
   userMessage: string,
-  options: { model?: string; reasoningEffort?: ReasoningEffort; title?: string } = {},
+  options: {
+    model?: string;
+    reasoningEffort?: ReasoningEffort;
+    reviewerModel?: string;
+    reviewerReasoningEffort?: ReasoningEffort;
+    title?: string;
+  } = {},
 ): Turn | undefined {
   const db = getDb();
   const exists = db.prepare('SELECT 1 AS x FROM tasks WHERE id = ?').get(taskId) as
@@ -131,10 +143,11 @@ export function createTurn(
     db.prepare(
       `INSERT INTO turns (
          id, task_id, position, status, title, user_message, model, reasoning_effort,
+         reviewer_model, reviewer_reasoning_effort,
          started_at, completed_at, duration_ms,
          input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
          nano_aiu, call_count
-       ) VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, NULL, NULL, 0, 0, 0, 0, NULL, 0)`,
+       ) VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 0, 0, 0, 0, NULL, 0)`,
     ).run(
       id,
       taskId,
@@ -143,6 +156,8 @@ export function createTurn(
       userMessage,
       options.model ?? null,
       options.reasoningEffort ?? null,
+      options.reviewerModel ?? null,
+      options.reviewerReasoningEffort ?? null,
       ts,
     );
   });

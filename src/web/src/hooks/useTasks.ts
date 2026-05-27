@@ -7,7 +7,9 @@ import type {
   CreateTaskRequest,
   TaskListResponse,
   TaskDetailResponse,
+  ReasoningEffort,
 } from '@shared/types';
+import { rememberChatConfig, type ReasoningEffortSelection } from '../lib/chat-config-storage';
 
 const API_URL = '';
 
@@ -16,9 +18,9 @@ interface CreateTaskOptions {
   baseBranch?: string;
   commitMode?: CommitMode;
   model?: string;
-  reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+  reasoningEffort?: ReasoningEffort;
   reviewerModel?: string;
-  reviewerReasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+  reviewerReasoningEffort?: ReasoningEffort;
 }
 
 interface UseTasksReturn {
@@ -30,7 +32,7 @@ interface UseTasksReturn {
   shipTask: (taskId: string) => Promise<Task>;
   discardTask: (taskId: string) => Promise<Task>;
   setTaskModel: (taskId: string, model: string) => Promise<Task>;
-  setTaskReasoningEffort: (taskId: string, reasoningEffort: '' | 'low' | 'medium' | 'high' | 'xhigh') => Promise<Task>;
+  setTaskReasoningEffort: (taskId: string, reasoningEffort: ReasoningEffortSelection) => Promise<Task>;
 }
 
 async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {
@@ -110,13 +112,14 @@ export function useTasks(): UseTasksReturn {
       method: 'PATCH',
       body: JSON.stringify({ model }),
     });
+    rememberChatConfig({ model });
     return data.task;
   }, []);
 
   const setTaskReasoningEffort = useCallback(
     async (
       taskId: string,
-      reasoningEffort: '' | 'low' | 'medium' | 'high' | 'xhigh',
+      reasoningEffort: ReasoningEffortSelection,
     ): Promise<Task> => {
       const data = await apiRequest<TaskDetailResponse>(
         `/api/tasks/${taskId}/reasoning-effort`,
@@ -125,6 +128,7 @@ export function useTasks(): UseTasksReturn {
           body: JSON.stringify({ reasoningEffort: reasoningEffort === '' ? null : reasoningEffort }),
         },
       );
+      rememberChatConfig({ reasoningEffort });
       return data.task;
     },
     [],
@@ -132,4 +136,3 @@ export function useTasks(): UseTasksReturn {
 
   return { createTask, getTasks, getTask, sendMessage, approveSpec, shipTask, discardTask, setTaskModel, setTaskReasoningEffort };
 }
-

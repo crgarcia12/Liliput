@@ -23,9 +23,24 @@ GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o liliput.exe ./cmd/liliput
 ## Run
 
 ```sh
-./liliput.exe                                  # default server http://liliput.crgarcia.com.ar
+./liliput.exe                                  # default server https://liliput.crgarcia.com.ar
+./liliput.exe --login                          # sign in, save a token, then open the TUI
+./liliput.exe --server https://dev.example.com --login
 ./liliput.exe --server http://localhost:5001   # local dev API
 LILIPUT_API_URL=http://my-host ./liliput.exe   # via env
+```
+
+The hosted deployments require a Liliput session token. `--login` prompts for
+username and password, saves only the returned token under your user config
+directory, and reuses it on later runs for both REST calls and live Socket.IO
+updates. You can also pass `LILIPUT_TOKEN` for a one-off session. Avoid
+`--token` in shared shells because command-line flags can be captured in shell
+history or process listings.
+
+To forget the saved token for a server:
+
+```sh
+./liliput.exe --logout --server https://dev.liliput.crgarcia.com.ar
 ```
 
 ## Keybindings

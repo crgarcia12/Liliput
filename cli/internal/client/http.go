@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -16,16 +17,22 @@ import (
 type HTTP struct {
 	baseURL string
 	hc      *http.Client
+	token   string
 }
 
 func New(baseURL string) *HTTP {
 	return &HTTP{
-		baseURL: baseURL,
+		baseURL: strings.TrimRight(baseURL, "/"),
 		hc:      &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
 func (c *HTTP) BaseURL() string { return c.baseURL }
+func (c *HTTP) Token() string   { return c.token }
+
+func (c *HTTP) SetToken(token string) {
+	c.token = strings.TrimSpace(token)
+}
 
 func (c *HTTP) do(ctx context.Context, method, path string, body, out any) error {
 	var buf io.Reader
@@ -43,6 +50,9 @@ func (c *HTTP) do(ctx context.Context, method, path string, body, out any) error
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
 		return err
@@ -50,6 +60,9 @@ func (c *HTTP) do(ctx context.Context, method, path string, body, out any) error
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
+		if resp.StatusCode == http.StatusUnauthorized {
+			return fmt.Errorf("%s %s: %s — login required; run `liliput --login --server %s`", method, path, resp.Status, c.baseURL)
+		}
 		return fmt.Errorf("%s %s: %s — %s", method, path, resp.Status, truncate(string(respBody), 240))
 	}
 	if out == nil || len(respBody) == 0 {
@@ -73,6 +86,17 @@ func (c *HTTP) Health(ctx context.Context) (map[string]any, error) {
 func (c *HTTP) AuthStatus(ctx context.Context) (AuthStatus, error) {
 	var s AuthStatus
 	return s, c.do(ctx, http.MethodGet, "/api/auth/status", nil, &s)
+}
+
+func (c *HTTP) Login(ctx context.Context, username, password string) (*LoginResponse, error) {
+	var out LoginResponse
+	if err := c.do(ctx, http.MethodPost, "/api/login", LoginRequest{
+		Username: username,
+		Password: password,
+	}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 func (c *HTTP) ListTasks(ctx context.Context) ([]Task, error) {

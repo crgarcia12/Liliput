@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import request from 'supertest';
 import { Server } from 'socket.io';
 import { createApp } from '../../src/app.js';
-import { resetStore, createTask, addChatMessage } from '../../src/stores/task-store.js';
+import { resetStore, createTask, addChatMessage, updateTask } from '../../src/stores/task-store.js';
 import * as turnStore from '../../src/stores/turn-store.js';
 
 const io = new Server();
@@ -31,6 +31,34 @@ describe('turn routes', () => {
     expect(turns[0]!.status).toBe('completed');
     expect(turns[1]!.status).toBe('open');
     expect(turns[1]!.userMessage).toBe('second message');
+  });
+
+  it('snapshots coder and checking config when each turn opens', () => {
+    const t = createTask('My task', 'first', 'owner/repo', {
+      model: 'claude-sonnet-4.5',
+      reasoningEffort: 'high',
+      reviewerModel: 'gpt-5-mini',
+      reviewerReasoningEffort: 'low',
+    });
+
+    updateTask(t.id, {
+      model: 'gpt-4.1',
+      reasoningEffort: 'medium',
+      reviewerModel: 'claude-haiku-4.5',
+      reviewerReasoningEffort: 'xhigh',
+    });
+    addChatMessage(t.id, 'gulliver', 'second message');
+
+    const turns = turnStore.listTurnsForTask(t.id);
+    expect(turns).toHaveLength(2);
+    expect(turns[0]!.model).toBe('claude-sonnet-4.5');
+    expect(turns[0]!.reasoningEffort).toBe('high');
+    expect(turns[0]!.reviewerModel).toBe('gpt-5-mini');
+    expect(turns[0]!.reviewerReasoningEffort).toBe('low');
+    expect(turns[1]!.model).toBe('gpt-4.1');
+    expect(turns[1]!.reasoningEffort).toBe('medium');
+    expect(turns[1]!.reviewerModel).toBe('claude-haiku-4.5');
+    expect(turns[1]!.reviewerReasoningEffort).toBe('xhigh');
   });
 
   it('GET /api/repos/:repo/usage rolls up tokens across workstreams of a repo', async () => {

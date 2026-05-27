@@ -695,18 +695,22 @@ export function createTasksRouter(
         reviewerEnabled: boolean;
       }> = {};
       if (body.reviewerModel !== undefined) {
-        if (body.reviewerModel === null || body.reviewerModel === '') {
+        const trimmedReviewerModel =
+          typeof body.reviewerModel === 'string' ? body.reviewerModel.trim() : body.reviewerModel;
+        if (trimmedReviewerModel === null || trimmedReviewerModel === '') {
           patch.reviewerModel = undefined;
+          patch.reviewerEnabled = false;
         } else {
           const { models } = await listAvailableModels();
-          if (!models.some((m) => m.id === body.reviewerModel)) {
+          if (!models.some((m) => m.id === trimmedReviewerModel)) {
             res.status(400).json({
-              error: `Unknown reviewerModel: ${body.reviewerModel}. Allowed: ${models.map((m) => m.id).join(', ')}`,
+              error: `Unknown reviewerModel: ${trimmedReviewerModel}. Allowed: ${models.map((m) => m.id).join(', ')}`,
               field: 'reviewerModel',
             });
             return;
           }
-          patch.reviewerModel = body.reviewerModel;
+          patch.reviewerModel = trimmedReviewerModel;
+          patch.reviewerEnabled = true;
         }
       }
       if (body.reviewerReasoningEffort !== undefined) {
@@ -731,14 +735,23 @@ export function createTasksRouter(
       }
       store.updateTask(task.id, patch);
       const updated = store.getTask(task.id);
+      const hasReviewerModelPatch = Object.prototype.hasOwnProperty.call(patch, 'reviewerModel');
+      const hasReviewerEffortPatch = Object.prototype.hasOwnProperty.call(
+        patch,
+        'reviewerReasoningEffort',
+      );
+      const hasReviewerEnabledPatch = Object.prototype.hasOwnProperty.call(
+        patch,
+        'reviewerEnabled',
+      );
       const summary = [
-        patch.reviewerModel !== undefined
-          ? `model=${patch.reviewerModel ?? '(unset)'}`
+        hasReviewerModelPatch
+          ? `model=${patch.reviewerModel ?? '(off)'}`
           : '',
-        patch.reviewerReasoningEffort !== undefined
+        hasReviewerEffortPatch
           ? `effort=${patch.reviewerReasoningEffort ?? '(auto)'}`
           : '',
-        patch.reviewerEnabled !== undefined
+        hasReviewerEnabledPatch
           ? `enabled=${patch.reviewerEnabled}`
           : '',
       ].filter(Boolean).join(' ');

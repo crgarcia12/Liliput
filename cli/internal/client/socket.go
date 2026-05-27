@@ -42,6 +42,7 @@ type SocketEvent struct {
 // Socket is a long-lived Socket.IO connection that auto-reconnects.
 type Socket struct {
 	baseURL string
+	token   string
 
 	mu        sync.Mutex
 	conn      *websocket.Conn
@@ -53,9 +54,10 @@ type Socket struct {
 	status chan string // "connected" / "disconnected: <reason>"
 }
 
-func NewSocket(baseURL string) *Socket {
+func NewSocket(baseURL, token string) *Socket {
 	return &Socket{
 		baseURL: baseURL,
+		token:   strings.TrimSpace(token),
 		events:  make(chan SocketEvent, 256),
 		status:  make(chan string, 16),
 	}
@@ -134,7 +136,12 @@ func (s *Socket) dialAndPump(ctx context.Context) error {
 	dialer := *websocket.DefaultDialer
 	dialer.HandshakeTimeout = 15 * time.Second
 
-	conn, resp, err := dialer.DialContext(ctx, wsURL, http.Header{})
+	header := http.Header{}
+	if s.token != "" {
+		header.Set("Authorization", "Bearer "+s.token)
+		header.Set("Cookie", "session_token="+url.QueryEscape(s.token))
+	}
+	conn, resp, err := dialer.DialContext(ctx, wsURL, header)
 	if err != nil {
 		if resp != nil {
 			return fmt.Errorf("ws dial %s: %w (status=%s)", wsURL, err, resp.Status)

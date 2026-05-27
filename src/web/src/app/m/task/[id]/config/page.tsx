@@ -134,6 +134,71 @@ export default function MobileTaskConfigPage() {
               </section>
             )}
 
+            {showModelControls && modelOptions.length > 0 && (
+              <section>
+                <label
+                  htmlFor="m-reviewer-model"
+                  className="block text-xs uppercase tracking-wide text-violet-400 mb-2"
+                >
+                  🔍 Checking model
+                </label>
+                <select
+                  id="m-reviewer-model"
+                  value={task.reviewerModel ?? ''}
+                  disabled={m.reviewerPending}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    if (next === (task.reviewerModel ?? '')) return;
+                    m.setTaskReviewerModel(next);
+                  }}
+                  className="w-full bg-[#050510] border border-[#1a1a2e] rounded px-3 py-3 min-h-[44px] text-sm text-violet-200 focus:outline-none focus:border-violet-500 disabled:opacity-50"
+                >
+                  <option value="">off</option>
+                  {modelOptions.map((opt) => (
+                    <option key={`reviewer-${opt.id}`} value={opt.id}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-gray-500 mt-1">
+                  A second model checks the agent and only comments when it finds something important.
+                </p>
+              </section>
+            )}
+
+            {showModelControls && task.reviewerModel && (
+              <section>
+                <label
+                  htmlFor="m-reviewer-effort"
+                  className="block text-xs uppercase tracking-wide text-violet-400 mb-2"
+                >
+                  ⚙ Checking reasoning
+                </label>
+                <select
+                  id="m-reviewer-effort"
+                  value={task.reviewerReasoningEffort ?? ''}
+                  disabled={m.reviewerPending}
+                  onChange={(e) => {
+                    const next = e.target.value as
+                      | ''
+                      | 'low'
+                      | 'medium'
+                      | 'high'
+                      | 'xhigh';
+                    if (next === (task.reviewerReasoningEffort ?? '')) return;
+                    m.setTaskReviewerReasoningEffort(next);
+                  }}
+                  className="w-full bg-[#050510] border border-[#1a1a2e] rounded px-3 py-3 min-h-[44px] text-sm text-violet-200 focus:outline-none focus:border-violet-500 disabled:opacity-50"
+                >
+                  <option value="">auto</option>
+                  <option value="low">low</option>
+                  <option value="medium">medium</option>
+                  <option value="high">high</option>
+                  <option value="xhigh">xhigh</option>
+                </select>
+              </section>
+            )}
+
             <section>
               <h2 className="text-xs uppercase tracking-wide text-gray-500 mb-2">
                 Repository

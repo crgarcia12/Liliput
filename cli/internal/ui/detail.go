@@ -89,7 +89,7 @@ func (m *detailModel) Init() tea.Cmd {
 		return detailLoadedMsg{task: t}
 	}
 	// start socket
-	m.socket = client.NewSocket(m.api.BaseURL())
+	m.socket = client.NewSocket(m.api.BaseURL(), m.api.Token())
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	go m.socket.Run(ctx)

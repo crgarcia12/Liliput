@@ -192,6 +192,9 @@ export interface Turn {
   /** Snapshot of `task.model` at the time the turn was opened. */
   model?: string;
   reasoningEffort?: ReasoningEffort;
+  /** Snapshot of the checking/reviewer model config at the time the turn was opened. */
+  reviewerModel?: string;
+  reviewerReasoningEffort?: ReasoningEffort;
   status: 'open' | 'completed';
   startedAt: string;
   completedAt?: string;

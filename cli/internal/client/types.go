@@ -8,6 +8,22 @@ type AgentStatus string
 type AgentRole string
 type ChatRole string
 
+type LoginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type LoginUser struct {
+	ID       string `json:"id"`
+	Username string `json:"username"`
+	Role     string `json:"role"`
+}
+
+type LoginResponse struct {
+	Token string    `json:"token"`
+	User  LoginUser `json:"user"`
+}
+
 type Task struct {
 	ID                string        `json:"id"`
 	Title             string        `json:"title"`

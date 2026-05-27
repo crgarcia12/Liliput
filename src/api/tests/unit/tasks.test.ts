@@ -180,6 +180,26 @@ describe('PATCH /api/tasks/:id/model', () => {
   });
 });
 
+describe('PATCH /api/tasks/:id/reviewer', () => {
+  it('should turn checking off when reviewerModel is cleared', async () => {
+    const { app } = buildApp();
+    const created = await request(app)
+      .post('/api/tasks')
+      .send({ title: 'T', description: 'D', reviewerModel: 'gpt-5-mini' });
+    expect(created.status).toBe(201);
+    expect(created.body.task.reviewerEnabled).toBe(true);
+    const id = created.body.task.id as string;
+
+    const res = await request(app)
+      .patch(`/api/tasks/${id}/reviewer`)
+      .send({ reviewerModel: null });
+
+    expect(res.status).toBe(200);
+    expect(res.body.task.reviewerModel).toBeUndefined();
+    expect(res.body.task.reviewerEnabled).toBe(false);
+  });
+});
+
 describe('GET /api/tasks', () => {
   it('should list tasks', async () => {
     const { app } = buildApp();

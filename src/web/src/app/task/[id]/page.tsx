@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams } from 'next/navigation';
+import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import Terminal from '../../../components/Terminal';
 import AgentPanel from '../../../components/AgentPanel';
@@ -11,6 +12,10 @@ import PhaseStepper from '../../../components/PhaseStepper';
 import ResizableSplit from '../../../components/ResizableSplit';
 import { useSocket } from '../../../hooks/useSocket';
 import { useTasks } from '../../../hooks/useTasks';
+import {
+  rememberChatConfig,
+  type ReasoningEffortSelection,
+} from '../../../lib/chat-config-storage';
 import type { Task, ChatMessage, Agent, ModelOption, ModelsResponse } from '@shared/types';
 
 const LiliputIsland = dynamic(() => import('../../../components/LiliputIsland'), {
@@ -46,7 +51,10 @@ export default function TaskPage() {
 
   async function patchReviewer(
     taskId: string,
-    body: { reviewerModel?: string | null; reviewerReasoningEffort?: string | null },
+    body: {
+      reviewerModel?: string | null;
+      reviewerReasoningEffort?: ReasoningEffortSelection | null;
+    },
   ): Promise<Task> {
     setReviewerPending(true);
     try {
@@ -60,6 +68,7 @@ export default function TaskPage() {
         throw new Error(errBody.error ?? `Failed to update reviewer (${res.status})`);
       }
       const data = (await res.json()) as { task: Task };
+      rememberChatConfig(body);
       return data.task;
     } finally {
       setReviewerPending(false);
@@ -100,6 +109,11 @@ export default function TaskPage() {
         prev.devUrl === next.devUrl &&
         prev.commitSha === next.commitSha &&
         prev.pullRequestUrl === next.pullRequestUrl &&
+        prev.model === next.model &&
+        prev.reasoningEffort === next.reasoningEffort &&
+        prev.reviewerModel === next.reviewerModel &&
+        prev.reviewerReasoningEffort === next.reviewerReasoningEffort &&
+        prev.reviewerEnabled === next.reviewerEnabled &&
         (prev.chatHistory?.length ?? 0) === (next.chatHistory?.length ?? 0)
       ) {
         return prev;
@@ -509,14 +523,14 @@ export default function TaskPage() {
               <span className="text-base leading-none">🌐</span>
               <span className="leading-tight">Dev preview</span>
             </a>
-            <a
+            <Link
               href="/"
               className="flex flex-col items-center justify-center px-3 rounded text-xs whitespace-nowrap border bg-[#15152a] border-[#1a1a2e] text-gray-300 hover:bg-[#1a1a2e] hover:text-cyan-300"
               title="Back to workstreams list"
             >
               <span className="text-base leading-none">📋</span>
               <span className="leading-tight">Workstreams</span>
-            </a>
+            </Link>
             {task?.status === 'review' && (
               <div className="flex flex-col gap-1 justify-center">
                 {task.pullRequestUrl && (

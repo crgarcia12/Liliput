@@ -3,6 +3,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSocket } from '../../../../hooks/useSocket';
 import { useTasks } from '../../../../hooks/useTasks';
+import {
+  rememberChatConfig,
+  type ReasoningEffortSelection,
+} from '../../../../lib/chat-config-storage';
 import type { Task, ChatMessage, Agent, ActivityEntry } from '@shared/types';
 
 const API_URL = '';
@@ -26,10 +30,13 @@ export interface UseMobileTaskReturn {
   discardTask: () => Promise<void>;
   setTaskModel: (model: string) => Promise<void>;
   setTaskReasoningEffort: (
-    effort: '' | 'low' | 'medium' | 'high' | 'xhigh',
+    effort: ReasoningEffortSelection,
   ) => Promise<void>;
+  setTaskReviewerModel: (model: string) => Promise<void>;
+  setTaskReviewerReasoningEffort: (effort: ReasoningEffortSelection) => Promise<void>;
   modelPending: boolean;
   reasoningPending: boolean;
+  reviewerPending: boolean;
 }
 
 export function useMobileTask(taskId: string): UseMobileTaskReturn {
@@ -57,6 +64,7 @@ export function useMobileTask(taskId: string): UseMobileTaskReturn {
   const [actionPending, setActionPending] = useState<ActionKind | null>(null);
   const [modelPending, setModelPending] = useState(false);
   const [reasoningPending, setReasoningPending] = useState(false);
+  const [reviewerPending, setReviewerPending] = useState(false);
 
   // Mirror desktop's optimization: don't replace state objects when nothing
   // visible has changed. Preserves text selection across 4s polls.
@@ -69,6 +77,11 @@ export function useMobileTask(taskId: string): UseMobileTaskReturn {
         prev.devUrl === next.devUrl &&
         prev.commitSha === next.commitSha &&
         prev.pullRequestUrl === next.pullRequestUrl &&
+        prev.model === next.model &&
+        prev.reasoningEffort === next.reasoningEffort &&
+        prev.reviewerModel === next.reviewerModel &&
+        prev.reviewerReasoningEffort === next.reviewerReasoningEffort &&
+        prev.reviewerEnabled === next.reviewerEnabled &&
         (prev.chatHistory?.length ?? 0) === (next.chatHistory?.length ?? 0)
       ) {
         return prev;
@@ -287,7 +300,7 @@ export function useMobileTask(taskId: string): UseMobileTaskReturn {
   );
 
   const setTaskReasoningEffort = useCallback(
-    async (effort: '' | 'low' | 'medium' | 'high' | 'xhigh') => {
+    async (effort: ReasoningEffortSelection) => {
       if (!task) return;
       setReasoningPending(true);
       try {
@@ -302,6 +315,49 @@ export function useMobileTask(taskId: string): UseMobileTaskReturn {
       }
     },
     [task, apiSetTaskReasoningEffort],
+  );
+
+  const patchReviewer = useCallback(
+    async (body: {
+      reviewerModel?: string | null;
+      reviewerReasoningEffort?: ReasoningEffortSelection | null;
+    }) => {
+      if (!task) return;
+      setReviewerPending(true);
+      try {
+        const res = await fetch(`${API_URL}/api/tasks/${task.id}/reviewer`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const errBody = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(errBody.error ?? `Failed to update reviewer (${res.status})`);
+        }
+        const data = (await res.json()) as { task: Task };
+        rememberChatConfig(body);
+        setTask(data.task);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to update checking model');
+      } finally {
+        setReviewerPending(false);
+      }
+    },
+    [task],
+  );
+
+  const setTaskReviewerModel = useCallback(
+    async (model: string) => {
+      await patchReviewer({ reviewerModel: model === '' ? null : model });
+    },
+    [patchReviewer],
+  );
+
+  const setTaskReviewerReasoningEffort = useCallback(
+    async (effort: ReasoningEffortSelection) => {
+      await patchReviewer({ reviewerReasoningEffort: effort === '' ? null : effort });
+    },
+    [patchReviewer],
   );
 
   return {
@@ -321,7 +377,10 @@ export function useMobileTask(taskId: string): UseMobileTaskReturn {
     discardTask,
     setTaskModel,
     setTaskReasoningEffort,
+    setTaskReviewerModel,
+    setTaskReviewerReasoningEffort,
     modelPending,
     reasoningPending,
+    reviewerPending,
   };
 }

@@ -427,10 +427,21 @@ go build -o liliput ./cmd/liliput
 # Connect to the default hosted backend
 liliput
 
+# First-time auth for hosted deployments
+liliput --login
+
+# Dev deployment
+liliput --server https://dev.liliput.crgarcia.com.ar --login
+
 # Or point at a different deployment
 liliput --server http://localhost:5001
 # (or set LILIPUT_API_URL=http://localhost:5001)
 ```
+
+`--login` prompts for username/password, saves only the returned session token,
+and reuses it for later TUI runs. For one-off sessions, prefer
+`LILIPUT_TOKEN=... liliput` over `--token` so the token is not written to shell
+history.
 
 ### Keybindings
 
