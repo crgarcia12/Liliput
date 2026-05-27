@@ -22,6 +22,38 @@ const LiliputIsland = dynamic(() => import('../../components/LiliputIsland'), {
   ),
 });
 
+// Safe localStorage helpers — return '' on any error (SSR, private mode,
+// quota, etc.) so the form still renders with sensible defaults.
+function readStoredString(key: string): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    return window.localStorage.getItem(key) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+const EFFORT_VALUES = ['', 'low', 'medium', 'high', 'xhigh'] as const;
+type Effort = (typeof EFFORT_VALUES)[number];
+
+function readStoredEffort(key: string): Effort {
+  const raw = readStoredString(key);
+  return (EFFORT_VALUES as readonly string[]).includes(raw) ? (raw as Effort) : '';
+}
+
+function writeStoredString(key: string, value: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (value === '') {
+      window.localStorage.removeItem(key);
+    } else {
+      window.localStorage.setItem(key, value);
+    }
+  } catch {
+    // Non-fatal — picker still works for the current session.
+  }
+}
+
 export default function Home() {
   const router = useRouter();
   const { connected, agentEvents, chatMessages: socketMessages } = useSocket();
@@ -44,12 +76,21 @@ export default function Home() {
   const [baseBranch, setBaseBranch] = useState('main');
   const [commitMode, setCommitMode] = useState<'pr' | 'direct'>('pr');
   const [modelOptions, setModelOptions] = useState<readonly ModelOption[]>([]);
-  const [model, setModel] = useState<string>('');
+  // Read last-used picker values from localStorage so the user's selections
+  // persist across new-task creations and page reloads. Falls back to '' (and
+  // the server default is applied once /api/models responds).
+  const [model, setModel] = useState<string>(() => readStoredString('liliput:lastModel'));
   // '' means "auto-derive" — server picks based on model id suffix.
-  const [reasoningEffort, setReasoningEffort] = useState<'' | 'low' | 'medium' | 'high' | 'xhigh'>('');
+  const [reasoningEffort, setReasoningEffort] = useState<'' | 'low' | 'medium' | 'high' | 'xhigh'>(
+    () => readStoredEffort('liliput:lastReasoningEffort'),
+  );
   // Reviewer-agent picks. '' for reviewerModel means "no reviewer".
-  const [reviewerModel, setReviewerModel] = useState<string>('');
-  const [reviewerReasoningEffort, setReviewerReasoningEffort] = useState<'' | 'low' | 'medium' | 'high' | 'xhigh'>('');
+  const [reviewerModel, setReviewerModel] = useState<string>(
+    () => readStoredString('liliput:lastReviewerModel'),
+  );
+  const [reviewerReasoningEffort, setReviewerReasoningEffort] = useState<'' | 'low' | 'medium' | 'high' | 'xhigh'>(
+    () => readStoredEffort('liliput:lastReviewerReasoningEffort'),
+  );
   // Greenfield ("Create new project") state.
   const [projectMode, setProjectMode] = useState<'existing' | 'create'>('existing');
   const [newRepoName, setNewRepoName] = useState('');
@@ -58,6 +99,8 @@ export default function Home() {
 
   // Fetch the curated Copilot SDK model list once on mount so the dropdown
   // and the persisted default both come from the server's source of truth.
+  // We only fall back to the server default if the user has no prior pick
+  // OR their stored pick is no longer in the live model list (model retired).
   useEffect(() => {
     let cancelled = false;
     fetch('/api/models')
@@ -65,7 +108,16 @@ export default function Home() {
       .then((data) => {
         if (cancelled || !data) return;
         setModelOptions(data.options);
-        setModel(data.default);
+        setModel((prev) => {
+          if (prev && data.options.some((m) => m.id === prev)) return prev;
+          return data.default;
+        });
+        setReviewerModel((prev) => {
+          // Reviewer is optional — keep '' if user hadn't picked one before,
+          // and clear if their stored pick is no longer available.
+          if (!prev) return '';
+          return data.options.some((m) => m.id === prev) ? prev : '';
+        });
       })
       .catch(() => {
         // Non-fatal: dropdown stays empty, server picks its default.
@@ -74,6 +126,21 @@ export default function Home() {
       cancelled = true;
     };
   }, []);
+
+  // Persist each picker value to localStorage whenever it changes so the
+  // next New Task page (or page reload) starts from the user's last pick.
+  useEffect(() => {
+    writeStoredString('liliput:lastModel', model);
+  }, [model]);
+  useEffect(() => {
+    writeStoredString('liliput:lastReasoningEffort', reasoningEffort);
+  }, [reasoningEffort]);
+  useEffect(() => {
+    writeStoredString('liliput:lastReviewerModel', reviewerModel);
+  }, [reviewerModel]);
+  useEffect(() => {
+    writeStoredString('liliput:lastReviewerReasoningEffort', reviewerReasoningEffort);
+  }, [reviewerReasoningEffort]);
 
   // Merge local + socket messages
   const allMessages = useMemo(
@@ -251,7 +318,7 @@ export default function Home() {
         setIsWorking(false);
       }
     },
-    [currentTask, createTask, sendMessage, targetRepo, baseBranch, commitMode, model, reasoningEffort, router, projectMode, newRepoName, newRepoVisibility]
+    [currentTask, createTask, sendMessage, targetRepo, baseBranch, commitMode, model, reasoningEffort, reviewerModel, reviewerReasoningEffort, router, projectMode, newRepoName, newRepoVisibility]
   );
 
   const activeCount = agents.filter((a) => a.status === 'working').length;
