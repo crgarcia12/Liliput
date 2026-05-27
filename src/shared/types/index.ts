@@ -110,6 +110,29 @@ export interface Task {
   errorMessage?: string;      // Populated when status='failed'
   model?: string;             // Copilot SDK model id to use for agent turns (e.g. "gpt-5", "claude-sonnet-4.5"). Falls back to server default when missing.
   reasoningEffort?: ReasoningEffort;  // Optional reasoning-effort hint for the SDK. When undefined, the server auto-derives from the model id (e.g. `*-xhigh` -> 'xhigh') so models that only accept one effort (like claude-opus-4.7-xhigh) work out of the box.
+  /** Second Copilot SDK model used by the Reviewer Agent. The Reviewer
+   *  watches the spec / coder / deploy phases and posts feedback to chat
+   *  ONLY when it finds something important (bug, security issue, missed
+   *  requirement, wrong approach). Silent otherwise. Falls back to the
+   *  server-side `COPILOT_REVIEWER_MODEL` env or the same model as the
+   *  coder when not set. */
+  reviewerModel?: string;
+  /** Reasoning-effort hint for the Reviewer Agent. Honors the same
+   *  auto-derive rules as `reasoningEffort` (e.g. `*-xhigh` suffix). */
+  reviewerReasoningEffort?: ReasoningEffort;
+  /** When false, the Reviewer Agent is disabled for this task — no spec /
+   *  coder / deploy review turns will be triggered. Defaults to false when
+   *  no `reviewerModel` is set, true otherwise. */
+  reviewerEnabled?: boolean;
+  /** Per-SHA feedback queue. The reviewer appends entries here when it
+   *  finds something important. The next coder turn picks up entries whose
+   *  `sha` matches the current HEAD (or whose `sha` is null = not anchored
+   *  to a commit, e.g. spec feedback). Consumed entries are removed. */
+  pendingReviewerFeedback?: ReviewerFeedback[];
+  /** Per-kind attempt counters used to break infinite reviewer/coder loops.
+   *  Once a kind hits the cap (default 3), the reviewer's next feedback is
+   *  shown to the user as unresolved instead of being auto-injected. */
+  reviewerAttempts?: Partial<Record<ReviewerFeedbackKind, number>>;
   agents: Agent[];
   chatHistory: ChatMessage[];
   activityHistory?: ActivityEntry[];
@@ -121,6 +144,29 @@ export interface Task {
   currentTurnId?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/** What kind of action the reviewer was reviewing when it emitted feedback.
+ *  Drives display, retry caps, and which prompt template was used. */
+export type ReviewerFeedbackKind = 'spec' | 'coder-initial' | 'coder-iter' | 'deploy';
+
+/** A single piece of feedback emitted by the reviewer. Lives on the Task
+ *  until consumed by a follow-up coder turn (or surfaced to the user as
+ *  unresolved when the per-kind attempt cap is exhausted). */
+export interface ReviewerFeedback {
+  id: string;
+  kind: ReviewerFeedbackKind;
+  /** Commit SHA the reviewer was looking at when it emitted this feedback.
+   *  Null/undefined for non-workspace reviews (e.g. spec review). When set,
+   *  the coder only consumes feedback that still matches HEAD — stale
+   *  feedback from a previous commit is dropped silently. */
+  sha?: string;
+  /** The reviewer's feedback text — typically a short bullet list. */
+  text: string;
+  createdAt: string;
+  /** Incremented each time this feedback (or its successor for the same
+   *  kind) is injected into a coder prompt. Hard-capped at REVIEWER_MAX_ATTEMPTS. */
+  attempts: number;
 }
 
 /** A "Turn" groups everything that happened in response to a single user input.
@@ -292,7 +338,7 @@ export interface AgentLogEntry {
 
 // ─── Chat Messages ────────────────────────────────────────────
 
-export type ChatRole = 'gulliver' | 'liliput' | 'agent' | 'system';
+export type ChatRole = 'gulliver' | 'liliput' | 'agent' | 'system' | 'reviewer';
 
 export interface ChatMessage {
   id: string;
@@ -317,6 +363,15 @@ export interface CreateTaskRequest {
   workstreamId?: string;       // Optional explicit parent; auto-assigned otherwise
   model?: string;              // Optional Copilot SDK model id (e.g. "gpt-5"). Server falls back to default when missing.
   reasoningEffort?: ReasoningEffort;  // Optional reasoning-effort hint. Auto-derived from model id when missing.
+  /** Optional Reviewer-Agent model id. When set, the Reviewer Agent is
+   *  enabled (unless `reviewerEnabled` is explicitly false) and uses this
+   *  model for review turns. */
+  reviewerModel?: string;
+  /** Optional Reviewer-Agent reasoning-effort hint. */
+  reviewerReasoningEffort?: ReasoningEffort;
+  /** Explicit on/off for the Reviewer Agent. Defaults to true when
+   *  `reviewerModel` is set, false otherwise. */
+  reviewerEnabled?: boolean;
 }
 
 /** Curated list of Copilot SDK model ids surfaced in the new-task UI.

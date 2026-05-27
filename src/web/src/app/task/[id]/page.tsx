@@ -42,6 +42,29 @@ export default function TaskPage() {
   const [modelDefault, setModelDefault] = useState<string>('');
   const [modelPending, setModelPending] = useState(false);
   const [reasoningPending, setReasoningPending] = useState(false);
+  const [reviewerPending, setReviewerPending] = useState(false);
+
+  async function patchReviewer(
+    taskId: string,
+    body: { reviewerModel?: string | null; reviewerReasoningEffort?: string | null },
+  ): Promise<Task> {
+    setReviewerPending(true);
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/reviewer`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const errBody = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(errBody.error ?? `Failed to update reviewer (${res.status})`);
+      }
+      const data = (await res.json()) as { task: Task };
+      return data.task;
+    } finally {
+      setReviewerPending(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -391,6 +414,66 @@ export default function TaskPage() {
                     }}
                     className="bg-[#050510] border border-[#1a1a2e] rounded px-1.5 py-0.5 text-gray-300 focus:outline-none focus:border-cyan-500 disabled:opacity-50"
                     title="Reasoning effort — applies on next agent turn. Some models (e.g. claude-opus-4.7-xhigh) only accept ONE value; auto picks it from the model id suffix."
+                  >
+                    <option value="">auto</option>
+                    <option value="low">low</option>
+                    <option value="medium">medium</option>
+                    <option value="high">high</option>
+                    <option value="xhigh">xhigh</option>
+                  </select>
+                </label>
+              )}
+              {task && task.status !== 'completed' && task.status !== 'deleting' && modelOptions.length > 0 && (
+                <label
+                  className="flex items-center gap-1 text-xs shrink-0"
+                  title="Reviewer Agent — a second model that watches the Coder and posts feedback to chat only when it spots something important (bug, security issue, missed requirement). Silent otherwise."
+                >
+                  <span className="text-violet-400">🔍</span>
+                  <select
+                    value={task.reviewerModel ?? ''}
+                    disabled={reviewerPending}
+                    onChange={async (e) => {
+                      const next = e.target.value;
+                      if (!task || next === (task.reviewerModel ?? '')) return;
+                      try {
+                        const updated = await patchReviewer(task.id, {
+                          reviewerModel: next === '' ? null : next,
+                        });
+                        setTask(updated);
+                      } catch (err) {
+                        setError(err instanceof Error ? err.message : 'Failed to switch reviewer');
+                      }
+                    }}
+                    className="bg-[#050510] border border-[#1a1a2e] rounded px-1.5 py-0.5 text-violet-300 focus:outline-none focus:border-violet-500 disabled:opacity-50"
+                  >
+                    <option value="">(off)</option>
+                    {modelOptions.map((m) => (
+                      <option key={`rev-${m.id}`} value={m.id}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {task && task.reviewerModel && task.status !== 'completed' && task.status !== 'deleting' && (
+                <label className="flex items-center gap-1 text-xs shrink-0" title="Reviewer reasoning effort">
+                  <span className="text-violet-400">⚙</span>
+                  <select
+                    value={task.reviewerReasoningEffort ?? ''}
+                    disabled={reviewerPending}
+                    onChange={async (e) => {
+                      const next = e.target.value as '' | 'low' | 'medium' | 'high' | 'xhigh';
+                      if (!task || next === (task.reviewerReasoningEffort ?? '')) return;
+                      try {
+                        const updated = await patchReviewer(task.id, {
+                          reviewerReasoningEffort: next === '' ? null : next,
+                        });
+                        setTask(updated);
+                      } catch (err) {
+                        setError(err instanceof Error ? err.message : 'Failed to switch reviewer reasoning');
+                      }
+                    }}
+                    className="bg-[#050510] border border-[#1a1a2e] rounded px-1.5 py-0.5 text-violet-300 focus:outline-none focus:border-violet-500 disabled:opacity-50"
                   >
                     <option value="">auto</option>
                     <option value="low">low</option>

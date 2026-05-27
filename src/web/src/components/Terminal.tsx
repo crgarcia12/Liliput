@@ -33,6 +33,8 @@ function getRoleStyle(role: ChatRole): { color: string; prefix: string } {
       return { color: 'text-yellow-400', prefix: '' };
     case 'system':
       return { color: 'text-gray-500', prefix: '--- ' };
+    case 'reviewer':
+      return { color: 'text-violet-400', prefix: '🔍 reviewer> ' };
     default:
       return { color: 'text-gray-400', prefix: '> ' };
   }

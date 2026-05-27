@@ -47,6 +47,9 @@ export default function Home() {
   const [model, setModel] = useState<string>('');
   // '' means "auto-derive" — server picks based on model id suffix.
   const [reasoningEffort, setReasoningEffort] = useState<'' | 'low' | 'medium' | 'high' | 'xhigh'>('');
+  // Reviewer-agent picks. '' for reviewerModel means "no reviewer".
+  const [reviewerModel, setReviewerModel] = useState<string>('');
+  const [reviewerReasoningEffort, setReviewerReasoningEffort] = useState<'' | 'low' | 'medium' | 'high' | 'xhigh'>('');
   // Greenfield ("Create new project") state.
   const [projectMode, setProjectMode] = useState<'existing' | 'create'>('existing');
   const [newRepoName, setNewRepoName] = useState('');
@@ -147,6 +150,8 @@ export default function Home() {
                 visibility: newRepoVisibility,
                 ...(model ? { model } : {}),
                 ...(reasoningEffort ? { reasoningEffort } : {}),
+                ...(reviewerModel ? { reviewerModel } : {}),
+                ...(reviewerReasoningEffort ? { reviewerReasoningEffort } : {}),
               }),
             });
             if (!res.ok) {
@@ -194,6 +199,8 @@ export default function Home() {
             commitMode,
             ...(model ? { model } : {}),
             ...(reasoningEffort ? { reasoningEffort } : {}),
+            ...(reviewerModel ? { reviewerModel } : {}),
+            ...(reviewerReasoningEffort ? { reviewerReasoningEffort } : {}),
           });
           setCurrentTask(task);
           // Fire-and-forget: ask the LLM for a tight 1-4 word title and
@@ -377,6 +384,38 @@ export default function Home() {
               onChange={(e) => setReasoningEffort(e.target.value as typeof reasoningEffort)}
               className="bg-[#050510] border border-[#1a1a2e] rounded px-2 py-1 text-gray-200 focus:outline-none focus:border-cyan-500"
               title="Some models (like claude-opus-4.7-xhigh) only accept ONE effort. Auto picks it from the model id suffix."
+            >
+              <option value="">auto</option>
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+              <option value="xhigh">xhigh</option>
+            </select>
+          </label>
+          <label className="flex items-center gap-2" title="Optional second model — when set, watches what the Coder does and posts feedback to chat only if it spots something important (bug, security issue, missed requirement). Silent otherwise.">
+            <span className="text-violet-300">🔍 Reviewer:</span>
+            <select
+              value={reviewerModel}
+              onChange={(e) => setReviewerModel(e.target.value)}
+              className="bg-[#050510] border border-[#1a1a2e] rounded px-2 py-1 text-violet-200 focus:outline-none focus:border-violet-500"
+              disabled={modelOptions.length === 0}
+            >
+              <option value="">(off)</option>
+              {modelOptions.map((m) => (
+                <option key={`rev-${m.id}`} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-2">
+            <span className="text-violet-300">Reviewer reasoning:</span>
+            <select
+              value={reviewerReasoningEffort}
+              onChange={(e) => setReviewerReasoningEffort(e.target.value as typeof reviewerReasoningEffort)}
+              className="bg-[#050510] border border-[#1a1a2e] rounded px-2 py-1 text-violet-200 focus:outline-none focus:border-violet-500"
+              disabled={!reviewerModel}
+              title="Reasoning effort for the reviewer model. Auto picks the right value for the chosen model."
             >
               <option value="">auto</option>
               <option value="low">low</option>

@@ -62,6 +62,7 @@ import { gateVerdict } from './autopilot.js';
 import { latestVerdictForTask } from '../stores/verdict-store.js';
 import { recordAndDecide as recordStuck, resetStuckHistory } from './stuck-detector.js';
 import { runGherkinChecks } from './gherkin-runner.js';
+import { triggerPipelineReview, consumeReviewerFeedbackForCoder } from './reviewer-trigger.js';
 
 const ACR_NAME = process.env['ACR_NAME'] ?? '';
 const PUBLIC_BASE_URL = process.env['LILIPUT_PUBLIC_URL'] ?? 'https://liliput.crgarcia.com.ar';
@@ -2171,6 +2172,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
       spec: task.spec,
       isInitial: true,
       liliputContext: { pathPrefix },
+      reviewerFeedback: consumeReviewerFeedbackForCoder(io, taskId) ?? undefined,
       onLog: (level, msg, cmd, out) => {
         hb.bump();
         logPhase(io, taskId, coder, level, msg, cmd, out);
@@ -2480,7 +2482,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   // time but the app may still 502 (port mismatch, base path issue, etc.) —
   // probe + repair until healthy or until the cap is reached. User can chat
   // mid-loop; chat preempts cleanly bail out.
-  await validateAndHealLoop({
+  const validateOutcome = await validateAndHealLoop({
     io,
     taskId,
     agentSession,
@@ -2494,6 +2496,24 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
     initialImageRef: deployOutcome.imageRef,
     initialSha: deployOutcome.sha,
   });
+
+  // Reviewer Agent: after the full initial pipeline (coder turn → build → deploy
+  // → validate) check whether anything important was missed. Blocks for up to
+  // the reviewer timeout (typically a few seconds). If the reviewer flags
+  // something the queued feedback will be picked up by the next coder turn.
+  try {
+    await triggerPipelineReview(io, taskId, {
+      workspaceRoot: handle.cwd,
+      sha: validateOutcome.sha,
+      kind: 'coder-initial',
+      coderSummary: result.summary,
+      devUrl,
+      validationHealthy: validateOutcome.healthy,
+      validateAttemptsUsed: validateOutcome.attemptsUsed,
+    });
+  } catch (err) {
+    logger.warn({ taskId, err: err instanceof Error ? err.message : String(err) }, 'Pipeline reviewer threw (non-fatal)');
+  }
 
   // After validate (healthy OR cap-exhausted OR chat-preempt), surface the
   // task as 'review' so the UI lets the user chat / ship / discard. The
@@ -2961,6 +2981,7 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
       isInitial: false,
       liliputContext: { pathPrefix: live.pathPrefix, port: live.port },
       recap,
+      reviewerFeedback: consumeReviewerFeedbackForCoder(io, taskId) ?? undefined,
       onLog: (level, msg, cmd, out) => {
         hb.bump();
         logPhase(io, taskId, coder, level, msg, cmd, out);
@@ -3189,7 +3210,7 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   // Autonomous validate-and-heal loop after iteration. Same idea as the
   // initial pipeline — probe the live preview, ask ops-fixer to repair,
   // commit + rebuild + redeploy, repeat until healthy or the cap is hit.
-  await validateAndHealLoop({
+  const iterValidateOutcome = await validateAndHealLoop({
     io,
     taskId,
     agentSession: live.agentSession,
@@ -3203,6 +3224,23 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
     initialImageRef: deployOutcome.imageRef,
     initialSha: deployOutcome.sha,
   });
+
+  // Reviewer Agent: post-iteration review. Inspects the latest changes plus
+  // the validation outcome, posts feedback to chat only if it spots something
+  // important. Queued feedback is picked up by the next coder turn.
+  try {
+    await triggerPipelineReview(io, taskId, {
+      workspaceRoot: live.repoHandle.cwd,
+      sha: iterValidateOutcome.sha,
+      kind: 'coder-iter',
+      coderSummary: result.summary,
+      devUrl,
+      validationHealthy: iterValidateOutcome.healthy,
+      validateAttemptsUsed: iterValidateOutcome.attemptsUsed,
+    });
+  } catch (err) {
+    logger.warn({ taskId, err: err instanceof Error ? err.message : String(err) }, 'Iter reviewer threw (non-fatal)');
+  }
 
   // Flip back to 'review' after validate (loop already posted the appropriate
   // healthy/exhausted chat message).
@@ -3349,7 +3387,7 @@ async function runRebuildOnly(
   );
   if (ackMsg) io.to(`task:${taskId}`).emit('chat:message', ackMsg);
 
-  await validateAndHealLoop({
+  const rebuildValidateOutcome = await validateAndHealLoop({
     io,
     taskId,
     agentSession: live.agentSession,
@@ -3363,6 +3401,23 @@ async function runRebuildOnly(
     initialImageRef: deployOutcome.imageRef,
     initialSha: deployOutcome.sha,
   });
+
+  // Reviewer Agent: even pure-rebuild paths get a final review pass — the
+  // app might still have issues that a rebuild surfaces (e.g. the previous
+  // commit was already broken on `main`).
+  try {
+    await triggerPipelineReview(io, taskId, {
+      workspaceRoot: live.repoHandle.cwd,
+      sha: rebuildValidateOutcome.sha,
+      kind: 'deploy',
+      coderSummary: 'Pure rebuild (no agent turn).',
+      devUrl,
+      validationHealthy: rebuildValidateOutcome.healthy,
+      validateAttemptsUsed: rebuildValidateOutcome.attemptsUsed,
+    });
+  } catch (err) {
+    logger.warn({ taskId, err: err instanceof Error ? err.message : String(err) }, 'Rebuild reviewer threw (non-fatal)');
+  }
 
   setTaskStatus(io, taskId, 'review', { devUrl, devNamespace: live.namespace, devPort: live.port, devEnvState: 'active' });
 }

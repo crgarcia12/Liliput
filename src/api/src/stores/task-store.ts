@@ -162,9 +162,18 @@ export function createTask(
     workstreamId?: string;
     model?: string;
     reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+    reviewerModel?: string;
+    reviewerReasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+    reviewerEnabled?: boolean;
   } = {},
 ): Task {
   const ts = now();
+  // The Reviewer Agent is enabled by default whenever a `reviewerModel` is
+  // configured. The caller can force it on/off via `reviewerEnabled`.
+  const reviewerEnabled =
+    options.reviewerEnabled !== undefined
+      ? options.reviewerEnabled
+      : Boolean(options.reviewerModel && options.reviewerModel.trim());
   const task: Task = {
     id: uuid(),
     title,
@@ -176,6 +185,13 @@ export function createTask(
     ...(options.workstreamId ? { workstreamId: options.workstreamId } : {}),
     ...(options.model && options.model.trim() ? { model: options.model.trim() } : {}),
     ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
+    ...(options.reviewerModel && options.reviewerModel.trim()
+      ? { reviewerModel: options.reviewerModel.trim() }
+      : {}),
+    ...(options.reviewerReasoningEffort
+      ? { reviewerReasoningEffort: options.reviewerReasoningEffort }
+      : {}),
+    reviewerEnabled,
     agents: [],
     chatHistory: [],
     createdAt: ts,
@@ -254,6 +270,11 @@ export function updateTask(
       | 'workstreamId'
       | 'model'
       | 'reasoningEffort'
+      | 'reviewerModel'
+      | 'reviewerReasoningEffort'
+      | 'reviewerEnabled'
+      | 'pendingReviewerFeedback'
+      | 'reviewerAttempts'
       | 'title'
     >
   >,

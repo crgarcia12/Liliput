@@ -7,6 +7,7 @@ import { listAvailableModels } from '../engine/copilot-client.js';
 import * as store from '../stores/task-store.js';
 import * as wsStore from '../stores/workstream-store.js';
 import { generateSpec as defaultGenerateSpec, type SpecGenerator } from '../engine/spec-generator.js';
+import { triggerSpecReview } from '../engine/reviewer-trigger.js';
 import { listDevPods, getPodLogs } from '../engine/k8s-deployer.js';
 import { startBuild, shipTask, discardTask, iterateTask, canIterate, enqueueChatForAgent, hasInFlightAgent, stopDevEnvForTask, startDevEnvForTask, deleteDevEnvForTask } from '../engine/agent-engine.js';
 import { verifyRepositoryAccess } from '../engine/github-pr.js';
@@ -112,8 +113,19 @@ export function createTasksRouter(
   // POST /api/tasks — create a new task
   router.post('/api/tasks', async (req: Request, res: Response) => {
     try {
-      const { title, description, repository, baseBranch, commitMode, workstreamId, model, reasoningEffort } =
-        req.body as CreateTaskRequest;
+      const {
+        title,
+        description,
+        repository,
+        baseBranch,
+        commitMode,
+        workstreamId,
+        model,
+        reasoningEffort,
+        reviewerModel,
+        reviewerReasoningEffort,
+        reviewerEnabled,
+      } = req.body as CreateTaskRequest;
       logger.info(
         {
           path: '/api/tasks',
@@ -123,6 +135,9 @@ export function createTasksRouter(
           workstreamId,
           model,
           reasoningEffort,
+          reviewerModel,
+          reviewerReasoningEffort,
+          reviewerEnabled,
           hasTitle: !!title,
           hasDescription: !!description,
         },
@@ -138,12 +153,30 @@ export function createTasksRouter(
       // session that may then take 30s to fail. We re-fetch (cached for 5min)
       // from `client.listModels()` so this stays accurate as Copilot ships new
       // models — the curated static list is only a fallback.
+      let availableModels: { id: string; label: string }[] | undefined;
+      const ensureModels = async (): Promise<{ id: string; label: string }[]> => {
+        if (!availableModels) {
+          const { models } = await listAvailableModels();
+          availableModels = models;
+        }
+        return availableModels;
+      };
       if (model) {
-        const { models } = await listAvailableModels();
+        const models = await ensureModels();
         if (!models.some((m) => m.id === model)) {
           res.status(400).json({
             error: `Unknown model: ${model}. Allowed: ${models.map((m) => m.id).join(', ')}`,
             field: 'model',
+          });
+          return;
+        }
+      }
+      if (reviewerModel) {
+        const models = await ensureModels();
+        if (!models.some((m) => m.id === reviewerModel)) {
+          res.status(400).json({
+            error: `Unknown reviewerModel: ${reviewerModel}. Allowed: ${models.map((m) => m.id).join(', ')}`,
+            field: 'reviewerModel',
           });
           return;
         }
@@ -155,6 +188,16 @@ export function createTasksRouter(
         res.status(400).json({
           error: `Unknown reasoningEffort: ${reasoningEffort}. Allowed: ${REASONING_EFFORTS.join(', ')}`,
           field: 'reasoningEffort',
+        });
+        return;
+      }
+      if (
+        reviewerReasoningEffort &&
+        !REASONING_EFFORTS.includes(reviewerReasoningEffort as typeof REASONING_EFFORTS[number])
+      ) {
+        res.status(400).json({
+          error: `Unknown reviewerReasoningEffort: ${reviewerReasoningEffort}. Allowed: ${REASONING_EFFORTS.join(', ')}`,
+          field: 'reviewerReasoningEffort',
         });
         return;
       }
@@ -197,6 +240,9 @@ export function createTasksRouter(
         ...(resolvedWorkstreamId ? { workstreamId: resolvedWorkstreamId } : {}),
         ...(model ? { model } : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(reviewerModel ? { reviewerModel } : {}),
+        ...(reviewerReasoningEffort ? { reviewerReasoningEffort } : {}),
+        ...(reviewerEnabled !== undefined ? { reviewerEnabled } : {}),
       });
 
       // Add system welcome message
@@ -390,6 +436,11 @@ export function createTasksRouter(
               'I\'ve drafted a specification based on your requirements. Please review and approve it to start building!',
             );
             io.to(`task:${task.id}`).emit('chat:message', sysMsg);
+
+            // Kick off the Reviewer Agent on the spec — fire-and-forget. If it
+            // finds something important, it posts to chat with role='reviewer'
+            // and queues feedback for the coder's first turn. Silent otherwise.
+            triggerSpecReview(io, task.id, spec);
 
             // Best-effort decomposition (behind feature flag).
             // Splits the spec into feature slices and persists Feature rows
@@ -609,6 +660,99 @@ export function createTasksRouter(
       const errMessage = err instanceof Error ? err.message : String(err);
       logger.error({ err: errMessage }, 'Failed to update reasoningEffort');
       res.status(500).json({ error: 'Failed to update reasoningEffort', details: errMessage });
+    }
+  });
+
+  // PATCH /api/tasks/:id/reviewer — update reviewer-agent config on a live
+  // task. Accepts any subset of { reviewerModel, reviewerReasoningEffort,
+  // reviewerEnabled }. Takes effect on the next reviewer trigger.
+  router.patch('/api/tasks/:id/reviewer', async (req: Request, res: Response) => {
+    try {
+      const task = store.getTask(req.params['id'] as string);
+      if (!task || task.status === 'deleting') {
+        res.status(404).json({ error: 'Task not found' });
+        return;
+      }
+      const body = (req.body ?? {}) as {
+        reviewerModel?: string | null;
+        reviewerReasoningEffort?: string | null;
+        reviewerEnabled?: boolean;
+      };
+      logger.info(
+        {
+          taskId: task.id,
+          currentModel: task.reviewerModel ?? '',
+          currentEffort: task.reviewerReasoningEffort ?? '',
+          currentEnabled: task.reviewerEnabled ?? false,
+          incomingBody: body,
+        },
+        'PATCH /api/tasks/:id/reviewer received',
+      );
+      const ALLOWED = ['low', 'medium', 'high', 'xhigh'] as const;
+      const patch: Partial<{
+        reviewerModel: string | undefined;
+        reviewerReasoningEffort: 'low' | 'medium' | 'high' | 'xhigh' | undefined;
+        reviewerEnabled: boolean;
+      }> = {};
+      if (body.reviewerModel !== undefined) {
+        if (body.reviewerModel === null || body.reviewerModel === '') {
+          patch.reviewerModel = undefined;
+        } else {
+          const { models } = await listAvailableModels();
+          if (!models.some((m) => m.id === body.reviewerModel)) {
+            res.status(400).json({
+              error: `Unknown reviewerModel: ${body.reviewerModel}. Allowed: ${models.map((m) => m.id).join(', ')}`,
+              field: 'reviewerModel',
+            });
+            return;
+          }
+          patch.reviewerModel = body.reviewerModel;
+        }
+      }
+      if (body.reviewerReasoningEffort !== undefined) {
+        if (body.reviewerReasoningEffort === null || body.reviewerReasoningEffort === '') {
+          patch.reviewerReasoningEffort = undefined;
+        } else if (ALLOWED.includes(body.reviewerReasoningEffort as typeof ALLOWED[number])) {
+          patch.reviewerReasoningEffort = body.reviewerReasoningEffort as typeof ALLOWED[number];
+        } else {
+          res.status(400).json({
+            error: `Unknown reviewerReasoningEffort: ${body.reviewerReasoningEffort}. Allowed: ${ALLOWED.join(', ')} (or empty to auto-derive)`,
+            field: 'reviewerReasoningEffort',
+          });
+          return;
+        }
+      }
+      if (body.reviewerEnabled !== undefined) {
+        patch.reviewerEnabled = Boolean(body.reviewerEnabled);
+      }
+      if (Object.keys(patch).length === 0) {
+        res.status(400).json({ error: 'No reviewer fields provided' });
+        return;
+      }
+      store.updateTask(task.id, patch);
+      const updated = store.getTask(task.id);
+      const summary = [
+        patch.reviewerModel !== undefined
+          ? `model=${patch.reviewerModel ?? '(unset)'}`
+          : '',
+        patch.reviewerReasoningEffort !== undefined
+          ? `effort=${patch.reviewerReasoningEffort ?? '(auto)'}`
+          : '',
+        patch.reviewerEnabled !== undefined
+          ? `enabled=${patch.reviewerEnabled}`
+          : '',
+      ].filter(Boolean).join(' ');
+      const sysMsg = store.addChatMessage(
+        task.id,
+        'system',
+        `🔍 Reviewer config updated — ${summary}. Takes effect on the next review trigger.`,
+      );
+      io.to(`task:${task.id}`).emit('chat:message', sysMsg);
+      res.json({ task: updated });
+    } catch (err: unknown) {
+      const errMessage = err instanceof Error ? err.message : String(err);
+      logger.error({ err: errMessage }, 'Failed to update reviewer config');
+      res.status(500).json({ error: 'Failed to update reviewer config', details: errMessage });
     }
   });
 

@@ -155,6 +155,14 @@ export interface RunAgentTurnOptions {
    * instruction so it knows what was already discussed/attempted.
    */
   recap?: string;
+  /**
+   * Optional Reviewer-Agent feedback to inject into THIS turn's prompt. The
+   * reviewer runs after each pipeline run and may flag important issues the
+   * coder missed; this block routes that feedback into the next coder turn
+   * so it can be addressed. The feedback is rendered above the user's
+   * instruction so the coder sees it as additional context.
+   */
+  reviewerFeedback?: string;
   onLog?: LogFn;
   onToolEvent?: ToolEventFn;
   onUsage?: UsageFn;
@@ -213,8 +221,17 @@ function buildInitialPrompt(opts: RunAgentTurnOptions): string {
         '',
       ].join('\n')
     : '';
+  const reviewerBlock = opts.reviewerFeedback
+    ? [
+        opts.reviewerFeedback,
+        '',
+        '---',
+        '',
+      ].join('\n')
+    : '';
   return [
     contractBlock,
+    reviewerBlock,
     'You are an autonomous coding agent operating directly on a git checkout.',
     'The current working directory is the repository root and is already on a feature branch.',
     '',
@@ -338,9 +355,18 @@ function buildFollowUpPrompt(opts: RunAgentTurnOptions): string {
         '',
       ].join('\n')
     : '';
+  const reviewerBlock = opts.reviewerFeedback
+    ? [
+        opts.reviewerFeedback,
+        '',
+        '---',
+        '',
+      ].join('\n')
+    : '';
   return [
     contractBlock,
     recapBlock,
+    reviewerBlock,
     'Follow-up instruction from the user. The previous turn already produced a',
     'commit and a draft PR; new edits will be appended to the same branch.',
     'Continue editing the same workspace. Do not commit or push — Liliput handles git.',

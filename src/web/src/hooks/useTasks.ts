@@ -17,6 +17,8 @@ interface CreateTaskOptions {
   commitMode?: CommitMode;
   model?: string;
   reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+  reviewerModel?: string;
+  reviewerReasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
 }
 
 interface UseTasksReturn {
@@ -54,6 +56,8 @@ export function useTasks(): UseTasksReturn {
         commitMode: options?.commitMode,
         model: options?.model,
         reasoningEffort: options?.reasoningEffort,
+        reviewerModel: options?.reviewerModel,
+        reviewerReasoningEffort: options?.reviewerReasoningEffort,
       };
       const data = await apiRequest<TaskDetailResponse>('/api/tasks', {
         method: 'POST',
