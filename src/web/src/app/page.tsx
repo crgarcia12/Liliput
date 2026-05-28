@@ -1,960 +1,177 @@
-'use client';
-
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
-import LogList from '../components/LogList';
-import TopBar from '../components/TopBar';
-import TokenBadge, { formatDuration, formatTokens } from '../components/TokenBadge';
-import { useSocket } from '../hooks/useSocket';
-import { useTasks } from '../hooks/useTasks';
-import { useUsageRollups } from '../hooks/useUsageRollups';
-import type {
-  Task,
-  TaskStatus,
-  Agent,
-  AgentLogEntry,
-  Workstream,
-  DeletePreview,
-} from '@shared/types';
 
-const STATUS_STYLES: Record<TaskStatus, { label: string; cls: string }> = {
-  clarifying: { label: 'Clarifying', cls: 'bg-blue-500/15 text-blue-300 border-blue-500/30' },
-  specifying: { label: 'Specifying', cls: 'bg-blue-500/15 text-blue-300 border-blue-500/30' },
-  building: { label: 'Building', cls: 'bg-yellow-500/15 text-yellow-300 border-yellow-500/30' },
-  deploying: { label: 'Deploying', cls: 'bg-yellow-500/15 text-yellow-300 border-yellow-500/30' },
-  review: { label: 'Review', cls: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30' },
-  shipping: { label: 'Shipping', cls: 'bg-purple-500/15 text-purple-300 border-purple-500/30' },
-  completed: { label: 'Completed', cls: 'bg-green-500/15 text-green-300 border-green-500/30' },
-  discarded: { label: 'Discarded', cls: 'bg-gray-500/15 text-gray-400 border-gray-500/30' },
-  failed: { label: 'Failed', cls: 'bg-red-500/15 text-red-300 border-red-500/30' },
-  deleting: { label: 'Deleting', cls: 'bg-gray-500/15 text-gray-400 border-gray-500/30' },
-};
+const steps = [
+  {
+    label: 'Describe the goal',
+    text: 'Give Liliput a product idea, bug, or modernization task in plain language.',
+  },
+  {
+    label: 'Agents split the work',
+    text: 'PM, developer, reviewer, and release agents turn it into coordinated GitHub work.',
+  },
+  {
+    label: 'Ship in parallel',
+    text: 'Many repositories and many features can move at once on Kubernetes.',
+  },
+];
 
-const ROLE_ICON: Record<string, string> = {
-  architect: '📐',
-  coder: '💻',
-  builder: '🔨',
-  tester: '🧪',
-  deployer: '🚀',
-  reviewer: '👁️',
-  researcher: '🔍',
-};
-
-const AGENT_STATUS_DOT: Record<string, string> = {
-  idle: 'bg-gray-500',
-  working: 'bg-yellow-400 animate-pulse',
-  completed: 'bg-green-400',
-  failed: 'bg-red-400',
-  waiting: 'bg-blue-400',
-};
-
-const UNASSIGNED_KEY = '__unassigned__';
-
-type SelKind = 'repo' | 'workstream' | 'task' | 'agent';
-interface Selection {
-  kind: SelKind;
-  repo: string;
-  workstreamKey?: string; // workstream id, or UNASSIGNED_KEY
-  taskId?: string;
-  agentId?: string;
-}
-
-interface DeleteTarget {
-  scope: 'task' | 'workstream' | 'repo';
-  /** API path for preview/delete (without /delete-preview suffix). */
-  endpoint: string;
-  label: string;
-}
-
-export default function RequestsPage() {
-  const { connected } = useSocket();
-  const { getTasks } = useTasks();
-  const usage = useUsageRollups();
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [workstreams, setWorkstreams] = useState<Workstream[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [showInactive, setShowInactive] = useState(false);
-  const [collapsedRepos, setCollapsedRepos] = useState<Set<string>>(new Set());
-  const [collapsedWorkstreams, setCollapsedWorkstreams] = useState<Set<string>>(new Set());
-  const [collapsedTasks, setCollapsedTasks] = useState<Set<string>>(new Set());
-  const [collapsedTurns, setCollapsedTurns] = useState<Set<string>>(new Set());
-  const [sel, setSel] = useState<Selection | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
-
-  const refresh = useCallback(async () => {
-    try {
-      const [list, wsRes] = await Promise.all([
-        getTasks(),
-        fetch('/api/workstreams').then((r) =>
-          r.ok ? (r.json() as Promise<{ workstreams: Workstream[] }>) : { workstreams: [] },
-        ),
-      ]);
-      setTasks(list);
-      setWorkstreams(wsRes.workstreams);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load requests');
-    } finally {
-      setLoading(false);
-    }
-  }, [getTasks]);
-
-  useEffect(() => {
-    void refresh();
-    const id = setInterval(refresh, 3000);
-    return () => clearInterval(id);
-  }, [refresh]);
-
-  // Tree shape: repo → workstream → tasks. Workstreams with zero tasks still
-  // render so the user can delete empty ones. Tasks without a workstreamId
-  // bucket under a synthetic "(unassigned)" workstream per repo.
-  interface WsBucket {
-    key: string;
-    name: string;
-    workstream?: Workstream;
-    tasks: Task[];
-  }
-  interface RepoBucket {
-    repo: string;
-    workstreams: WsBucket[];
-    taskCount: number;
-  }
-
-  const tree: RepoBucket[] = useMemo(() => {
-    const filtered = showInactive
-      ? tasks
-      : tasks.filter((t) =>
-          ['clarifying', 'specifying', 'building', 'deploying', 'review', 'shipping'].includes(
-            t.status,
-          ),
-        );
-
-    const wsById = new Map(workstreams.map((w) => [w.id, w]));
-    const wsByRepo = new Map<string, Workstream[]>();
-    for (const w of workstreams) {
-      const arr = wsByRepo.get(w.repository) ?? [];
-      arr.push(w);
-      wsByRepo.set(w.repository, arr);
-    }
-
-    const byRepo = new Map<string, Map<string, WsBucket>>();
-    const ensureRepo = (repo: string): Map<string, WsBucket> => {
-      let m = byRepo.get(repo);
-      if (!m) {
-        m = new Map();
-        for (const w of wsByRepo.get(repo) ?? []) {
-          m.set(w.id, { key: w.id, name: w.name, workstream: w, tasks: [] });
-        }
-        byRepo.set(repo, m);
-      }
-      return m;
-    };
-
-    for (const t of filtered) {
-      const repo = t.repository ?? '(no repo)';
-      const wsMap = ensureRepo(repo);
-      const wsId = t.workstreamId;
-      if (wsId && wsById.has(wsId)) {
-        const bucket = wsMap.get(wsId)!;
-        bucket.tasks.push(t);
-      } else {
-        let bucket = wsMap.get(UNASSIGNED_KEY);
-        if (!bucket) {
-          bucket = { key: UNASSIGNED_KEY, name: '(unassigned)', tasks: [] };
-          wsMap.set(UNASSIGNED_KEY, bucket);
-        }
-        bucket.tasks.push(t);
-      }
-    }
-
-    if (showInactive) {
-      for (const repo of wsByRepo.keys()) ensureRepo(repo);
-    }
-
-    const result: RepoBucket[] = [];
-    for (const [repo, wsMap] of byRepo) {
-      const buckets = Array.from(wsMap.values());
-      for (const b of buckets) b.tasks.sort((a, c) => c.updatedAt.localeCompare(a.updatedAt));
-      buckets.sort((a, b) => {
-        if (a.key === UNASSIGNED_KEY) return -1;
-        if (b.key === UNASSIGNED_KEY) return 1;
-        return a.name.localeCompare(b.name);
-      });
-      const taskCount = buckets.reduce((sum, b) => sum + b.tasks.length, 0);
-      if (taskCount === 0 && !buckets.some((b) => b.key !== UNASSIGNED_KEY)) continue;
-      result.push({ repo, workstreams: buckets, taskCount });
-    }
-    result.sort((a, b) => a.repo.localeCompare(b.repo));
-    return result;
-  }, [tasks, workstreams, showInactive]);
-
-  // Auto-collapse repos by default — when this page mounts (or a brand-new
-  // repo appears mid-session), force it into `collapsedRepos`. Tracks "seen"
-  // repos in a ref so the user's manual expansions are preserved during the
-  // current mount; navigating away and back resets the ref → all collapsed
-  // again, which matches the user's request that the tree always opens
-  // collapsed for fast scanning.
-  const seenReposRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    const newOnes = tree.map((b) => b.repo).filter((r) => !seenReposRef.current.has(r));
-    if (newOnes.length === 0) return;
-    setCollapsedRepos((prev) => {
-      const next = new Set(prev);
-      for (const r of newOnes) next.add(r);
-      return next;
-    });
-    for (const r of newOnes) seenReposRef.current.add(r);
-  }, [tree]);
-
-  // Auto-select first node on first load.
-  useEffect(() => {
-    if (sel || tree.length === 0) return;
-    const first = tree[0]!;
-    const firstWs = first.workstreams[0];
-    const firstTask = firstWs?.tasks[0];
-    if (firstTask && firstWs) {
-      setSel({
-        kind: 'task',
-        repo: first.repo,
-        workstreamKey: firstWs.key,
-        taskId: firstTask.id,
-      });
-    } else {
-      setSel({ kind: 'repo', repo: first.repo });
-    }
-  }, [tree, sel]);
-
-  const toggleSet = (s: Set<string>, k: string): Set<string> => {
-    const next = new Set(s);
-    if (next.has(k)) next.delete(k);
-    else next.add(k);
-    return next;
-  };
-
-  const requestDelete = (target: DeleteTarget) => setDeleteTarget(target);
-  const handleDeleted = useCallback(() => {
-    setDeleteTarget(null);
-    setSel(null);
-    void refresh();
-  }, [refresh]);
-
+function AgentAnimation(): React.JSX.Element {
   return (
-    <div className="flex flex-col h-screen bg-[#050510] text-gray-100">
-      <TopBar
-        subtitle="Workstreams"
-        connected={connected}
-        extras={
-          <label className="flex items-center gap-1.5 text-gray-400 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={showInactive}
-              onChange={(e) => setShowInactive(e.target.checked)}
-              className="accent-cyan-500"
-            />
-            Show inactive
-          </label>
-        }
-      />
+    <div className="relative mx-auto w-full max-w-4xl overflow-hidden rounded-[2rem] border border-slate-200 bg-white p-6 shadow-2xl shadow-blue-950/10">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(56,189,248,0.18),transparent_28%),radial-gradient(circle_at_80%_20%,rgba(129,140,248,0.16),transparent_25%),linear-gradient(180deg,rgba(248,250,252,0.85),rgba(255,255,255,0))]" />
+      <svg
+        viewBox="0 0 920 420"
+        role="img"
+        aria-label="Animated diagram showing one request being split across Kubernetes agents and shipped to multiple projects"
+        className="relative h-auto w-full"
+      >
+        <defs>
+          <linearGradient id="agentGradient" x1="0" x2="1" y1="0" y2="1">
+            <stop offset="0%" stopColor="#2563eb" />
+            <stop offset="100%" stopColor="#7c3aed" />
+          </linearGradient>
+          <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+            <feDropShadow dx="0" dy="16" stdDeviation="18" floodColor="#1e293b" floodOpacity="0.16" />
+          </filter>
+        </defs>
 
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left: tree */}
-        <aside className="w-96 shrink-0 border-r border-[#1a1a2e] bg-[#0a0a12] overflow-y-auto">
-          {loading && <div className="p-4 text-xs text-gray-500">Loading…</div>}
-          {error && <div className="p-4 text-xs text-red-400">{error}</div>}
-          {!loading && !error && tree.length === 0 && (
-            <div className="p-4 text-xs text-gray-500">
-              No {showInactive ? '' : 'active '}workstreams.{' '}
-              <Link href="/new" className="text-cyan-400">New →</Link>
-            </div>
-          )}
-          {tree.map(({ repo, workstreams: wsBuckets, taskCount }) => {
-            const repoCollapsed = collapsedRepos.has(repo);
-            const isRepoSel = sel?.kind === 'repo' && sel.repo === repo;
-            const isRealRepo = repo !== '(no repo)';
-            return (
-              <div key={repo} className="mb-1">
-                <div
-                  className={`group flex items-center gap-1 px-2 py-1 text-xs hover:bg-[#10101a] ${
-                    isRepoSel ? 'bg-cyan-900/30 text-cyan-200' : 'text-gray-300'
-                  }`}
-                >
-                  <button
-                    onClick={() => {
-                      setCollapsedRepos((s) => toggleSet(s, repo));
-                      setSel({ kind: 'repo', repo });
-                    }}
-                    className="flex items-center gap-1 flex-1 min-w-0 text-left"
-                  >
-                    <span className="text-gray-500 w-3 text-center">{repoCollapsed ? '▶' : '▼'}</span>
-                    <span>📁</span>
-                    <span className="truncate flex-1 font-medium">{repo}</span>
-                    <TokenBadge rollup={usage.repos[repo]} compact />
-                    <span className="text-[10px] text-gray-500">{taskCount}</span>
-                  </button>
-                  {isRealRepo && (
-                    <Link
-                      href={`/new?repo=${encodeURIComponent(repo)}`}
-                      onClick={(e) => e.stopPropagation()}
-                      className="opacity-0 group-hover:opacity-100 text-cyan-400 hover:text-cyan-200 px-1.5 text-[10px] font-semibold"
-                      title={`New workstream in ${repo}`}
-                    >
-                      + New
-                    </Link>
-                  )}
-                  {isRealRepo && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        requestDelete({
-                          scope: 'repo',
-                          endpoint: `/api/repo-groups/${encodeURIComponent(repo)}`,
-                          label: repo,
-                        });
-                      }}
-                      className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-400 px-1"
-                      title="Delete this repo group (cascades to all tasks)"
-                    >
-                      🗑
-                    </button>
-                  )}
-                </div>
-                {!repoCollapsed &&
-                  wsBuckets.map((bucket) => {
-                    const wsCollapsedKey = `${repo}::${bucket.key}`;
-                    const wsCollapsed = collapsedWorkstreams.has(wsCollapsedKey);
-                    const isWsSel =
-                      sel?.kind === 'workstream' &&
-                      sel.repo === repo &&
-                      sel.workstreamKey === bucket.key;
-                    const isUnassigned = bucket.key === UNASSIGNED_KEY;
-                    return (
-                      <div key={bucket.key}>
-                        <div
-                          className={`group flex items-center gap-1 pl-5 pr-2 py-0.5 text-[11px] hover:bg-[#10101a] ${
-                            isWsSel ? 'bg-cyan-900/30 text-cyan-200' : 'text-gray-300'
-                          }`}
-                        >
-                          <button
-                            onClick={() => {
-                              setCollapsedWorkstreams((s) => toggleSet(s, wsCollapsedKey));
-                              setSel({
-                                kind: 'workstream',
-                                repo,
-                                workstreamKey: bucket.key,
-                              });
-                            }}
-                            className="flex items-center gap-1 flex-1 min-w-0 text-left"
-                          >
-                            <span className="text-gray-500 w-3 text-center">
-                              {bucket.tasks.length > 0 ? (wsCollapsed ? '▶' : '▼') : ' '}
-                            </span>
-                            <span>{isUnassigned ? '🗂' : '📑'}</span>
-                            <span
-                              className={`truncate flex-1 ${isUnassigned ? 'italic text-gray-500' : ''}`}
-                            >
-                              {bucket.name}
-                            </span>
-                            {bucket.workstream && (
-                              <TokenBadge rollup={usage.workstreams[bucket.workstream.id]} compact />
-                            )}
-                            <span className="text-[10px] text-gray-600">
-                              {bucket.tasks.length}
-                            </span>
-                          </button>
-                          {!isUnassigned && bucket.workstream && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                requestDelete({
-                                  scope: 'workstream',
-                                  endpoint: `/api/workstreams/${bucket.workstream!.id}`,
-                                  label: `${repo} / ${bucket.name}`,
-                                });
-                              }}
-                              className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-400 px-1"
-                              title="Delete this workstream (cascades to its tasks)"
-                            >
-                              🗑
-                            </button>
-                          )}
-                        </div>
-                        {!wsCollapsed && (
-                          <ul>
-                            {bucket.tasks.map((t) => {
-                              const taskCollapsed = collapsedTasks.has(t.id);
-                              const isTaskSel = sel?.kind === 'task' && sel.taskId === t.id;
-                              const style = STATUS_STYLES[t.status];
-                              return (
-                                <li key={t.id}>
-                                  <div
-                                    className={`group flex items-center gap-1 pl-10 pr-2 py-1 text-xs hover:bg-[#10101a] ${
-                                      isTaskSel ? 'bg-cyan-900/30 text-cyan-200' : 'text-gray-300'
-                                    }`}
-                                  >
-                                    <button
-                                      onClick={() => {
-                                        setCollapsedTasks((s) => toggleSet(s, t.id));
-                                        setSel({
-                                          kind: 'task',
-                                          repo,
-                                          workstreamKey: bucket.key,
-                                          taskId: t.id,
-                                        });
-                                      }}
-                                      className="flex items-center gap-1 flex-1 min-w-0 text-left"
-                                      title={t.title}
-                                    >
-                                      <span className="text-gray-500 w-3 text-center">
-                                        {(t.agents?.length ?? 0) > 0
-                                          ? taskCollapsed
-                                            ? '▶'
-                                            : '▼'
-                                          : ' '}
-                                      </span>
-                                      <span
-                                        className={`px-1.5 py-0 text-[9px] uppercase tracking-wide border rounded ${style.cls}`}
-                                      >
-                                        {style.label}
-                                      </span>
-                                      <span className="truncate flex-1">{t.title}</span>
-                                    </button>
-                                    <button
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        requestDelete({
-                                          scope: 'task',
-                                          endpoint: `/api/tasks/${t.id}`,
-                                          label: t.title,
-                                        });
-                                      }}
-                                      className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-400 px-1"
-                                      title="Delete this request (closes PR, removes branch + dev env)"
-                                    >
-                                      🗑
-                                    </button>
-                                  </div>
-                                  {!taskCollapsed && (
-                                    <ul>
-                                      {(() => {
-                                        const turns = t.turns ?? [];
-                                        const agents = t.agents ?? [];
-                                        const agentById = new Map(agents.map((a) => [a.id, a]));
-                                        // Group agents under turns by agentIds; collect orphans (agents not in any turn) at end.
-                                        const usedAgentIds = new Set<string>();
-                                        const groups: Array<{
-                                          turn: typeof turns[number] | null;
-                                          agents: typeof agents;
-                                        }> = [];
-                                        for (const turn of turns) {
-                                          const turnAgents = (turn.agentIds ?? [])
-                                            .map((id) => agentById.get(id))
-                                            .filter((a): a is NonNullable<typeof a> => Boolean(a));
-                                          for (const a of turnAgents) usedAgentIds.add(a.id);
-                                          groups.push({ turn, agents: turnAgents });
-                                        }
-                                        const orphans = agents.filter((a) => !usedAgentIds.has(a.id));
-                                        if (orphans.length > 0) groups.push({ turn: null, agents: orphans });
-                                        return groups.map((group, gi) => {
-                                          const turn = group.turn;
-                                          const turnKey = turn ? turn.id : `${t.id}::orphans`;
-                                          const turnCollapsed = collapsedTurns.has(turnKey);
-                                          const turnDuration =
-                                            turn?.durationMs ??
-                                            (turn?.startedAt
-                                              ? Date.now() - new Date(turn.startedAt).getTime()
-                                              : 0);
-                                          const tokens = turn?.usage.totalTokens ?? 0;
-                                          return (
-                                            <li key={turnKey}>
-                                              <button
-                                                onClick={() =>
-                                                  setCollapsedTurns((s) => toggleSet(s, turnKey))
-                                                }
-                                                className="w-full flex items-center gap-1 pl-12 pr-2 py-0.5 text-[10px] hover:bg-[#10101a] text-gray-400 text-left"
-                                                title={turn?.userMessage ?? 'Untracked agents'}
-                                              >
-                                                <span className="text-gray-500 w-3 text-center">
-                                                  {group.agents.length > 0
-                                                    ? turnCollapsed
-                                                      ? '▶'
-                                                      : '▼'
-                                                    : ' '}
-                                                </span>
-                                                <span>💬</span>
-                                                <span className="truncate flex-1">
-                                                  {turn
-                                                    ? `Turn ${turn.index} · ${turn.title || turn.userMessage || ''}`
-                                                    : `Untracked (${group.agents.length})`}
-                                                </span>
-                                                {turn?.status === 'open' && (
-                                                  <span className="text-[8px] text-cyan-400">●</span>
-                                                )}
-                                                {turn && turnDuration > 0 && (
-                                                  <span className="font-mono text-[9px] text-gray-500">
-                                                    {formatDuration(turnDuration)}
-                                                  </span>
-                                                )}
-                                                {tokens > 0 && (
-                                                  <span className="font-mono text-[9px] text-purple-300 bg-purple-500/10 border border-purple-500/20 px-1 rounded">
-                                                    🪙{formatTokens(tokens)}
-                                                  </span>
-                                                )}
-                                              </button>
-                                              {!turnCollapsed && group.agents.length > 0 && (
-                                                <ul>
-                                                  {group.agents.map((a) => {
-                                                    const isAgentSel =
-                                                      sel?.kind === 'agent' && sel.agentId === a.id;
-                                                    return (
-                                                      <li key={a.id}>
-                                                        <button
-                                                          onClick={() =>
-                                                            setSel({
-                                                              kind: 'agent',
-                                                              repo,
-                                                              workstreamKey: bucket.key,
-                                                              taskId: t.id,
-                                                              agentId: a.id,
-                                                            })
-                                                          }
-                                                          className={`w-full flex items-center gap-1.5 pl-20 pr-2 py-0.5 text-[11px] hover:bg-[#10101a] ${
-                                                            isAgentSel
-                                                              ? 'bg-cyan-900/30 text-cyan-200'
-                                                              : 'text-gray-400'
-                                                          }`}
-                                                        >
-                                                          <span
-                                                            className={`w-1.5 h-1.5 rounded-full ${
-                                                              AGENT_STATUS_DOT[a.status] ?? 'bg-gray-500'
-                                                            }`}
-                                                          />
-                                                          <span>{ROLE_ICON[a.role] ?? '🤖'}</span>
-                                                          <span className="truncate flex-1 text-left">
-                                                            {a.name}
-                                                          </span>
-                                                          <span className="text-[9px] text-gray-600">
-                                                            {a.logs?.length ?? 0}
-                                                          </span>
-                                                        </button>
-                                                      </li>
-                                                    );
-                                                  })}
-                                                </ul>
-                                              )}
-                                            </li>
-                                          );
-                                        });
-                                      })()}
-                                    </ul>
-                                  )}
-                                </li>
-                              );
-                            })}
-                          </ul>
-                        )}
-                      </div>
-                    );
-                  })}
-              </div>
-            );
-          })}
-        </aside>
+        <rect x="28" y="42" width="210" height="124" rx="28" fill="#f8fafc" stroke="#dbeafe" filter="url(#softShadow)" />
+        <text x="132" y="85" textAnchor="middle" fill="#0f172a" fontSize="22" fontWeight="700">
+          You ask
+        </text>
+        <text x="132" y="118" textAnchor="middle" fill="#475569" fontSize="15">
+          &quot;Build this feature&quot;
+        </text>
+        <text x="132" y="143" textAnchor="middle" fill="#64748b" fontSize="13">
+          one natural-language brief
+        </text>
 
-        {/* Right: details */}
-        <main className="flex-1 overflow-hidden flex flex-col">
-          <DetailPane sel={sel} tasks={tasks} />
-        </main>
-      </div>
+        <path d="M248 104 C310 104 318 104 380 104" stroke="#93c5fd" strokeWidth="5" strokeLinecap="round" strokeDasharray="10 14">
+          <animate attributeName="stroke-dashoffset" from="0" to="-96" dur="2.6s" repeatCount="indefinite" />
+        </path>
 
-      {deleteTarget && (
-        <ConfirmDeleteDialog
-          target={deleteTarget}
-          onClose={() => setDeleteTarget(null)}
-          onDeleted={handleDeleted}
-        />
-      )}
+        <g filter="url(#softShadow)">
+          <rect x="390" y="30" width="176" height="70" rx="22" fill="url(#agentGradient)" />
+          <rect x="390" y="125" width="176" height="70" rx="22" fill="url(#agentGradient)" opacity="0.94" />
+          <rect x="390" y="220" width="176" height="70" rx="22" fill="url(#agentGradient)" opacity="0.88" />
+          <rect x="390" y="315" width="176" height="70" rx="22" fill="url(#agentGradient)" opacity="0.82" />
+        </g>
+
+        {['PM Agent', 'Dev Agent', 'Reviewer', 'Release'].map((name, index) => (
+          <g key={name}>
+            <circle cx="422" cy={65 + index * 95} r="11" fill="#bfdbfe">
+              <animate attributeName="r" values="9;13;9" dur="2.4s" begin={`${index * 0.25}s`} repeatCount="indefinite" />
+            </circle>
+            <text x="450" y={71 + index * 95} fill="white" fontSize="18" fontWeight="700">
+              {name}
+            </text>
+          </g>
+        ))}
+
+        <path d="M575 65 C635 65 650 58 706 58" stroke="#c4b5fd" strokeWidth="5" strokeLinecap="round" strokeDasharray="9 13">
+          <animate attributeName="stroke-dashoffset" from="0" to="-88" dur="2.3s" repeatCount="indefinite" />
+        </path>
+        <path d="M575 160 C635 160 650 168 706 168" stroke="#93c5fd" strokeWidth="5" strokeLinecap="round" strokeDasharray="9 13">
+          <animate attributeName="stroke-dashoffset" from="0" to="-88" dur="2.5s" repeatCount="indefinite" />
+        </path>
+        <path d="M575 255 C635 255 650 278 706 278" stroke="#86efac" strokeWidth="5" strokeLinecap="round" strokeDasharray="9 13">
+          <animate attributeName="stroke-dashoffset" from="0" to="-88" dur="2.7s" repeatCount="indefinite" />
+        </path>
+
+        {[
+          ['Repo A', 'Feature 1', 58],
+          ['Repo B', 'Bug fix', 168],
+          ['Repo C', 'Upgrade', 278],
+        ].map(([repo, task, y], index) => (
+          <g key={repo} filter="url(#softShadow)">
+            <rect x="704" y={Number(y) - 36} width="176" height="72" rx="20" fill="#ffffff" stroke="#dbeafe" />
+            <text x="792" y={Number(y) - 5} textAnchor="middle" fill="#0f172a" fontSize="18" fontWeight="700">
+              {repo}
+            </text>
+            <text x="792" y={Number(y) + 21} textAnchor="middle" fill="#64748b" fontSize="14">
+              {task}
+            </text>
+            <circle cx="850" cy={Number(y) - 18} r="6" fill="#22c55e">
+              <animate attributeName="opacity" values="0.35;1;0.35" dur="1.8s" begin={`${index * 0.35}s`} repeatCount="indefinite" />
+            </circle>
+          </g>
+        ))}
+
+        <text x="478" y="410" textAnchor="middle" fill="#475569" fontSize="16" fontWeight="700">
+          Kubernetes keeps the agents running, isolated, and parallel.
+        </text>
+      </svg>
     </div>
   );
 }
 
-function DetailPane({ sel, tasks }: { sel: Selection | null; tasks: Task[] }) {
-  if (!sel) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-gray-500 text-sm">
-        Select a repo, workstream, request, or agent to see details.
-      </div>
-    );
-  }
-
-  if (sel.kind === 'repo') {
-    const repoTasks = tasks.filter((t) => (t.repository ?? '(no repo)') === sel.repo);
-    const isRealRepo = sel.repo !== '(no repo)';
-    return (
-      <div className="flex-1 overflow-y-auto p-6">
-        <div className="flex items-center justify-between mb-1 gap-3">
-          <h2 className="text-lg font-semibold truncate">📁 {sel.repo}</h2>
-          {isRealRepo && (
-            <Link
-              href={`/new?repo=${encodeURIComponent(sel.repo)}`}
-              className="inline-flex items-center h-7 px-3 rounded-md bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold shadow-sm transition-colors shrink-0"
-            >
-              + New workstream
-            </Link>
-          )}
-        </div>
-        <div className="text-xs text-gray-500 mb-4">{repoTasks.length} workstream(s)</div>
-        <ul className="space-y-1 text-sm">
-          {repoTasks.map((t) => {
-            const style = STATUS_STYLES[t.status];
-            return (
-              <li
-                key={t.id}
-                className="flex items-center gap-2 px-3 py-2 rounded border border-[#1a1a2e] hover:border-cyan-500/40 bg-[#0a0a12]"
-              >
-                <span className={`px-2 py-0.5 text-[10px] uppercase border rounded ${style.cls}`}>
-                  {style.label}
-                </span>
-                <span className="flex-1 truncate">{t.title}</span>
-                {t.branch && (
-                  <span className="text-[10px] text-gray-500 font-mono">⎇ {t.branch}</span>
-                )}
-                <Link
-                  href={`/task/${t.id}`}
-                  className="text-cyan-400 hover:text-cyan-300 text-xs"
-                >
-                  open →
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
-      </div>
-    );
-  }
-
-  if (sel.kind === 'workstream') {
-    const wsTasks = tasks.filter((t) => {
-      if ((t.repository ?? '(no repo)') !== sel.repo) return false;
-      if (sel.workstreamKey === UNASSIGNED_KEY) return !t.workstreamId;
-      return t.workstreamId === sel.workstreamKey;
-    });
-    return (
-      <div className="flex-1 overflow-y-auto p-6">
-        <h2 className="text-lg font-semibold mb-1">📑 {sel.repo} / workstream</h2>
-        <div className="text-xs text-gray-500 mb-4">{wsTasks.length} request(s)</div>
-        <ul className="space-y-1 text-sm">
-          {wsTasks.map((t) => {
-            const style = STATUS_STYLES[t.status];
-            return (
-              <li
-                key={t.id}
-                className="flex items-center gap-2 px-3 py-2 rounded border border-[#1a1a2e] hover:border-cyan-500/40 bg-[#0a0a12]"
-              >
-                <span className={`px-2 py-0.5 text-[10px] uppercase border rounded ${style.cls}`}>
-                  {style.label}
-                </span>
-                <span className="flex-1 truncate">{t.title}</span>
-                <Link
-                  href={`/task/${t.id}`}
-                  className="text-cyan-400 hover:text-cyan-300 text-xs"
-                >
-                  open →
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
-      </div>
-    );
-  }
-
-  const task = tasks.find((t) => t.id === sel.taskId);
-  if (!task) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-gray-500 text-sm">
-        Request not found.
-      </div>
-    );
-  }
-
-  if (sel.kind === 'task') {
-    return <TaskDetail task={task} />;
-  }
-
-  // agent
-  const agent = task.agents?.find((a) => a.id === sel.agentId);
-  if (!agent) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-gray-500 text-sm">
-        Agent not found.
-      </div>
-    );
-  }
-  return <AgentDetail task={task} agent={agent} />;
-}
-
-function TaskDetail({ task }: { task: Task }) {
-  const style = STATUS_STYLES[task.status];
-  const allLogs: AgentLogEntry[] = useMemo(() => {
-    const entries: AgentLogEntry[] = [];
-    for (const a of task.agents ?? []) {
-      for (const log of a.logs ?? []) {
-        entries.push({ ...log, message: `[${a.name}] ${log.message}` });
-      }
-    }
-    entries.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-    return entries;
-  }, [task.agents]);
-
+export default function LandingPage(): React.JSX.Element {
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="px-6 py-4 border-b border-[#1a1a2e] bg-[#0a0a12]">
-        <div className="flex items-center gap-2 mb-2">
-          <span className={`px-2 py-0.5 text-[10px] uppercase border rounded ${style.cls}`}>
-            {style.label}
-          </span>
-          <h2 className="text-lg font-semibold flex-1 truncate">{task.title}</h2>
-          <Link
-            href={`/task/${task.id}`}
-            className="text-xs px-3 py-1 bg-cyan-600 hover:bg-cyan-500 text-white rounded"
-          >
-            Open chat →
+    <main className="min-h-full bg-white font-sans text-slate-950">
+      <section className="mx-auto flex w-full max-w-7xl flex-col gap-12 px-6 py-8 sm:px-10 lg:px-12">
+        <nav className="flex items-center justify-between">
+          <Link href="/" className="flex items-center gap-3" aria-label="Liliput home">
+            <span className="flex size-11 items-center justify-center rounded-2xl bg-blue-600 text-2xl text-white shadow-lg shadow-blue-600/25">
+              🏰
+            </span>
+            <span className="text-xl font-black tracking-tight text-slate-950">Liliput</span>
           </Link>
-        </div>
-        <div className="text-xs text-gray-400 flex flex-wrap gap-x-4 gap-y-1">
-          {task.repository && <span>📁 {task.repository}</span>}
-          {task.branch && <span className="font-mono">⎇ {task.branch}</span>}
-          {task.commitSha && <span className="font-mono">{task.commitSha.substring(0, 7)}</span>}
-          {task.pullRequestUrl && (
-            <a
-              href={task.pullRequestUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="text-purple-300 hover:text-purple-200"
-            >
-              🔗 PR #{task.pullRequestNumber}
-            </a>
-          )}
-          {task.devUrl && (
-            <a
-              href={task.devUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="text-cyan-400 hover:text-cyan-300"
-            >
-              🌐 Preview
-            </a>
-          )}
-          <span>{task.agents?.length ?? 0} agent(s)</span>
-          <span>{allLogs.length} log line(s)</span>
-        </div>
-        {task.errorMessage && (
-          <div className="mt-2 text-xs text-red-300 border border-red-500/30 bg-red-500/10 rounded px-2 py-1">
-            ⚠ {task.errorMessage}
+          <Link
+            href="/dashboard"
+            className="rounded-full border border-slate-200 px-5 py-2.5 text-sm font-bold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+          >
+            Dashboard
+          </Link>
+        </nav>
+
+        <div className="grid items-center gap-12 lg:grid-cols-[0.9fr_1.1fr]">
+          <div className="space-y-8">
+            <div className="inline-flex rounded-full border border-blue-100 bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700">
+              Autonomous software delivery, at team scale
+            </div>
+            <div className="space-y-5">
+              <h1 className="max-w-4xl text-5xl font-black leading-[1.02] tracking-tight text-slate-950 sm:text-6xl lg:text-7xl">
+                Your entire Software Development department as Kubernetes agents.
+              </h1>
+              <p className="max-w-2xl text-xl leading-8 text-slate-600">
+                Liliput turns product requests into coordinated agent work: planning, coding,
+                reviewing, releasing, and reporting across many projects and many features at the
+                same time.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <Link
+                href="/dashboard"
+                className="inline-flex items-center justify-center rounded-full bg-slate-950 px-7 py-4 text-base font-black text-white shadow-xl shadow-slate-950/20 transition hover:-translate-y-0.5 hover:bg-blue-700"
+              >
+                Open Dashboard
+                <span className="ml-2" aria-hidden="true">→</span>
+              </Link>
+              <Link
+                href="/new"
+                className="inline-flex items-center justify-center rounded-full border border-slate-200 px-7 py-4 text-base font-bold text-slate-700 transition hover:-translate-y-0.5 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+              >
+                Start a workstream
+              </Link>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-3">
+              {steps.map((step, index) => (
+                <div key={step.label} className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
+                  <div className="mb-4 flex size-9 items-center justify-center rounded-full bg-white text-sm font-black text-blue-700 shadow-sm">
+                    {index + 1}
+                  </div>
+                  <h2 className="text-base font-black text-slate-950">{step.label}</h2>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">{step.text}</p>
+                </div>
+              ))}
+            </div>
           </div>
-        )}
-      </div>
-      <div className="flex-1 overflow-y-auto bg-[#06060c]">
-        <LogList logs={allLogs} emptyHint="No agent logs yet — pipeline starting…" />
-      </div>
-    </div>
-  );
-}
 
-function AgentDetail({ task, agent }: { task: Task; agent: Agent }) {
-  return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="px-6 py-4 border-b border-[#1a1a2e] bg-[#0a0a12]">
-        <div className="flex items-center gap-2 mb-1">
-          <span className="text-xl">{ROLE_ICON[agent.role] ?? '🤖'}</span>
-          <h2 className="text-lg font-semibold flex-1 truncate">{agent.name}</h2>
-          <span
-            className={`w-2 h-2 rounded-full ${AGENT_STATUS_DOT[agent.status] ?? 'bg-gray-500'}`}
-          />
-          <span className="text-xs text-gray-400">{agent.status}</span>
+          <AgentAnimation />
         </div>
-        <div className="text-xs text-gray-500 flex flex-wrap gap-x-4">
-          <span>
-            request:{' '}
-            <Link href={`/task/${task.id}`} className="text-cyan-400 hover:text-cyan-300">
-              {task.title}
-            </Link>
-          </span>
-          <span>role: {agent.role}</span>
-          <span>{agent.logs?.length ?? 0} log line(s)</span>
-        </div>
-        {agent.currentAction && (
-          <div className="text-xs text-gray-300 mt-2 italic">{agent.currentAction}</div>
-        )}
-        <div className="mt-2 h-1 bg-[#1a1a2e] rounded-full overflow-hidden">
-          <div
-            className="h-full bg-gradient-to-r from-cyan-500 to-green-500"
-            style={{ width: `${agent.progress}%` }}
-          />
-        </div>
-      </div>
-      <div className="flex-1 overflow-y-auto bg-[#06060c]">
-        <LogList logs={agent.logs ?? []} emptyHint="No logs from this agent yet." />
-      </div>
-    </div>
-  );
-}
-
-function ConfirmDeleteDialog({
-  target,
-  onClose,
-  onDeleted,
-}: {
-  target: DeleteTarget;
-  onClose: () => void;
-  onDeleted: () => void;
-}) {
-  const [preview, setPreview] = useState<DeletePreview | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setErr(null);
-    fetch(`${target.endpoint}/delete-preview`)
-      .then(async (r) => {
-        if (!r.ok) throw new Error(`Preview failed: ${r.status} ${await r.text()}`);
-        return r.json() as Promise<{ preview: DeletePreview }>;
-      })
-      .then((d) => {
-        if (!cancelled) setPreview(d.preview);
-      })
-      .catch((e: unknown) => {
-        if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [target.endpoint]);
-
-  const confirm = async () => {
-    setBusy(true);
-    setErr(null);
-    try {
-      const r = await fetch(target.endpoint, { method: 'DELETE' });
-      if (!r.ok && r.status !== 204) {
-        throw new Error(`Delete failed: ${r.status} ${await r.text()}`);
-      }
-      onDeleted();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-      <div className="w-full max-w-lg bg-[#0d0d14] border border-[#1a1a2e] rounded-lg shadow-xl">
-        <div className="px-5 py-3 border-b border-[#1a1a2e] flex items-center gap-2">
-          <span className="text-xl">⚠️</span>
-          <h3 className="text-base font-semibold text-red-300">
-            Delete {target.scope === 'repo' ? 'repo group' : target.scope}
-          </h3>
-        </div>
-        <div className="px-5 py-4 text-xs text-gray-300 space-y-3 max-h-[60vh] overflow-y-auto">
-          <p className="text-gray-400">
-            Target: <span className="text-gray-100 font-medium">{target.label}</span>
-          </p>
-          {loading && <p className="text-gray-500">Loading preview…</p>}
-          {err && (
-            <p className="text-red-400 border border-red-500/40 bg-red-500/10 rounded px-2 py-1">
-              {err}
-            </p>
-          )}
-          {preview && (
-            <>
-              <p className="text-gray-300">
-                This will <span className="text-red-300 font-medium">permanently</span> remove{' '}
-                <span className="font-mono">{preview.taskCount}</span> request(s) and the following
-                external state:
-              </p>
-              <ul className="space-y-2">
-                <PreviewSection
-                  title="Pull requests to close"
-                  empty="(none)"
-                  items={preview.pullRequests.map((p) => `${p.repository}#${p.number}`)}
-                />
-                <PreviewSection
-                  title="Branches to delete on the remote"
-                  empty="(none)"
-                  items={preview.branches.map((b) => `${b.repository} ⎇ ${b.branch}`)}
-                />
-                <PreviewSection
-                  title="Kubernetes namespaces to delete"
-                  empty="(none)"
-                  items={preview.namespaces}
-                />
-                {preview.workstreams.length > 0 && (
-                  <PreviewSection
-                    title="Workstreams to remove"
-                    empty="(none)"
-                    items={preview.workstreams.map((w) => w.name)}
-                  />
-                )}
-              </ul>
-              <p className="text-gray-500 italic">
-                The GitHub repository itself, its <span className="font-mono">main</span> branch,
-                and any branches not created by these agents are{' '}
-                <span className="font-medium">never</span> touched.
-              </p>
-            </>
-          )}
-        </div>
-        <div className="px-5 py-3 border-t border-[#1a1a2e] flex items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={busy}
-            className="px-3 py-1 text-xs text-gray-300 hover:text-white rounded border border-[#1a1a2e] hover:border-gray-500"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={() => void confirm()}
-            disabled={busy || loading || !!err}
-            className="px-3 py-1 text-xs text-white rounded bg-red-600 hover:bg-red-500 disabled:opacity-40"
-          >
-            {busy ? 'Deleting…' : 'Delete permanently'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function PreviewSection({
-  title,
-  items,
-  empty,
-}: {
-  title: string;
-  items: string[];
-  empty: string;
-}) {
-  return (
-    <li>
-      <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{title}</div>
-      {items.length === 0 ? (
-        <div className="text-gray-600 text-xs">{empty}</div>
-      ) : (
-        <ul className="ml-4 list-disc space-y-0.5 font-mono text-xs">
-          {items.map((it, i) => (
-            <li key={`${it}-${i}`}>{it}</li>
-          ))}
-        </ul>
-      )}
-    </li>
+      </section>
+    </main>
   );
 }

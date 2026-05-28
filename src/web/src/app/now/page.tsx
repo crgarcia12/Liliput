@@ -94,7 +94,7 @@ export default function NowPage() {
           <div className="text-5xl mb-4">😴</div>
           <p>No active work right now.</p>
           <Link
-            href="/"
+            href="/dashboard"
             className="inline-block mt-4 text-cyan-400 hover:text-cyan-300 text-sm"
           >
             Start a new task →

@@ -18,7 +18,8 @@ export default function LoginPage() {
 
     try {
       await login(username, password);
-      router.push('/');
+      const next = new URLSearchParams(window.location.search).get('next');
+      router.push(next && next.startsWith('/') && !next.startsWith('//') ? next : '/dashboard');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Login failed';
       setError(message);

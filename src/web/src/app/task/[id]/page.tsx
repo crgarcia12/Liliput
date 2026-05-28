@@ -524,7 +524,7 @@ export default function TaskPage() {
               <span className="leading-tight">Dev preview</span>
             </a>
             <Link
-              href="/"
+              href="/dashboard"
               className="flex flex-col items-center justify-center px-3 rounded text-xs whitespace-nowrap border bg-[#15152a] border-[#1a1a2e] text-gray-300 hover:bg-[#1a1a2e] hover:text-cyan-300"
               title="Back to workstreams list"
             >

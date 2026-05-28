@@ -24,7 +24,7 @@ export interface TopBarProps {
 }
 
 const NAV: Array<{ href: string; label: string; icon: string }> = [
-  { href: '/', label: 'Workstreams', icon: '📋' },
+  { href: '/dashboard', label: 'Workstreams', icon: '📋' },
   { href: '/now', label: 'Now', icon: '⏱' },
   { href: '/dev-environments', label: 'Dev envs', icon: '☁️' },
   { href: '/verdicts', label: 'Verdicts', icon: '⚖️' },
@@ -34,14 +34,14 @@ const NAV: Array<{ href: string; label: string; icon: string }> = [
 export default function TopBar({ subtitle, connected, extras, hideNewCta }: TopBarProps) {
   const pathname = usePathname();
   const isActive = (href: string) =>
-    href === '/' ? pathname === '/' : pathname?.startsWith(href);
+    pathname === href || pathname?.startsWith(`${href}/`);
 
   return (
     <header className="border-b border-[#1a1a2e] bg-[#0d0d14]">
       {/* Single compact row: brand · nav pills · extras · connection · CTA */}
       <div className="flex items-center gap-2 px-4 py-2">
         <Link
-          href="/"
+          href="/dashboard"
           className="flex items-center gap-2 mr-3 shrink-0"
           title="Liliput home"
         >

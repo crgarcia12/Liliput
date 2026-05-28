@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { usePathname } from 'next/navigation';
 
 /**
  * Bump this manually when you want to confirm a frontend deploy reached production.
@@ -20,6 +21,7 @@ export const FRONTEND_VERSION = '0.0.86';
  * component zero-dependency and per-page-agnostic.
  */
 export default function VersionFooter() {
+  const pathname = usePathname();
   const [backend, setBackend] = useState<string>('…');
   const [env, setEnv] = useState<string>('');
   // `null` = no socket on this page; true/false = explicit state.
@@ -66,6 +68,8 @@ export default function VersionFooter() {
     env === 'PROD' ? 'text-red-300' :
     'text-gray-400';
 
+  if (pathname === '/') return null;
+
   return (
     <footer
       className="shrink-0 h-6 flex items-center justify-between px-3 border-t border-[#1a1a2e] bg-[#0d0d14] font-mono text-[10px] text-gray-500 select-none"
@@ -87,4 +91,3 @@ export default function VersionFooter() {
     </footer>
   );
 }
-
