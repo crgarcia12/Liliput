@@ -165,6 +165,18 @@ func (m *tasksModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.all = msg.tasks
 		m.applyFilter()
 		return m, nil
+	case tea.MouseMsg:
+		if m.confirmDelete || m.filtering || msg.Action != tea.MouseActionPress {
+			return m, nil
+		}
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			m.tbl.MoveUp(3)
+			return m, nil
+		case tea.MouseButtonWheelDown:
+			m.tbl.MoveDown(3)
+			return m, nil
+		}
 	case tea.KeyMsg:
 		if m.confirmDelete {
 			switch msg.String() {

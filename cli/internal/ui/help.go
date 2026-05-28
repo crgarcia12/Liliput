@@ -9,7 +9,7 @@ import (
 func renderHelp(width, height int) string {
 	rows := [][2]string{
 		{"Tasks list", ""},
-		{"  ↑/↓ or j/k", "navigate"},
+		{"  ↑/↓, j/k, wheel", "navigate"},
 		{"  Enter", "open task detail"},
 		{"  n", "new task"},
 		{"  d", "delete task (asks y/n)"},
@@ -21,6 +21,7 @@ func renderHelp(width, height int) string {
 		{"", ""},
 		{"Task detail", ""},
 		{"  Tab", "cycle focus: agents → activity → chat → input"},
+		{"  ↑/↓, j/k, wheel", "scroll focused pane"},
 		{"  i", "focus chat input"},
 		{"  Enter (in input)", "send message"},
 		{"  Esc (in input)", "leave input"},

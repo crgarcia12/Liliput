@@ -22,9 +22,17 @@ type HTTP struct {
 
 func New(baseURL string) *HTTP {
 	return &HTTP{
-		baseURL: strings.TrimRight(baseURL, "/"),
+		baseURL: normalizeBaseURL(baseURL),
 		hc:      &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+func normalizeBaseURL(baseURL string) string {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL != "" && !strings.Contains(baseURL, "://") {
+		baseURL = "https://" + baseURL
+	}
+	return baseURL
 }
 
 func (c *HTTP) BaseURL() string { return c.baseURL }

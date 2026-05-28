@@ -26,19 +26,19 @@ const (
 )
 
 type detailModel struct {
-	api      *client.HTTP
-	socket   *client.Socket
-	cancel   context.CancelFunc
+	api           *client.HTTP
+	socket        *client.Socket
+	cancel        context.CancelFunc
 	width, height int
 
 	taskID string
 	task   *client.Task
 
 	// live state, indexed by agentId
-	agents       map[string]*client.Agent
-	agentsOrder  []string
-	activity     []string
-	chat         []client.ChatMessage
+	agents      map[string]*client.Agent
+	agentsOrder []string
+	activity    []string
+	chat        []client.ChatMessage
 
 	// scrollable views
 	agentsVP   viewport.Model
@@ -242,23 +242,27 @@ func (m *detailModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "l":
 			return m, m.fetchLogs()
 		}
-		// scroll the focused pane
-		switch m.focus {
-		case focusAgents:
-			var cmd tea.Cmd
-			m.agentsVP, cmd = m.agentsVP.Update(msg)
-			return m, cmd
-		case focusActivity:
-			var cmd tea.Cmd
-			m.activityVP, cmd = m.activityVP.Update(msg)
-			return m, cmd
-		case focusChat:
-			var cmd tea.Cmd
-			m.chatVP, cmd = m.chatVP.Update(msg)
-			return m, cmd
+		return m, m.updateFocusedViewport(msg)
+	case tea.MouseMsg:
+		if m.focus == focusInput {
+			return m, nil
 		}
+		return m, m.updateFocusedViewport(msg)
 	}
 	return m, nil
+}
+
+func (m *detailModel) updateFocusedViewport(msg tea.Msg) tea.Cmd {
+	var cmd tea.Cmd
+	switch m.focus {
+	case focusAgents:
+		m.agentsVP, cmd = m.agentsVP.Update(msg)
+	case focusActivity:
+		m.activityVP, cmd = m.activityVP.Update(msg)
+	case focusChat:
+		m.chatVP, cmd = m.chatVP.Update(msg)
+	}
+	return cmd
 }
 
 func (m *detailModel) handleSocketEvent(ev client.SocketEvent) {
@@ -541,7 +545,7 @@ func (m *detailModel) fetchLogs() tea.Cmd {
 
 func (m *detailModel) View() string {
 	if m.task == nil {
-		return panelStyle.Width(m.width-2).Render("loading task…")
+		return panelStyle.Width(m.width - 2).Render("loading task…")
 	}
 	t := m.task
 

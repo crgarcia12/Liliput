@@ -14,7 +14,8 @@ import (
 	"github.com/crgarcia12/liliput/cli/internal/ui"
 )
 
-const version = "0.1.0"
+// Bump this manually when you want to confirm a CLI install was rebuilt from current source.
+const cliVersion = "0.0.87"
 
 const defaultServer = "https://liliput.crgarcia.com.ar"
 
@@ -40,7 +41,7 @@ func main() {
 	flag.Parse()
 
 	if showVersion {
-		fmt.Printf("liliput %s\n", version)
+		fmt.Printf("liliput CLI %s\n", cliVersion)
 		return
 	}
 
@@ -104,7 +105,7 @@ func main() {
 		}
 	}
 
-	app := ui.NewApp(api, version)
+	app := ui.NewApp(api, cliVersion)
 
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {

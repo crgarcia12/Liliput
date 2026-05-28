@@ -191,7 +191,7 @@ func (a *App) View() string {
 
 func (a *App) renderHeader() string {
 	left := titleStyle.Render(" Liliput ")
-	mid := dimStyle.Render(fmt.Sprintf(" %s · v%s ", a.api.BaseURL(), a.version))
+	mid := dimStyle.Render(fmt.Sprintf(" %s · CLI %s ", a.api.BaseURL(), a.version))
 	right := authIndicator(a.auth.OK)
 	gap := a.width - lipgloss.Width(left) - lipgloss.Width(mid) - lipgloss.Width(right) - 2
 	if gap < 1 {
@@ -207,12 +207,12 @@ func (a *App) renderFooter() string {
 	var hints string
 	switch a.screen {
 	case screenTasks:
-		hints = "↑/↓ navigate · enter open · n new · d delete · s ship · x discard · / filter · r refresh · ? help · q quit"
+		hints = "↑/↓/wheel navigate · enter open · n new · d delete · s ship · x discard · / filter · r refresh · ? help · q quit"
 	case screenDetail:
 		if a.detail != nil && a.detail.InputFocused() {
 			hints = "enter send · esc leave input"
 		} else {
-			hints = "tab focus · i input · o open · a approve · s ship · x discard · l logs · q back"
+			hints = "tab focus · ↑/↓/wheel scroll · i input · o open · a approve · s ship · x discard · l logs · q back"
 		}
 	case screenNewTask:
 		hints = "tab next field · enter submit · esc cancel"
