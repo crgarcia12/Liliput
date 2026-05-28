@@ -1,9 +1,5 @@
 # Liliput
 
-**Describe a software change in plain English. Liliput's agents — the "Liliputians" — clone your repo, write the code, build it, deploy a preview, and open a pull request. Watch every tool call live and steer the agent mid-flight by chatting.**
-
-> Live: **https://liliput.crgarcia.com.ar** · DEV: **https://dev.liliput.crgarcia.com.ar**
-
 ![Liliput home](docs/screenshots/home.png)
 
 ---
