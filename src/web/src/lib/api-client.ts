@@ -59,8 +59,9 @@ async function apiFetch(
     headers,
   });
 
-  // Redirect to login on 401
-  if (response.status === 401) {
+  // Redirect authenticated API calls to login on 401. Public calls such as
+  // /api/login need to surface their own 401 response to the caller.
+  if (includeAuth && response.status === 401) {
     clearToken();
     if (typeof window !== 'undefined') {
       window.location.href = '/login';
