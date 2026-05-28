@@ -1,39 +1,44 @@
 # Liliput
 
-**Liliput is a control room for software-change agents.** Give it a GitHub
-repo and a plain-English task; it spins up a "Liliputian" agent that clones the
-repo, follows that repo's instructions, edits code, runs checks, pushes a
-branch, deploys a preview, and hands you a pull request you can steer live.
+**Liliput is a tiny software civilization.** Inside it, specialized agents run
+an end-to-end software development factory: they turn product intent into
+tasks, clone repositories, understand local instructions, write code, test it,
+review it, deploy previews, iterate on failures, and prepare pull requests for
+humans to ship. A Liliputian is not just a chatbot with a file editor; it is a
+worker in a miniature engineering world where planning, implementation,
+verification, release management, and operational feedback all happen in one
+observable loop.
 
-Live: <https://liliput.crgarcia.com.ar><br>
-DEV: <https://dev.liliput.crgarcia.com.ar>
-
-![Liliput home](docs/screenshots/home.png)
+Describe the application you want, the bug you need fixed, or the change you
+want shipped. Liliput can coordinate the work from idea to running software,
+including tests and preview deployments, while you watch the factory floor in
+real time.
 
 ```mermaid
 flowchart LR
     Idea["You: 'add billing export'"]
-    Portal["Liliput portal<br/>or CLI TUI"]
-    Agent["Liliputian<br/>Copilot SDK session"]
-    Repo["Target repo clone<br/>/data/workspaces/task-*"]
-    Preview["AKS preview<br/>/dev/owner/repo/branch"]
-    PR["GitHub PR"]
+    Portal["Factory control room<br/>web or CLI"]
+    PM["PM agent<br/>turns intent into tasks"]
+    Dev["Dev agent<br/>writes code + tests"]
+    Reviewer["Reviewer / RM agent<br/>checks the work"]
+    Preview["Preview environment"]
+    PR["Pull request"]
 
-    Idea --> Portal --> Agent --> Repo
-    Agent --> Preview
-    Agent --> PR
+    Idea --> Portal --> PM --> Dev --> Reviewer
+    Dev --> Preview
+    Reviewer --> PR
     Preview --> Portal
     PR --> Portal
 ```
 
-The unusual part is not "an AI edits files." The unusual part is that every
-turn is observable: tool calls, reasoning summaries, model settings, token
-usage, build logs, preview URLs, chat interrupts, and reviewer feedback are all
-stored and shown back to the operator.
+The wow factor is the factory: every agent turn is observable, every tool call
+is streamed, every model setting is captured, every test or deployment failure
+can feed the next iteration, and every task leaves an auditable trail from
+request to review.
 
 ## The 60-second product tour
 
-1. Open `/` for the friendly landing page.
+1. Open the portal for the friendly landing page.
 2. Click **Dashboard** and sign in.
 3. Create a task against a GitHub repo.
 4. Watch the Liliputian stream activity while it reads, edits, builds, and
@@ -60,7 +65,7 @@ first review point.
 ### Install dependencies
 
 ```powershell
-git clone https://github.com/crgarcia12/Liliput.git
+# Clone the repository using your approved internal Git remote.
 Set-Location Liliput
 
 npm ci
@@ -81,11 +86,11 @@ npm run dev:all
 
 Open:
 
-| URL | What it is |
+| Local surface | What it is |
 | --- | --- |
-| <http://localhost:3000> | Public landing page |
-| <http://localhost:3000/dashboard> | Authenticated dashboard |
-| <http://localhost:5001/api/health> | API health endpoint |
+| Web port `3000`, path `/` | Public landing page |
+| Web port `3000`, path `/dashboard` | Authenticated dashboard |
+| API port `5001`, path `/api/health` | API health endpoint |
 
 The first local boot seeds an `admin` user. If `DEFAULT_ADMIN_PASSWORD` is set,
 that value is used. If it is not set, the API generates a password and prints it
@@ -200,9 +205,9 @@ Important consequences:
 Install on Windows with Scoop:
 
 ```powershell
-scoop bucket add liliput https://github.com/crgarcia12/Liliput
+scoop bucket add liliput <approved-liliput-bucket>
 scoop install liliput
-liliput --server https://dev.liliput.crgarcia.com.ar --login
+liliput --server <approved-liliput-server> --login
 ```
 
 Build from source:
@@ -210,7 +215,7 @@ Build from source:
 ```powershell
 Set-Location cli
 go build -o liliput.exe .\cmd\liliput
-.\liliput.exe --server http://localhost:5001 --login
+.\liliput.exe --server <local-api-server> --login
 ```
 
 Common keys:
@@ -229,7 +234,7 @@ Common keys:
 | `?` | Help |
 | `q` | Back / quit |
 
-See [`cli/README.md`](cli/README.md) for deeper CLI development notes.
+See `cli/README.md` for deeper CLI development notes.
 
 ## Common development paths
 
@@ -284,7 +289,7 @@ GitHub Actions secrets in hosted environments.
 | `COPILOT_MODEL` | Default coding model for agent turns |
 | `COPILOT_REVIEWER_MODEL` | Default model for reviewer turns |
 | `ACR_NAME` | ACR used for preview images |
-| `LILIPUT_PUBLIC_URL` | Public base URL used in generated links |
+| `LILIPUT_PUBLIC_URL` | Public base URL used in generated navigation |
 | `LILIPUT_NAMESPACE` | Kubernetes namespace the API manages |
 | `LILIPUT_RECONCILER_ENABLED` | Enables issue/PR polling fallback |
 | `AUTOPILOT_DECOMPOSE` | Enables workstream feature decomposition |
@@ -298,8 +303,8 @@ DEV is deployed by the manual GitHub Actions workflow:
 ```
 
 It builds API and Web images in Azure Container Registry, renders
-`k8s/liliput.yaml`, applies it to the `liliput-dev` namespace, and exposes it at
-<https://dev.liliput.crgarcia.com.ar> through ingress-nginx.
+`k8s/liliput.yaml`, applies it to the `liliput-dev` namespace, and exposes it
+through ingress-nginx.
 
 Production uses the same manifest shape in the `liliput` namespace. Both
 environments keep state in a PVC-backed SQLite database and route through the
@@ -341,7 +346,7 @@ are the durable state machine.
 | Login says invalid credentials | Password in SQLite does not match | Check first-boot logs or reset the local DB |
 | GitHub repo list or PR creation fails | Bad or missing GitHub token | Verify `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` |
 | Agent can edit but preview deploy fails | Azure/AKS/ACR auth or manifest issue | API logs and `kubectl describe pod` in preview namespace |
-| Web cannot reach API locally | Wrong API base URL | Next rewrite defaults `/api/*` to `http://localhost:5001` |
+| Web cannot reach API locally | Wrong API base URL | Next rewrite defaults `/api/*` to the API on local port `5001` |
 | A task is stuck after a pod restart | In-flight SDK call was killed | Retry or resume; DB/workspace state should still exist |
 
 ## Design principles
@@ -354,4 +359,4 @@ are the durable state machine.
 
 ## License
 
-[ISC](LICENSE)
+ISC. See the repository license file.
