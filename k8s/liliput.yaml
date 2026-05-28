@@ -132,6 +132,13 @@ data:
         # === LILIPUT-DEV-ENVS-BEGIN ===
         # === LILIPUT-DEV-ENVS-END ===
 
+        # Public landing page. All operational pages remain protected below.
+        location = / {
+          proxy_pass http://web;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+        }
+
         # Public login page
         location = /login {
           proxy_pass http://web;
@@ -156,10 +163,15 @@ data:
         # Everything else → web and requires an authenticated session.
         location / {
           auth_request /__liliput_auth_check;
-          error_page 401 =302 /login;
+          error_page 401 = @login_redirect;
           proxy_pass http://web;
           proxy_set_header Host $host;
           proxy_set_header X-Real-IP $remote_addr;
+        }
+
+        location @login_redirect {
+          absolute_redirect off;
+          return 302 /login;
         }
       }
     }
