@@ -101,7 +101,18 @@ export interface ReviewContextDeploy {
   validationOutcome?: 'healthy' | 'exhausted';
 }
 
-export type ReviewContext = ReviewContextSpec | ReviewContextCoder | ReviewContextDeploy;
+export type ReviewContext = ReviewContextSpec | ReviewContextCoder | ReviewContextDeploy | ReviewContextPlan;
+
+export interface ReviewContextPlan {
+  kind: 'plan';
+  /** Repository the task targets (e.g. "owner/repo"). Optional. */
+  repository?: string;
+  taskTitle: string;
+  /** The (possibly rewritten) request the plan is meant to satisfy. */
+  taskDescription: string;
+  /** The Architect's implementation plan markdown the critic should critique. */
+  plan: string;
+}
 
 export interface ReviewResult {
   /** Parsed feedback. Null when the reviewer said NO-FEEDBACK or when the
@@ -294,6 +305,40 @@ function buildDeployPrompt(ctx: ReviewContextDeploy): string {
     .join('\n');
 }
 
+function buildPlanPrompt(ctx: ReviewContextPlan): string {
+  return [
+    buildSystemPreamble(),
+    '',
+    '---',
+    '',
+    '## What you are reviewing now: **the implementation plan**',
+    '',
+    `Target repository: ${ctx.repository ?? '(none specified)'}`,
+    `Task title: ${ctx.taskTitle}`,
+    '',
+    '### User request',
+    '',
+    ctx.taskDescription,
+    '',
+    '### Proposed implementation plan',
+    '',
+    '```markdown',
+    ctx.plan,
+    '```',
+    '',
+    'Critique the plan BEFORE any code is written. Important things to look for:',
+    '  - Steps that miss a major requirement from the user request',
+    '  - A sequencing/dependency mistake that will cause rework',
+    '  - An approach that fights the existing repo conventions or is needlessly risky',
+    '  - Security / data-handling concerns the plan ignores',
+    '  - Missing test or verification steps for the core behavior',
+    '',
+    'Reply with `NO-FEEDBACK` or `FEEDBACK\\n- …` per the format above.',
+  ]
+    .filter((s) => s !== '')
+    .join('\n');
+}
+
 /** Parse the reviewer's reply. Lenient on whitespace and case but strict on
  *  the first-line token so positive boilerplate ("Looks good — NO-FEEDBACK")
  *  doesn't get mis-parsed. */
@@ -323,6 +368,8 @@ export function buildReviewPrompt(ctx: ReviewContext): string {
       return buildCoderPrompt(ctx);
     case 'deploy':
       return buildDeployPrompt(ctx);
+    case 'plan':
+      return buildPlanPrompt(ctx);
   }
 }
 

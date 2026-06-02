@@ -7,6 +7,7 @@ import dynamic from 'next/dynamic';
 import Terminal from '../../../components/Terminal';
 import AgentPanel from '../../../components/AgentPanel';
 import ActivityLog from '../../../components/ActivityLog';
+import AgentPipeline from '../../../components/AgentPipeline';
 import TurnList from '../../../components/TurnList';
 import PhaseStepper from '../../../components/PhaseStepper';
 import ResizableSplit from '../../../components/ResizableSplit';
@@ -33,7 +34,7 @@ export default function TaskPage() {
   const params = useParams();
   const taskId = params.id as string;
 
-  const { connected, agentEvents, chatMessages: socketMessages, activity, joinTask, leaveTask } =
+  const { connected, agentEvents, chatMessages: socketMessages, activity, pipeline: livePipeline, joinTask, leaveTask } =
     useSocket();
   const { getTask, sendMessage, shipTask, discardTask, setTaskModel, setTaskReasoningEffort } = useTasks();
 
@@ -660,8 +661,11 @@ export default function TaskPage() {
             </div>
           }
           center={
-            <div className="h-full px-1.5">
-              <ActivityLog entries={taskActivity} title="Live Activity" />
+            <div className="h-full px-1.5 flex flex-col gap-2 min-h-0">
+              <AgentPipeline pipeline={livePipeline ?? task?.pipeline ?? null} />
+              <div className="flex-1 min-h-0">
+                <ActivityLog entries={taskActivity} title="Live Activity" />
+              </div>
             </div>
           }
           right={

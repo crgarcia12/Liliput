@@ -19,7 +19,14 @@
 import type { Server as SocketServer } from 'socket.io';
 import { promises as fs } from 'fs';
 import * as path from 'path';
-import type { AgentRole, Task } from '../../../shared/types/index.js';
+import { randomUUID } from 'node:crypto';
+import type {
+  AgentRole,
+  Task,
+  PipelineStage,
+  PipelineStageStatus,
+  PipelineState,
+} from '../../../shared/types/index.js';
 import * as store from '../stores/task-store.js';
 import * as turnStore from '../stores/turn-store.js';
 import { logger } from '../logger.js';
@@ -63,6 +70,13 @@ import { latestVerdictForTask } from '../stores/verdict-store.js';
 import { recordAndDecide as recordStuck, resetStuckHistory } from './stuck-detector.js';
 import { runGherkinChecks } from './gherkin-runner.js';
 import { triggerPipelineReview, consumeReviewerFeedbackForCoder } from './reviewer-trigger.js';
+import {
+  rewriteRequest,
+  generatePlan,
+  critiquePlan,
+  composePlanningContext,
+  type StageConfig,
+} from './pipeline-stages.js';
 
 const ACR_NAME = process.env['ACR_NAME'] ?? '';
 const PUBLIC_BASE_URL = process.env['LILIPUT_PUBLIC_URL'] ?? 'https://liliput.crgarcia.com.ar';
@@ -786,6 +800,190 @@ function setTaskStatus(
 function chatStatus(io: SocketServer, taskId: string, text: string): void {
   const msg = store.addChatMessage(taskId, 'liliput', text);
   if (msg) io.to(`task:${taskId}`).emit('chat:message', msg);
+}
+
+// ─── Multi-agent pipeline state ───────────────────────────────
+
+const PIPELINE_KEYS: PipelineStage[] = ['rewrite', 'plan', 'critique', 'implement', 'review'];
+
+function emptyPipelineStages(): Record<PipelineStage, PipelineStageStatus> {
+  return {
+    rewrite: 'pending',
+    plan: 'pending',
+    critique: 'pending',
+    implement: 'pending',
+    review: 'pending',
+  };
+}
+
+function emitPipeline(io: SocketServer, taskId: string, state: PipelineState): void {
+  io.to(`task:${taskId}`).emit('pipeline:stage', {
+    taskId,
+    runId: state.runId,
+    activeStage: state.activeStage,
+    stages: state.stages,
+    timestamp: state.updatedAt,
+  });
+}
+
+/** Start a fresh pipeline run — resets all stages to pending and emits. */
+function initPipeline(io: SocketServer, taskId: string): PipelineState {
+  const ts = new Date().toISOString();
+  const state: PipelineState = {
+    runId: randomUUID(),
+    stages: emptyPipelineStages(),
+    startedAt: ts,
+    updatedAt: ts,
+  };
+  store.updateTask(taskId, { pipeline: state });
+  emitPipeline(io, taskId, state);
+  return state;
+}
+
+/** Transition a pipeline stage to a new status, persist, and emit. Never throws. */
+function setPipelineStage(
+  io: SocketServer,
+  taskId: string,
+  stage: PipelineStage,
+  status: PipelineStageStatus,
+  extra: { rewrittenPrompt?: string; plan?: string } = {},
+): void {
+  try {
+    const task = store.getTask(taskId);
+    const ts = new Date().toISOString();
+    const base: PipelineState =
+      task?.pipeline ?? {
+        runId: randomUUID(),
+        stages: emptyPipelineStages(),
+        startedAt: ts,
+        updatedAt: ts,
+      };
+    const stages = { ...emptyPipelineStages(), ...base.stages, [stage]: status };
+    const activeStage =
+      status === 'active'
+        ? stage
+        : base.activeStage === stage
+          ? undefined
+          : base.activeStage;
+    const next: PipelineState = {
+      ...base,
+      stages,
+      ...(activeStage ? { activeStage } : { activeStage: undefined }),
+      ...(extra.rewrittenPrompt !== undefined ? { rewrittenPrompt: extra.rewrittenPrompt } : {}),
+      ...(extra.plan !== undefined ? { plan: extra.plan } : {}),
+      updatedAt: ts,
+    };
+    store.updateTask(taskId, { pipeline: next });
+    emitPipeline(io, taskId, next);
+  } catch (err) {
+    logger.warn(
+      { taskId, stage, status, err: err instanceof Error ? err.message : String(err) },
+      'setPipelineStage failed (non-fatal)',
+    );
+  }
+}
+
+void PIPELINE_KEYS;
+
+/**
+ * Run the three preflight stages — Rewrite → Plan → Critique — and return the
+ * composed planning context to inject into the coder turn. Every stage is
+ * bounded and non-fatal: failures degrade gracefully (rewrite → original,
+ * plan → skipped, critique → no feedback) and never break the build.
+ */
+async function runPreflightStages(
+  io: SocketServer,
+  taskId: string,
+  task: Task,
+  repo: string,
+  opts?: { requestTitle?: string; requestText?: string },
+): Promise<{ planningContext: string; effectiveRequest: string }> {
+  const cfg: StageConfig = {
+    ...(task.model ? { model: task.model } : {}),
+    ...(task.reasoningEffort ? { reasoningEffort: task.reasoningEffort } : {}),
+    repository: repo,
+  };
+
+  // For follow-up iterations the "request" is the chat message, not the
+  // original task description. Callers pass it via `opts`; otherwise we fall
+  // back to the task's own title/description (initial pipeline).
+  const requestTitle = opts?.requestTitle ?? task.title;
+  const requestText = opts?.requestText ?? task.description;
+
+  // ── Rewrite ──
+  let effectiveRequest = requestText;
+  let rewrittenPrompt: string | undefined;
+  const rewriter = spawnPhase(io, taskId, 'rewriter', 'Rewriter Liliputian');
+  setPipelineStage(io, taskId, 'rewrite', 'active');
+  try {
+    const rw = await rewriteRequest(requestTitle, requestText, cfg);
+    if (rw.ran && rw.rewritten.trim() && rw.rewritten.trim() !== requestText.trim()) {
+      effectiveRequest = rw.rewritten;
+      rewrittenPrompt = rw.rewritten;
+      if (rewriter) logPhase(io, taskId, rewriter, 'info', `Rewrote request for clarity:\n${rw.rewritten}`);
+    } else if (rewriter) {
+      logPhase(io, taskId, rewriter, 'info', 'Request is already clear — no rewrite needed.');
+    }
+  } catch (err) {
+    if (rewriter)
+      logPhase(io, taskId, rewriter, 'warn', `Rewrite skipped: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (rewriter) completePhase(io, taskId, rewriter);
+  setPipelineStage(io, taskId, 'rewrite', 'done', rewrittenPrompt ? { rewrittenPrompt } : {});
+
+  // ── Plan ──
+  const architect = spawnPhase(io, taskId, 'architect', 'Architect Liliputian');
+  setPipelineStage(io, taskId, 'plan', 'active');
+  let planMd: string | null = null;
+  try {
+    const pr = await generatePlan(task.title, effectiveRequest, cfg, task.spec);
+    planMd = pr.plan;
+  } catch (err) {
+    if (architect)
+      logPhase(io, taskId, architect, 'warn', `Plan skipped: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (architect) {
+    if (planMd) logPhase(io, taskId, architect, 'info', `Drafted plan:\n${planMd}`);
+    else logPhase(io, taskId, architect, 'info', 'No plan generated — proceeding without one.');
+    completePhase(io, taskId, architect);
+  }
+  setPipelineStage(io, taskId, 'plan', planMd ? 'done' : 'skipped', planMd ? { plan: planMd } : {});
+
+  // ── Critique ──
+  let critiqueFeedback: string | null = null;
+  if (planMd) {
+    const critic = spawnPhase(io, taskId, 'critic', 'Critic Liliputian');
+    setPipelineStage(io, taskId, 'critique', 'active');
+    try {
+      const cr = await critiquePlan(task.title, effectiveRequest, planMd, cfg);
+      critiqueFeedback = cr.feedback;
+      if (critic) {
+        if (critiqueFeedback) logPhase(io, taskId, critic, 'info', `Critique of the plan:\n${critiqueFeedback}`);
+        else
+          logPhase(
+            io,
+            taskId,
+            critic,
+            'info',
+            cr.ran ? 'Plan looks solid — no blocking concerns.' : 'Critic unavailable — skipping.',
+          );
+      }
+    } catch (err) {
+      if (critic)
+        logPhase(io, taskId, critic, 'warn', `Critique skipped: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (critic) completePhase(io, taskId, critic);
+    setPipelineStage(io, taskId, 'critique', 'done');
+  } else {
+    setPipelineStage(io, taskId, 'critique', 'skipped');
+  }
+
+  const planningContext = composePlanningContext({
+    ...(rewrittenPrompt ? { rewritten: rewrittenPrompt } : {}),
+    plan: planMd,
+    critique: critiqueFeedback,
+  });
+  return { planningContext, effectiveRequest };
 }
 
 /**
@@ -2028,18 +2226,18 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   const baseBranch = task.baseBranch ?? 'main';
   const branch = `liliput/task-${taskId.substring(0, 8)}`;
 
-  // Architect
-  const architect = spawnPhase(io, taskId, 'architect', 'Architect Liliputian');
-  if (architect) {
-    logPhase(io, taskId, architect, 'info', `Target repo: ${repo}@${baseBranch}`);
-    logPhase(io, taskId, architect, 'info', `Working branch: ${branch}`);
-    logPhase(io, taskId, architect, 'info', `Commit mode: ${task.commitMode ?? 'pr'}`);
-    completePhase(io, taskId, architect);
-  }
+  // ── Pipeline preflight: Rewrite → Plan → Critique ──
+  // These three bounded, non-fatal stages give every request the visible
+  // multi-agent flow before the heavy clone/coder work begins. The composed
+  // planning context is injected into the coder turn below.
+  initPipeline(io, taskId);
+  const { planningContext } = await runPreflightStages(io, taskId, task, repo);
 
-  // Coder
+  // Coder (implement stage)
   const coder = spawnPhase(io, taskId, 'coder', 'Coder Liliputian');
   if (!coder) throw new Error('Failed to register coder agent');
+  setPipelineStage(io, taskId, 'implement', 'active');
+  logPhase(io, taskId, coder, 'info', `Commit mode: ${task.commitMode ?? 'pr'}`);
 
   logPhase(io, taskId, coder, 'info', `Cloning ${repo}…`, `git clone ${repo}`);
   const handle = await git.clone({
@@ -2173,6 +2371,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
       isInitial: true,
       liliputContext: { pathPrefix },
       reviewerFeedback: consumeReviewerFeedbackForCoder(io, taskId) ?? undefined,
+      ...(planningContext ? { planningContext } : {}),
       onLog: (level, msg, cmd, out) => {
         hb.bump();
         logPhase(io, taskId, coder, level, msg, cmd, out);
@@ -2234,6 +2433,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   // doesn't show two agents running side-by-side. The builder's work is
   // strictly sequential after this point.
   completePhase(io, taskId, coder);
+  setPipelineStage(io, taskId, 'implement', 'done');
 
   // Builder
   const builder = spawnPhase(io, taskId, 'builder', 'Builder Liliputian');
@@ -2407,6 +2607,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   // Auto-open a draft PR right after deploy so the user can see it from the UI
   // during review. Ship marks it ready (or merges in direct mode); Discard closes it.
   const reviewer = spawnPhase(io, taskId, 'reviewer', 'Reviewer Liliputian');
+  setPipelineStage(io, taskId, 'review', 'active');
   let prUrl: string | undefined;
   let prNumber: number | undefined;
   if (reviewer && task.repository && task.branch) {
@@ -2527,6 +2728,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
     ...(prUrl ? { pullRequestUrl: prUrl } : {}),
     ...(prNumber !== undefined ? { pullRequestNumber: prNumber } : {}),
   });
+  setPipelineStage(io, taskId, 'review', 'done');
 }
 
 export async function shipTask(io: SocketServer, taskId: string): Promise<Task> {
@@ -2959,6 +3161,17 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
     return;
   }
 
+  // Multi-agent pipeline (follow-up path): run the bounded, non-fatal
+  // rewrite → plan → critique preflight on the user's follow-up message, then
+  // feed the distilled planning context into the coder turn. Pure rebuild
+  // commands returned above, so they correctly skip these LLM stages.
+  initPipeline(io, taskId);
+  const { planningContext } = await runPreflightStages(io, taskId, task, live.repo, {
+    requestTitle: task.title,
+    requestText: message,
+  });
+  setPipelineStage(io, taskId, 'implement', 'active');
+
   chatStatus(io, taskId, `🛠️  Coder Liliputian is reading your message and editing files — this can take a few minutes…`);
   logPhase(io, taskId, coder, 'info', `Iteration: ${message.substring(0, 200)}`);
 
@@ -2979,6 +3192,7 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
       spec: task.spec,
       followUp: message,
       isInitial: false,
+      ...(planningContext ? { planningContext } : {}),
       liliputContext: { pathPrefix: live.pathPrefix, port: live.port },
       recap,
       reviewerFeedback: consumeReviewerFeedbackForCoder(io, taskId) ?? undefined,
@@ -3021,6 +3235,8 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   if (changed.length === 0 && !wantsRebuild) {
     logPhase(io, taskId, coder, 'info', 'No file changes this turn — staying on previous commit.');
     completePhase(io, taskId, coder);
+    setPipelineStage(io, taskId, 'implement', 'done');
+    setPipelineStage(io, taskId, 'review', 'skipped');
     setTaskStatus(io, taskId, 'review');
     const sysMsg = store.addChatMessage(
       taskId,
@@ -3074,6 +3290,7 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   // doesn't show two agents running side-by-side during the (sequential)
   // build phase.
   completePhase(io, taskId, coder);
+  setPipelineStage(io, taskId, 'implement', 'done');
 
   // Commit + push delta.
   const builder = spawnPhase(io, taskId, 'builder', 'Builder Liliputian');
@@ -3228,6 +3445,7 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   // Reviewer Agent: post-iteration review. Inspects the latest changes plus
   // the validation outcome, posts feedback to chat only if it spots something
   // important. Queued feedback is picked up by the next coder turn.
+  setPipelineStage(io, taskId, 'review', 'active');
   try {
     await triggerPipelineReview(io, taskId, {
       workspaceRoot: live.repoHandle.cwd,
@@ -3244,6 +3462,7 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
 
   // Flip back to 'review' after validate (loop already posted the appropriate
   // healthy/exhausted chat message).
+  setPipelineStage(io, taskId, 'review', 'done');
   setTaskStatus(io, taskId, 'review', { devUrl, devNamespace: live.namespace, devPort: live.port, devEnvState: 'active' });
 }
 

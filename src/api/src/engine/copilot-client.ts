@@ -6,6 +6,15 @@ let clientPromise: Promise<CopilotClient> | undefined;
 let modelsCache: { fetchedAt: number; models: ModelOption[] } | undefined;
 const MODELS_CACHE_TTL_MS = 5 * 60_000;
 
+function getSdkGitHubToken(): string | undefined {
+  const token =
+    process.env['COPILOT_GITHUB_TOKEN'] ??
+    process.env['GH_TOKEN'] ??
+    process.env['GITHUB_TOKEN'];
+  const trimmed = token?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 /**
  * Returns true for SDK errors that indicate the underlying CLI subprocess
  * died (stdin/stdout IPC channel closed). Once this happens the singleton
@@ -73,11 +82,13 @@ export async function resetCopilotClient(): Promise<void> {
 export function getCopilotClient(): Promise<CopilotClient> {
   if (!clientPromise) {
     clientPromise = (async () => {
+      const gitHubToken = getSdkGitHubToken();
       const client = new CopilotClient({
         logLevel: (process.env['COPILOT_LOG_LEVEL'] as 'error' | 'info' | 'debug' | 'none' | 'warning' | 'all' | undefined) ?? 'debug',
+        ...(gitHubToken ? { gitHubToken, useLoggedInUser: false } : {}),
       });
       await client.start();
-      logger.info('Copilot SDK client started');
+      logger.info({ tokenPresent: Boolean(gitHubToken) }, 'Copilot SDK client started');
       return client;
     })().catch((err: unknown) => {
       clientPromise = undefined;

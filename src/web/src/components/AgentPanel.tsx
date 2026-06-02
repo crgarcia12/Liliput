@@ -39,7 +39,9 @@ interface AgentPanelProps {
 
 const ROLE_CONFIG: Record<AgentRole, { icon: string; color: string }> = {
   architect: { icon: '📐', color: 'text-blue-400' },
+  rewriter: { icon: '✍️', color: 'text-amber-400' },
   coder: { icon: '💻', color: 'text-green-400' },
+  critic: { icon: '🦆', color: 'text-violet-400' },
   builder: { icon: '🔨', color: 'text-orange-400' },
   tester: { icon: '🧪', color: 'text-purple-400' },
   deployer: { icon: '🚀', color: 'text-red-400' },
