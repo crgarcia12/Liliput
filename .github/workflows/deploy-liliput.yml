@@ -117,6 +117,7 @@ jobs:
               -e "s|__PUBLIC_BASE_URL__|https://liliput.crgarcia.com.ar|g" \
               -e "s|__PIP_NAME__|liliput-test-pip|g" \
               -e "s|__LB_IP__|4.223.107.121|g" \
+              -e "s|__RESOLVER_IP__|10.0.0.10|g" \
               k8s/liliput.yaml > k8s/liliput.rendered.yaml
 
       - name: Deploy to AKS

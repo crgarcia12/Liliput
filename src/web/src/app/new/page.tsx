@@ -184,17 +184,19 @@ export default function Home() {
         if (!currentTask) {
           setIsWorking(true);
 
+          const trimmedRepo = targetRepo.trim();
+          const shouldCreateProject = projectMode === 'create' || !trimmedRepo;
+
           // Greenfield path: create a brand-new GitHub repo + bootstrap.
-          if (projectMode === 'create') {
+          if (shouldCreateProject) {
             const trimmedName = newRepoName.trim();
-            if (!trimmedName) throw new Error('Project name is required.');
             const res = await fetch('/api/projects', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                name: trimmedName,
+                ...(trimmedName ? { name: trimmedName } : {}),
                 description: message,
-                visibility: newRepoVisibility,
+                visibility: projectMode === 'create' ? newRepoVisibility : 'private',
                 ...(model ? { model } : {}),
                 ...(reasoningEffort ? { reasoningEffort } : {}),
                 ...(reviewerModel ? { reviewerModel } : {}),
@@ -241,7 +243,7 @@ export default function Home() {
 
           // Existing-repo path (unchanged).
           const task = await createTask(message, message, {
-            repository: targetRepo.trim() || undefined,
+            repository: trimmedRepo,
             baseBranch: baseBranch.trim() || 'main',
             commitMode,
             ...(model ? { model } : {}),
@@ -384,7 +386,7 @@ export default function Home() {
                   type="text"
                   value={newRepoName}
                   onChange={(e) => setNewRepoName(e.target.value)}
-                  placeholder="my-new-app"
+                  placeholder="optional: my-new-app"
                   className="bg-[#050510] border border-[#1a1a2e] rounded px-2 py-1 w-56 text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
                 {nameCheck.loading && <span className="text-gray-500">checking…</span>}
@@ -473,8 +475,8 @@ export default function Home() {
           </label>
           <span className="text-gray-600 ml-auto">
             {projectMode === 'create'
-              ? 'Creates a new GitHub repo under your account, then runs spec2cloud init.'
-              : `Leave repo empty to use the default (${process.env.NEXT_PUBLIC_DEFAULT_REPO || 'configured server-side'})`}
+              ? 'Creates a new GitHub repo under your account. Leave the name empty for an automatic Liliput name.'
+              : 'Type owner/repo, or leave it empty and Liliput will mint a private project automatically.'}
           </span>
         </div>
       )}

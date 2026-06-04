@@ -163,6 +163,14 @@ export interface RunAgentTurnOptions {
    * instruction so the coder sees it as additional context.
    */
   reviewerFeedback?: string;
+  /**
+   * Optional planning context produced by the pipeline preflight stages
+   * (Rewriter + Architect + Critic). When set, this block is rendered above
+   * the user's instruction so the coder starts from the rewritten request,
+   * the implementation plan, and any critic feedback. Non-fatal: when the
+   * preflight stages are skipped or fail, this is simply omitted.
+   */
+  planningContext?: string;
   onLog?: LogFn;
   onToolEvent?: ToolEventFn;
   onUsage?: UsageFn;
@@ -210,6 +218,11 @@ function summariseResult(content: unknown): { summary: string; details?: string 
   return { summary: '' };
 }
 
+function buildPlanningBlock(planningContext?: string): string {
+  if (!planningContext || !planningContext.trim()) return '';
+  return [planningContext.trim(), '', '---', ''].join('\n');
+}
+
 function buildInitialPrompt(opts: RunAgentTurnOptions): string {
   const contractBlock = opts.liliputContext
     ? [
@@ -232,6 +245,7 @@ function buildInitialPrompt(opts: RunAgentTurnOptions): string {
   return [
     contractBlock,
     reviewerBlock,
+    buildPlanningBlock(opts.planningContext),
     'You are an autonomous coding agent operating directly on a git checkout.',
     'The current working directory is the repository root and is already on a feature branch.',
     '',
@@ -367,6 +381,7 @@ function buildFollowUpPrompt(opts: RunAgentTurnOptions): string {
     contractBlock,
     recapBlock,
     reviewerBlock,
+    buildPlanningBlock(opts.planningContext),
     'Follow-up instruction from the user. The previous turn already produced a',
     'commit and a draft PR; new edits will be appended to the same branch.',
     'Continue editing the same workspace. Do not commit or push — Liliput handles git.',

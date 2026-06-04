@@ -32,7 +32,9 @@ const STATUS_STYLES: Record<TaskStatus, { label: string; cls: string }> = {
 
 const ROLE_ICON: Record<string, string> = {
   architect: '📐',
+  rewriter: '✍️',
   coder: '💻',
+  critic: '🦆',
   builder: '🔨',
   tester: '🧪',
   deployer: '🚀',

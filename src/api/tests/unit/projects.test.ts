@@ -95,6 +95,38 @@ describe('POST /api/projects', () => {
     expect(r.body.field).toBe('name');
   });
 
+  it('auto-generates a private repo name when Gulliver submits only an idea', async () => {
+    const createRepo = vi.fn().mockImplementation(({ name }: { name: string }) => Promise.resolve(makeRepo(name)));
+    const app = buildApp({
+      whoami: vi.fn().mockResolvedValue('crgarcia12'),
+      exists: vi.fn().mockResolvedValue(false),
+      createRepo,
+      gitClient: {
+        clone: vi.fn().mockResolvedValue({ cwd: '/tmp/fake', branch: 'main' }),
+        commitAll: vi.fn().mockResolvedValue(undefined),
+        push: vi.fn().mockResolvedValue(undefined),
+      },
+      runSpec2cloudInit: vi.fn().mockResolvedValue({ exitCode: 0, stdout: 'ok', stderr: '' }),
+      writeContract: vi.fn().mockResolvedValue(undefined),
+    });
+
+    const r = await request(app)
+      .post('/api/projects')
+      .send({
+        description: 'Build a tiny mobile boredom game.',
+        visibility: 'private',
+      });
+
+    expect(r.status).toBe(201);
+    expect(createRepo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: expect.stringMatching(/^liliput-build-tiny-mobile-boredom-game-[a-z0-9]+$/),
+        visibility: 'private',
+      }),
+    );
+    expect(r.body.task.repository).toMatch(/^crgarcia12\/liliput-build-tiny-mobile-boredom-game-[a-z0-9]+$/);
+  });
+
   it('returns 409 when the repo already exists', async () => {
     const app = buildApp({
       whoami: vi.fn().mockResolvedValue('crgarcia12'),

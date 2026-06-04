@@ -142,13 +142,69 @@ export interface Task {
   turns?: Turn[];
   /** ID of the currently-open turn, if any. Convenience field hydrated by the store. */
   currentTurnId?: string;
+  /** Live multi-agent pipeline state (rewrite → plan → critique → implement →
+   *  review). Drives the AgentPipeline diagram above the activity log. Persisted
+   *  so it survives reloads / pod restarts. Undefined for legacy tasks or tasks
+   *  that have not started a pipeline run yet. */
+  pipeline?: PipelineState;
   createdAt: string;
+  updatedAt: string;
+}
+
+// ─── Multi-agent pipeline ─────────────────────────────────────
+
+/** The five visible stages every request flows through. Distinct from
+ *  `TaskStatus` (which gates deploy/ship semantics) — `pipelineStage` describes
+ *  WHICH liliputian is acting, not the task's deploy lifecycle. */
+export type PipelineStage =
+  | 'rewrite'    // Rewriter rephrases the request for LLM efficiency
+  | 'plan'       // Architect drafts an implementation plan
+  | 'critique'   // Critic (rubber-duck) reviews the plan
+  | 'implement'  // Coder writes the code
+  | 'review';    // Reviewer (rubber-duck) reviews the result
+
+export type PipelineStageStatus =
+  | 'pending'    // Not reached yet
+  | 'active'     // Currently running
+  | 'done'       // Completed
+  | 'skipped'    // Intentionally bypassed (e.g. operator rebuild command)
+  | 'failed';    // Stage errored (non-fatal — pipeline continues)
+
+/** Ordered metadata for the pipeline stages. Shared by the engine (to label
+ *  stages) and the UI (to render the diagram). Each stage maps to an
+ *  `AgentRole` so the diagram and the agent stream stay consistent. */
+export const PIPELINE_STAGES: ReadonlyArray<{
+  key: PipelineStage;
+  label: string;
+  icon: string;
+  role: AgentRole;
+}> = [
+  { key: 'rewrite',   label: 'Rewrite',   icon: '✍️',  role: 'rewriter' },
+  { key: 'plan',      label: 'Plan',      icon: '🗺️',  role: 'architect' },
+  { key: 'critique',  label: 'Critique',  icon: '🦆',  role: 'critic' },
+  { key: 'implement', label: 'Implement', icon: '🔨',  role: 'coder' },
+  { key: 'review',    label: 'Review',    icon: '👀',  role: 'reviewer' },
+];
+
+export interface PipelineState {
+  /** Unique id for this pipeline run. Lets the client ignore stale stage
+   *  events from a previous run (e.g. after a follow-up iteration). */
+  runId: string;
+  /** The stage currently running, if any. Undefined when the run finished. */
+  activeStage?: PipelineStage;
+  /** Per-stage status map. Always contains all five stages. */
+  stages: Record<PipelineStage, PipelineStageStatus>;
+  /** The Rewriter's rephrased prompt (shown in the log, fed to the coder). */
+  rewrittenPrompt?: string;
+  /** The Architect's implementation plan markdown. */
+  plan?: string;
+  startedAt: string;
   updatedAt: string;
 }
 
 /** What kind of action the reviewer was reviewing when it emitted feedback.
  *  Drives display, retry caps, and which prompt template was used. */
-export type ReviewerFeedbackKind = 'spec' | 'coder-initial' | 'coder-iter' | 'deploy';
+export type ReviewerFeedbackKind = 'spec' | 'coder-initial' | 'coder-iter' | 'deploy' | 'plan';
 
 /** A single piece of feedback emitted by the reviewer. Lives on the Task
  *  until consumed by a follow-up coder turn (or surfaced to the user as
@@ -248,7 +304,9 @@ export interface ActivityEntry {
 
 export type AgentRole =
   | 'architect'     // Plans the work, breaks into subtasks
+  | 'rewriter'      // Rephrases the user request for LLM efficiency
   | 'coder'         // Writes code
+  | 'critic'        // Rubber-ducks the plan before implementation
   | 'reviewer'      // Reviews PRs
   | 'builder'       // Runs builds/CI
   | 'deployer'      // Deploys to AKS
@@ -318,6 +376,7 @@ export type AgentEventType =
   | 'agent:failed'
   | 'task:status'
   | 'task:spec'
+  | 'pipeline:stage'
   | 'turn:opened'
   | 'turn:updated'
   | 'turn:closed'

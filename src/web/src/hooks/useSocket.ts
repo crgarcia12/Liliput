@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
-import type { AgentEvent, ChatMessage, ActivityEntry } from '@shared/types';
+import type { AgentEvent, ChatMessage, ActivityEntry, PipelineState } from '@shared/types';
 
 // In production, Socket.io connects through the nginx reverse proxy on the same origin.
 // In development, connect directly to the API server.
@@ -17,6 +17,7 @@ interface UseSocketReturn {
   agentEvents: AgentEvent[];
   chatMessages: ChatMessage[];
   activity: ActivityEntry[];
+  pipeline: PipelineState | null;
   joinTask: (taskId: string) => void;
   leaveTask: (taskId: string) => void;
 }
@@ -30,6 +31,7 @@ export function useSocket(): UseSocketReturn {
   const [agentEvents, setAgentEvents] = useState<AgentEvent[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
+  const [pipeline, setPipeline] = useState<PipelineState | null>(null);
 
   useEffect(() => {
     const socket = io(API_URL, {
@@ -174,6 +176,28 @@ export function useSocket(): UseSocketReturn {
       pushActivity({ taskId: e.taskId, kind: 'task-spec', message: '📜 Spec ready — review and approve to start the build.' });
     });
 
+    // Pipeline stage transitions drive the AgentPipeline diagram ONLY — we
+    // deliberately do NOT push these into the activity log (the per-agent
+    // spawn/log events already narrate the same moments).
+    socket.on(
+      'pipeline:stage',
+      (e: {
+        taskId: string;
+        runId: string;
+        activeStage?: PipelineState['activeStage'];
+        stages: PipelineState['stages'];
+        timestamp?: string;
+      }) => {
+        setPipeline({
+          runId: e.runId,
+          ...(e.activeStage ? { activeStage: e.activeStage } : {}),
+          stages: e.stages,
+          startedAt: e.timestamp ?? new Date().toISOString(),
+          updatedAt: e.timestamp ?? new Date().toISOString(),
+        });
+      },
+    );
+
     return () => {
       socket.disconnect();
       socketRef.current = null;
@@ -188,6 +212,6 @@ export function useSocket(): UseSocketReturn {
     socketRef.current?.emit('task:leave', taskId);
   }, []);
 
-  return { connected, agentEvents, chatMessages, activity, joinTask, leaveTask };
+  return { connected, agentEvents, chatMessages, activity, pipeline, joinTask, leaveTask };
 }
 

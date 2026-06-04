@@ -66,6 +66,14 @@ data:
       upstream api { server liliput-api:80; }
       upstream web { server liliput-web:80; }
 
+      # Cluster DNS resolver so per-dev-env upstreams (referenced via variables
+      # in proxy_pass) are resolved at REQUEST time, not config-load time. This
+      # keeps the gateway booting even when a dev-env namespace has been deleted
+      # out-of-band: that single route 502s instead of nginx refusing to start
+      # ("host not found in upstream") and taking down ALL dev envs.
+      resolver __RESOLVER_IP__ valid=10s ipv6=off;
+      resolver_timeout 2s;
+
       map $http_upgrade $connection_upgrade {
         default upgrade;
         ''      close;

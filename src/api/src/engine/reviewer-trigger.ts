@@ -89,6 +89,7 @@ function formatFeedbackForChat(kind: ReviewerFeedbackKind, feedback: string): st
     'coder-initial': 'initial code changes',
     'coder-iter': 'iteration changes',
     deploy: 'deployment + validation',
+    plan: 'implementation plan',
   };
   return `🔍 **Reviewer feedback on ${kindLabel[kind]}:**\n\n${feedback}`;
 }

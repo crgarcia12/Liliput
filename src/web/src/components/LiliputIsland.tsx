@@ -8,7 +8,9 @@ import type { Agent, AgentRole } from '@shared/types';
 
 const ROLE_COLORS: Record<AgentRole, string> = {
   architect: '#3b82f6',
+  rewriter: '#f59e0b',
   coder: '#22c55e',
+  critic: '#8b5cf6',
   builder: '#f97316',
   tester: '#a855f7',
   deployer: '#ef4444',

@@ -7,7 +7,7 @@ import {
   rememberChatConfig,
   type ReasoningEffortSelection,
 } from '../../../../lib/chat-config-storage';
-import type { Task, ChatMessage, Agent, ActivityEntry } from '@shared/types';
+import type { Task, ChatMessage, Agent, ActivityEntry, PipelineState } from '@shared/types';
 
 const API_URL = '';
 
@@ -19,6 +19,7 @@ export interface UseMobileTaskReturn {
   error: string | null;
   setError: (err: string | null) => void;
   connected: boolean;
+  pipeline: PipelineState | null;
   allMessages: ChatMessage[];
   taskActivity: ActivityEntry[];
   agents: Agent[];
@@ -45,6 +46,7 @@ export function useMobileTask(taskId: string): UseMobileTaskReturn {
     agentEvents,
     chatMessages: socketMessages,
     activity,
+    pipeline: livePipeline,
     joinTask,
     leaveTask,
   } = useSocket();
@@ -366,6 +368,7 @@ export function useMobileTask(taskId: string): UseMobileTaskReturn {
     error,
     setError,
     connected,
+    pipeline: livePipeline ?? task?.pipeline ?? null,
     allMessages,
     taskActivity,
     agents,

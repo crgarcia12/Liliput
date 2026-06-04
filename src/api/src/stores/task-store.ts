@@ -281,6 +281,7 @@ export function updateTask(
       | 'reviewerEnabled'
       | 'pendingReviewerFeedback'
       | 'reviewerAttempts'
+      | 'pipeline'
       | 'title'
     >
   >,
