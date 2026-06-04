@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import Terminal from '../../../../components/Terminal';
+import AgentPipeline from '../../../../components/AgentPipeline';
 import { useMobileTask } from './useMobileTask';
 
 export default function MobileTaskChatPage() {
@@ -117,8 +118,11 @@ export default function MobileTaskChatPage() {
         </div>
       )}
 
-      <main className="flex-1 min-h-0 p-2">
-        <Terminal messages={m.allMessages} onSend={m.sendMessage} isWorking={m.isWorking} />
+      <main className="flex-1 min-h-0 flex flex-col gap-2 p-2">
+        <AgentPipeline pipeline={m.pipeline} />
+        <div className="flex-1 min-h-0">
+          <Terminal messages={m.allMessages} onSend={m.sendMessage} isWorking={m.isWorking} />
+        </div>
       </main>
 
       <nav className="sticky bottom-0 z-10 flex items-stretch border-t border-[#1a1a2e] bg-[#0d0d14]">
