@@ -72,6 +72,7 @@ jobs:
               -e "s|__PUBLIC_BASE_URL__|https://dev.liliput.crgarcia.com.ar|g" \
               -e "s|__PIP_NAME__|liliput-dev-pip|g" \
               -e "s|__LB_IP__|20.240.60.167|g" \
+              -e "s|__RESOLVER_IP__|10.0.0.10|g" \
               k8s/liliput.yaml > k8s/liliput.rendered.yaml
           # Swap the image references so DEV pulls dev-tagged images
           sed -i "s|liliput-api:latest|liliput-api-${IMAGE_SUFFIX}:latest|g; s|liliput-web:latest|liliput-web-${IMAGE_SUFFIX}:latest|g" k8s/liliput.rendered.yaml

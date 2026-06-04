@@ -58,9 +58,14 @@ export function renderRoutesBlock(routes: DevRoute[]): string {
       return [
         `        location ${r.pathPrefix}/ {`,
         `          # ${safeName}`,
+        // Resolve the upstream via a variable so nginx defers DNS resolution to
+        // request time (requires the `resolver` directive in the base config).
+        // A deleted dev-env namespace then 502s this single route instead of
+        // crashing the whole gateway with "host not found in upstream" at boot.
+        `          set $upstream ${r.upstreamHost};`,
         `          rewrite ^${r.pathPrefix}/(.*)$ /$1 break;`,
         `          rewrite ^${r.pathPrefix}$ / break;`,
-        `          proxy_pass http://${r.upstreamHost}:${r.upstreamPort};`,
+        `          proxy_pass http://$upstream:${r.upstreamPort};`,
         `          proxy_set_header Host $host;`,
         `          proxy_set_header X-Real-IP $remote_addr;`,
         `          proxy_set_header X-Forwarded-Proto $scheme;`,
