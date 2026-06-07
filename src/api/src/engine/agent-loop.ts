@@ -47,10 +47,13 @@ const TIMEOUT_MS = parseInt(process.env['AGENT_LOOP_TIMEOUT_MS'] ?? '86400000', 
 const IDLE_THRESHOLD_MS = parseInt(process.env['AGENT_IDLE_THRESHOLD_MS'] ?? '480000', 10);
 const IDLE_CHECK_INTERVAL_MS = 30_000;
 
-// Truncation limits to keep the activity log readable.
-const ARGS_PREVIEW = 200;
-const RESULT_PREVIEW = 800;
-const REASONING_PREVIEW = 400;
+// Safety caps for the activity log. Set high enough that normal assistant
+// messages, reasoning blocks, and tool results are never truncated — they
+// exist only to prevent a pathological payload (e.g. a multi-MB `bash` dump)
+// from blowing up the socket frame, DB row, or browser DOM.
+const ARGS_PREVIEW = 50_000;
+const RESULT_PREVIEW = 50_000;
+const REASONING_PREVIEW = 50_000;
 
 export interface ToolEvent {
   /** Stable id from the SDK, ties tool-start ↔ tool-complete. */
@@ -208,10 +211,8 @@ function summariseResult(content: unknown): { summary: string; details?: string 
     const block = c as { type?: string; text?: string };
     if (block?.type === 'text' && typeof block.text === 'string') {
       const t = block.text.trim();
-      const firstLine = t.split('\n')[0] ?? '';
       return {
-        summary: truncate(firstLine, 120),
-        details: t.length > 120 ? truncate(t, RESULT_PREVIEW) : undefined,
+        summary: truncate(t, RESULT_PREVIEW),
       };
     }
   }
@@ -505,12 +506,12 @@ function makeEventHandler(callbacks: TurnCallbacks): (event: SessionEvent) => vo
       case 'assistant.reasoning': {
         const content = event.data.content?.trim() ?? '';
         if (!content) break;
-        log('info', `🧠 ${truncate(content.split('\n')[0] ?? '', 120)}`, undefined, truncate(content, REASONING_PREVIEW));
+        const full = truncate(content, REASONING_PREVIEW);
+        log('info', `🧠 ${full}`);
         toolEvent({
           callId: event.data.reasoningId,
           kind: 'reasoning',
-          summary: `🧠 ${truncate(content.split('\n')[0] ?? '', 120)}`,
-          details: truncate(content, REASONING_PREVIEW),
+          summary: `🧠 ${full}`,
           timestamp: ts,
         });
         break;
@@ -518,12 +519,12 @@ function makeEventHandler(callbacks: TurnCallbacks): (event: SessionEvent) => vo
       case 'assistant.message': {
         const content = event.data.content?.trim() ?? '';
         if (!content) break;
-        log('info', `💬 ${truncate(content.split('\n')[0] ?? '', 120)}`, undefined, truncate(content, RESULT_PREVIEW));
+        const full = truncate(content, RESULT_PREVIEW);
+        log('info', `💬 ${full}`);
         toolEvent({
           callId: event.data.messageId,
           kind: 'message',
-          summary: `💬 ${truncate(content.split('\n')[0] ?? '', 120)}`,
-          details: truncate(content, RESULT_PREVIEW),
+          summary: `💬 ${full}`,
           timestamp: ts,
         });
         break;

@@ -738,7 +738,7 @@ function logPhase(
     message,
     timestamp: ts,
     ...(command ? { command } : {}),
-    // Skip output to keep DB rows small; full output stays in agent_logs.
+    ...(output ? { output } : {}),
   });
 }
 
@@ -1071,8 +1071,7 @@ function recordToolEvent(
     message: event.summary,
     timestamp: ts,
     ...(event.tool ? { command: event.tool } : {}),
-    // Keep details out of the persisted row to keep payload small; live
-    // socket events still carry full details for the UI panel.
+    ...(event.details ? { output: event.details } : {}),
   });
 }
 
