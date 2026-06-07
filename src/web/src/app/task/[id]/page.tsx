@@ -353,7 +353,6 @@ export default function TaskPage() {
           <div className="flex-1 min-w-0 flex flex-col gap-1.5 justify-center">
             {/* Row 1 — identity + config */}
             <div className="flex items-center gap-2 min-w-0 flex-wrap">
-              <span className="text-xl shrink-0">🏰</span>
               {task?.repository && (
                 <span className="text-xs text-gray-500 font-mono truncate shrink-0">
                   📦 {task.repository}@{task.baseBranch ?? 'main'}
