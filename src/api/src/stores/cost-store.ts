@@ -113,3 +113,65 @@ export function costForRepo(repository: string, currency: string = 'USD'): CostR
     .all(repository) as CallRow[];
   return costForRows(rows, currency);
 }
+
+/** Return cost rollups for every repository that has at least one usage row.
+ *  Mirrors `turn-store.rollupAllRepos` so the dashboard can render cost
+ *  alongside token totals in one trip instead of N. */
+export function costForAllRepos(currency: string = 'USD'): Record<string, CostRollup> {
+  type Row = CallRow & { repository: string };
+  const rows = getDb()
+    .prepare(
+      `SELECT c.id, c.model, c.input_tokens, c.output_tokens,
+              c.cache_read_tokens, c.cache_write_tokens, c.occurred_at,
+              t.repository
+         FROM turn_usage_call c
+         JOIN tasks t ON t.id = c.task_id
+        WHERE t.repository IS NOT NULL`,
+    )
+    .all() as Row[];
+  const grouped = new Map<string, CallRow[]>();
+  for (const r of rows) {
+    if (!r.repository) continue;
+    let arr = grouped.get(r.repository);
+    if (!arr) {
+      arr = [];
+      grouped.set(r.repository, arr);
+    }
+    arr.push(r);
+  }
+  const out: Record<string, CostRollup> = {};
+  for (const [repo, callRows] of grouped) {
+    out[repo] = costForRows(callRows, currency);
+  }
+  return out;
+}
+
+/** Same as costForAllRepos but keyed by workstream_id. */
+export function costForAllWorkstreams(currency: string = 'USD'): Record<string, CostRollup> {
+  type Row = CallRow & { workstream_id: string };
+  const rows = getDb()
+    .prepare(
+      `SELECT c.id, c.model, c.input_tokens, c.output_tokens,
+              c.cache_read_tokens, c.cache_write_tokens, c.occurred_at,
+              t.workstream_id
+         FROM turn_usage_call c
+         JOIN tasks t ON t.id = c.task_id
+        WHERE t.workstream_id IS NOT NULL`,
+    )
+    .all() as Row[];
+  const grouped = new Map<string, CallRow[]>();
+  for (const r of rows) {
+    if (!r.workstream_id) continue;
+    let arr = grouped.get(r.workstream_id);
+    if (!arr) {
+      arr = [];
+      grouped.set(r.workstream_id, arr);
+    }
+    arr.push(r);
+  }
+  const out: Record<string, CostRollup> = {};
+  for (const [wsId, callRows] of grouped) {
+    out[wsId] = costForRows(callRows, currency);
+  }
+  return out;
+}

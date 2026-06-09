@@ -5,9 +5,11 @@ import Link from 'next/link';
 import LogList from '../../components/LogList';
 import TopBar from '../../components/TopBar';
 import TokenBadge, { formatDuration, formatTokens } from '../../components/TokenBadge';
+import CostBadge from '../../components/CostBadge';
 import { useSocket } from '../../hooks/useSocket';
 import { useTasks } from '../../hooks/useTasks';
 import { useUsageRollups } from '../../hooks/useUsageRollups';
+import { useCostRollups } from '../../hooks/useCostRollups';
 import type {
   Task,
   TaskStatus,
@@ -72,6 +74,7 @@ export default function RequestsPage() {
   const { connected } = useSocket();
   const { getTasks } = useTasks();
   const usage = useUsageRollups();
+  const cost = useCostRollups();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [workstreams, setWorkstreams] = useState<Workstream[]>([]);
   const [loading, setLoading] = useState(true);
@@ -292,6 +295,7 @@ export default function RequestsPage() {
                     <span>📁</span>
                     <span className="truncate flex-1 font-medium">{repo}</span>
                     <TokenBadge rollup={usage.repos[repo]} compact />
+                    <CostBadge rollup={cost.repos[repo]} compact />
                     <span className="text-[10px] text-gray-500">{taskCount}</span>
                   </button>
                   {isRealRepo && (
@@ -358,7 +362,10 @@ export default function RequestsPage() {
                               {bucket.name}
                             </span>
                             {bucket.workstream && (
-                              <TokenBadge rollup={usage.workstreams[bucket.workstream.id]} compact />
+                              <>
+                                <TokenBadge rollup={usage.workstreams[bucket.workstream.id]} compact />
+                                <CostBadge rollup={cost.workstreams[bucket.workstream.id]} compact />
+                              </>
                             )}
                             <span className="text-[10px] text-gray-600">
                               {bucket.tasks.length}

@@ -11,6 +11,7 @@ import AgentPipeline from '../../../components/AgentPipeline';
 import TurnList from '../../../components/TurnList';
 import PhaseStepper from '../../../components/PhaseStepper';
 import ResizableSplit from '../../../components/ResizableSplit';
+import CostBadge from '../../../components/CostBadge';
 import { useSocket } from '../../../hooks/useSocket';
 import { useTasks } from '../../../hooks/useTasks';
 import { get as apiGet } from '../../../lib/api-client';
@@ -18,7 +19,7 @@ import {
   rememberChatConfig,
   type ReasoningEffortSelection,
 } from '../../../lib/chat-config-storage';
-import type { Task, ChatMessage, Agent, ModelOption, ModelsResponse } from '@shared/types';
+import type { Task, ChatMessage, Agent, ModelOption, ModelsResponse, CostRollup } from '@shared/types';
 
 const LiliputIsland = dynamic(() => import('../../../components/LiliputIsland'), {
   ssr: false,
@@ -49,6 +50,7 @@ export default function TaskPage() {
   const [modelDefault, setModelDefault] = useState<string>('');
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [modelsSource, setModelsSource] = useState<'sdk' | 'fallback' | null>(null);
+  const [taskCost, setTaskCost] = useState<CostRollup | undefined>(undefined);
   const [modelPending, setModelPending] = useState(false);
   const [reasoningPending, setReasoningPending] = useState(false);
   const [reviewerPending, setReviewerPending] = useState(false);
@@ -99,6 +101,27 @@ export default function TaskPage() {
       cancelled = true;
     };
   }, []);
+
+  // Poll task cost every 15s. Cost moves slowly (per-call cents) but we still
+  // want it to refresh while the user watches an agent burn through tokens.
+  useEffect(() => {
+    if (!taskId) return;
+    let cancelled = false;
+    const refresh = async (): Promise<void> => {
+      try {
+        const c = await apiGet<CostRollup>(`/api/tasks/${taskId}/cost`);
+        if (!cancelled) setTaskCost(c);
+      } catch {
+        // best-effort; keep stale value rather than flashing the badge
+      }
+    };
+    void refresh();
+    const id = setInterval(() => void refresh(), 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [taskId]);
 
   // Only swap task / chat state when something the user can see has actually
   // changed. Without this, the 4s poll + activity-event refetch (which fires
@@ -384,6 +407,7 @@ export default function TaskPage() {
                   {task.status}
                 </span>
               )}
+              {taskCost && <CostBadge rollup={taskCost} />}
               {task && task.status !== 'completed' && task.status !== 'deleting' && modelOptions.length > 0 && (
                 <label className="flex items-center gap-1 text-xs shrink-0">
                   <span className="text-gray-500">🧠</span>

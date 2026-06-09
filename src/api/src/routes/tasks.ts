@@ -979,6 +979,19 @@ export function createTasksRouter(
     res.json(costStore.costForRepo(repo, currency));
   });
 
+  // Batch endpoints: cost for every repo / every workstream in one trip.
+  // Mirrors /api/repos-usage and /api/workstreams-usage so the dashboard
+  // can render cost badges without N round-trips. Currency defaults to USD.
+  router.get('/api/repos-cost', (req: Request, res: Response) => {
+    const currency = String(req.query['currency'] ?? 'USD');
+    res.json(costStore.costForAllRepos(currency));
+  });
+
+  router.get('/api/workstreams-cost', (req: Request, res: Response) => {
+    const currency = String(req.query['currency'] ?? 'USD');
+    res.json(costStore.costForAllWorkstreams(currency));
+  });
+
   // ─── Model pricing CRUD ────────────────────────────────────────────────
   // Backs the cost rollups above. Rows are versioned by `effective_from`
   // (ISO date) so prices can change without losing historical accuracy.

@@ -422,6 +422,35 @@ export function getDb(): Database.Database {
     // every startup but is a no-op once each task has at least one turn.
     backfillInitialTurns(_db);
 
+    // Backfill: every historical turn that has token aggregates but no
+    // per-call rows in `turn_usage_call` gets one synthetic row, so the
+    // cost rollup can price historical traffic. Idempotent on subsequent
+    // boots (the WHERE clause filters out already-backfilled turns).
+    try {
+      // Lazy import to avoid a circular dep at module init time
+      // (usage-backfill → logger → ... eventually → db).
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { backfillUsageCalls } = require('./usage-backfill.js') as {
+        backfillUsageCalls: (db: Database.Database) => { synthesised: number; skipped: number };
+      };
+      backfillUsageCalls(_db);
+    } catch (e) {
+      logger.warn({ err: e }, 'turn_usage_call backfill failed (non-fatal)');
+    }
+
+    // Seed the default GitHub Copilot price book if rows are missing. The
+    // seed is idempotent — re-runs only matter if SEED_ROWS itself changes.
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { seedDefaultPricing } = require('./pricing-seed.js') as {
+        seedDefaultPricing: () => { inserted: number; models: number };
+      };
+      const seedResult = seedDefaultPricing();
+      logger.info(seedResult, 'Seeded default model_pricing rows');
+    } catch (e) {
+      logger.warn({ err: e }, 'model_pricing seed failed (non-fatal)');
+    }
+
     // Initialize default admin user if no users exist yet
     ensureDefaultAdminUser(_db);
   } catch (err) {
