@@ -13,6 +13,7 @@ import PhaseStepper from '../../../components/PhaseStepper';
 import ResizableSplit from '../../../components/ResizableSplit';
 import { useSocket } from '../../../hooks/useSocket';
 import { useTasks } from '../../../hooks/useTasks';
+import { get as apiGet } from '../../../lib/api-client';
 import {
   rememberChatConfig,
   type ReasoningEffortSelection,
@@ -46,6 +47,8 @@ export default function TaskPage() {
   const [showSpec, setShowSpec] = useState(true);
   const [modelOptions, setModelOptions] = useState<readonly ModelOption[]>([]);
   const [modelDefault, setModelDefault] = useState<string>('');
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const [modelsSource, setModelsSource] = useState<'sdk' | 'fallback' | null>(null);
   const [modelPending, setModelPending] = useState(false);
   const [reasoningPending, setReasoningPending] = useState(false);
   const [reviewerPending, setReviewerPending] = useState(false);
@@ -78,15 +81,19 @@ export default function TaskPage() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/models')
-      .then((r) => (r.ok ? (r.json() as Promise<ModelsResponse>) : null))
+    apiGet<ModelsResponse>('/api/models')
       .then((data) => {
-        if (cancelled || !data) return;
+        if (cancelled) return;
+        setModelsError(null);
+        setModelsSource(data.source ?? 'sdk');
         setModelOptions(data.options);
         setModelDefault(data.default);
       })
-      .catch(() => {
-        // Non-fatal — picker just stays hidden
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('Failed to load /api/models', err);
+        setModelsError(msg);
       });
     return () => {
       cancelled = true;
@@ -405,7 +412,23 @@ export default function TaskPage() {
                       </option>
                     ))}
                   </select>
+                  {modelsSource === 'fallback' && (
+                    <span
+                      className="text-amber-400"
+                      title="Copilot SDK list unavailable — showing a small curated fallback list. Check API logs."
+                    >
+                      ⚠
+                    </span>
+                  )}
                 </label>
+              )}
+              {task && task.status !== 'completed' && task.status !== 'deleting' && modelOptions.length === 0 && modelsError && (
+                <span
+                  className="text-red-400 text-xs shrink-0"
+                  title={modelsError}
+                >
+                  ⚠ models failed to load
+                </span>
               )}
               {task && task.status !== 'completed' && task.status !== 'deleting' && (
                 <label className="flex items-center gap-1 text-xs shrink-0">

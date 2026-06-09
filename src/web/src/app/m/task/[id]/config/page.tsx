@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import type { ModelOption, ModelsResponse } from '@shared/types';
 import { useMobileTask } from '../useMobileTask';
+import { get as apiGet } from '../../../../../lib/api-client';
 
 export default function MobileTaskConfigPage() {
   const params = useParams();
@@ -13,17 +14,25 @@ export default function MobileTaskConfigPage() {
 
   const [modelOptions, setModelOptions] = useState<readonly ModelOption[]>([]);
   const [modelDefault, setModelDefault] = useState<string>('');
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const [modelsSource, setModelsSource] = useState<'sdk' | 'fallback' | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/models')
-      .then((r) => (r.ok ? (r.json() as Promise<ModelsResponse>) : null))
+    apiGet<ModelsResponse>('/api/models')
       .then((data) => {
-        if (cancelled || !data) return;
+        if (cancelled) return;
+        setModelsError(null);
+        setModelsSource(data.source ?? 'sdk');
         setModelOptions(data.options);
         setModelDefault(data.default);
       })
-      .catch(() => {});
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('Failed to load /api/models', err);
+        setModelsError(msg);
+      });
     return () => {
       cancelled = true;
     };
@@ -77,6 +86,14 @@ export default function MobileTaskConfigPage() {
                   className="block text-xs uppercase tracking-wide text-gray-500 mb-2"
                 >
                   🧠 Model
+                  {modelsSource === 'fallback' && (
+                    <span
+                      className="ml-2 text-amber-400 normal-case tracking-normal"
+                      title="Copilot SDK list unavailable — showing fallback list."
+                    >
+                      ⚠ fallback
+                    </span>
+                  )}
                 </label>
                 <select
                   id="m-model"
@@ -98,6 +115,14 @@ export default function MobileTaskConfigPage() {
                 <p className="text-[11px] text-gray-500 mt-1">
                   Applies on next agent turn.
                 </p>
+              </section>
+            )}
+
+            {showModelControls && modelOptions.length === 0 && modelsError && (
+              <section>
+                <div className="text-xs text-red-300 bg-red-900/30 border border-red-800 rounded px-3 py-2">
+                  ⚠ Failed to load model list: {modelsError}. Reload to retry.
+                </div>
               </section>
             )}
 

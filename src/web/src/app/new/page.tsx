@@ -8,6 +8,7 @@ import AgentPanel from '../../components/AgentPanel';
 import TopBar from '../../components/TopBar';
 import { useSocket } from '../../hooks/useSocket';
 import { useTasks } from '../../hooks/useTasks';
+import { get as apiGet } from '../../lib/api-client';
 import {
   CHAT_CONFIG_STORAGE_KEYS,
   readStoredEffort,
@@ -51,6 +52,8 @@ export default function Home() {
   const [baseBranch, setBaseBranch] = useState('main');
   const [commitMode, setCommitMode] = useState<'pr' | 'direct'>('pr');
   const [modelOptions, setModelOptions] = useState<readonly ModelOption[]>([]);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const [modelsSource, setModelsSource] = useState<'sdk' | 'fallback' | null>(null);
   // Read last-used picker values from localStorage so the user's selections
   // persist across new-task creations and page reloads. Falls back to '' (and
   // the server default is applied once /api/models responds).
@@ -80,10 +83,11 @@ export default function Home() {
   // OR their stored pick is no longer in the live model list (model retired).
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/models')
-      .then((r) => (r.ok ? (r.json() as Promise<ModelsResponse>) : null))
+    apiGet<ModelsResponse>('/api/models')
       .then((data) => {
-        if (cancelled || !data) return;
+        if (cancelled) return;
+        setModelsError(null);
+        setModelsSource(data.source ?? 'sdk');
         setModelOptions(data.options);
         setModel((prev) => {
           if (prev && data.options.some((m) => m.id === prev)) return prev;
@@ -96,8 +100,11 @@ export default function Home() {
           return data.options.some((m) => m.id === prev) ? prev : '';
         });
       })
-      .catch(() => {
-        // Non-fatal: dropdown stays empty, server picks its default.
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('Failed to load /api/models', err);
+        setModelsError(msg);
       });
     return () => {
       cancelled = true;
@@ -418,13 +425,31 @@ export default function Home() {
               className="bg-[#050510] border border-[#1a1a2e] rounded px-2 py-1 text-gray-200 focus:outline-none focus:border-cyan-500"
               disabled={modelOptions.length === 0}
             >
-              {modelOptions.length === 0 && <option value="">(loading…)</option>}
+              {modelOptions.length === 0 && (
+                <option value="">{modelsError ? '(failed to load)' : '(loading…)'}</option>
+              )}
               {modelOptions.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.label}
                 </option>
               ))}
             </select>
+            {modelsSource === 'fallback' && (
+              <span
+                className="text-amber-400 text-xs"
+                title="Copilot SDK list unavailable — showing a small curated fallback list. Check API logs."
+              >
+                ⚠ fallback list
+              </span>
+            )}
+            {modelsError && (
+              <span
+                className="text-red-400 text-xs"
+                title={modelsError}
+              >
+                ⚠ models failed to load — try reloading
+              </span>
+            )}
           </label>
           <label className="flex items-center gap-2">
             <span className="text-gray-400">Reasoning:</span>

@@ -498,6 +498,13 @@ export function effectiveReasoningEffort(
 export interface ModelsResponse {
   options: readonly ModelOption[];
   default: string;
+  /**
+   * 'sdk' when the list came from `client.listModels()` (the real list for the
+   * authenticated Copilot account), 'fallback' when the SDK call failed and
+   * the curated FALLBACK_MODELS list is being served instead. Optional for
+   * back-compat with older API builds.
+   */
+  source?: 'sdk' | 'fallback';
 }
 
 export interface CreateWorkstreamRequest {
