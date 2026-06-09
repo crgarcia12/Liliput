@@ -2,14 +2,12 @@
 
 import { useState } from 'react';
 import { login } from '@/lib/api-client';
-import { useRouter } from 'next/navigation';
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const router = useRouter();
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -18,12 +16,30 @@ export default function LoginPage() {
 
     try {
       await login(username, password);
-      const next = new URLSearchParams(window.location.search).get('next');
-      router.push(next && next.startsWith('/') && !next.startsWith('//') ? next : '/dashboard');
+      // Resolve the post-login destination. We honour `?next=` only when it
+      // points at an in-app absolute path and is NOT a login URL itself
+      // (otherwise a stale `?next=/login` query would create an infinite
+      // loop back to this page).
+      const rawNext = new URLSearchParams(window.location.search).get('next');
+      const isSafeNext =
+        !!rawNext &&
+        rawNext.startsWith('/') &&
+        !rawNext.startsWith('//') &&
+        rawNext !== '/login' &&
+        !rawNext.startsWith('/login/') &&
+        !rawNext.startsWith('/login?');
+      const target = isSafeNext ? rawNext : '/dashboard';
+
+      // Use a HARD navigation (not router.push) so:
+      //   1. The router cache — which may hold the pre-login middleware
+      //      redirect for `/dashboard` (→ /login) — is bypassed entirely.
+      //   2. The freshly-set session_token cookie is guaranteed to be on
+      //      the next request, with no race against the fetch promise's
+      //      resolution timing.
+      window.location.assign(target);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Login failed';
       setError(message);
-    } finally {
       setLoading(false);
     }
   }

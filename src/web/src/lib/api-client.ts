@@ -57,6 +57,12 @@ async function apiFetch(
   const response = await fetch(`${API_BASE}${endpoint}`, {
     ...fetchOptions,
     headers,
+    // Always send credentials so the server-set `session_token` HttpOnly
+    // cookie flows on every request — including the post-login navigation.
+    // Without this, a cross-origin API setup (NEXT_PUBLIC_API_URL pointing
+    // elsewhere) silently drops cookies and login appears to succeed but
+    // the next request is unauthenticated.
+    credentials: fetchOptions.credentials ?? 'include',
   });
 
   // Redirect authenticated API calls to login on 401. Public calls such as
