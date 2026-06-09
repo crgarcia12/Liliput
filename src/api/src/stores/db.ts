@@ -186,6 +186,55 @@ CREATE TABLE IF NOT EXISTS turns (
 );
 CREATE INDEX IF NOT EXISTS idx_turns_task ON turns(task_id, position);
 CREATE INDEX IF NOT EXISTS idx_turns_status ON turns(status);
+
+-- Per-LLM-call usage rows. One row per SDK assistant.usage event.
+-- The turns row is still updated as a running aggregate for cheap display,
+-- but this table is the source of truth for cost computation because:
+--   1. Prices change over time (rows are matched by occurred_at)
+--   2. One turn can mix multiple models (coder + ops-fixer + reviewer)
+CREATE TABLE IF NOT EXISTS turn_usage_call (
+  id                  TEXT PRIMARY KEY,
+  turn_id             TEXT NOT NULL,
+  task_id             TEXT NOT NULL,
+  agent_id            TEXT,
+  model               TEXT NOT NULL,
+  input_tokens        INTEGER NOT NULL DEFAULT 0,
+  output_tokens       INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens   INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens  INTEGER NOT NULL DEFAULT 0,
+  nano_aiu            REAL,
+  duration_ms         INTEGER,
+  occurred_at         TEXT NOT NULL,
+  FOREIGN KEY (turn_id) REFERENCES turns(id) ON DELETE CASCADE,
+  FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_turn_usage_call_turn ON turn_usage_call(turn_id);
+CREATE INDEX IF NOT EXISTS idx_turn_usage_call_task ON turn_usage_call(task_id);
+CREATE INDEX IF NOT EXISTS idx_turn_usage_call_model_ts ON turn_usage_call(model, occurred_at);
+
+-- Per-model price book. Prices are per 1,000,000 tokens (matches GitHub's
+-- published units at docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing).
+-- Multiple rows per model: the row with the largest effective_from <= occurred_at
+-- (and min_input_tokens <= callInputTokens) wins. tier is free-form display
+-- (default, long_context); the threshold is enforced by min_input_tokens.
+CREATE TABLE IF NOT EXISTS model_pricing (
+  id                       TEXT PRIMARY KEY,
+  model                    TEXT NOT NULL,
+  tier                     TEXT NOT NULL DEFAULT 'default',
+  min_input_tokens         INTEGER NOT NULL DEFAULT 0,
+  currency                 TEXT NOT NULL DEFAULT 'USD',
+  input_per_mtok           REAL NOT NULL,
+  cached_input_per_mtok    REAL,
+  cache_write_per_mtok     REAL,
+  output_per_mtok          REAL NOT NULL,
+  effective_from           TEXT NOT NULL,
+  source                   TEXT,
+  notes                    TEXT,
+  created_at               TEXT NOT NULL,
+  UNIQUE(model, tier, min_input_tokens, effective_from, currency)
+);
+CREATE INDEX IF NOT EXISTS idx_model_pricing_lookup
+  ON model_pricing(model, effective_from, min_input_tokens);
 `;
 
 export function getDb(): Database.Database {

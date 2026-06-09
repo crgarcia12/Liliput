@@ -1088,6 +1088,7 @@ function recordUsageEvent(
     cacheReadTokens?: number;
     cacheWriteTokens?: number;
     nanoAiu?: number;
+    durationMs?: number;
   },
 ): void {
   // Resolve owning turn from the agent (preferred) or the task's current turn
@@ -1097,11 +1098,14 @@ function recordUsageEvent(
     agent?.turnId ?? turnStore.getCurrentTurn(taskId)?.id ?? turnStore.getLastTurn(taskId)?.id;
   if (!turnId) return;
   const updated = turnStore.recordUsage(turnId, {
+    model: event.model,
+    agentId,
     ...(event.inputTokens != null ? { inputTokens: event.inputTokens } : {}),
     ...(event.outputTokens != null ? { outputTokens: event.outputTokens } : {}),
     ...(event.cacheReadTokens != null ? { cacheReadTokens: event.cacheReadTokens } : {}),
     ...(event.cacheWriteTokens != null ? { cacheWriteTokens: event.cacheWriteTokens } : {}),
     ...(event.nanoAiu != null ? { nanoAiu: event.nanoAiu } : {}),
+    ...(event.durationMs != null ? { durationMs: event.durationMs } : {}),
     calls: 1,
   });
   if (updated) {

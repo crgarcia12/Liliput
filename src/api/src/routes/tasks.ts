@@ -15,6 +15,8 @@ import { runFeatureDecomposer } from '../engine/feature-decomposer-runner.js';
 import { emitIssuesForWorkstream } from '../engine/pm-issue-flow.js';
 import * as featureStore from '../stores/feature-store.js';
 import * as turnStore from '../stores/turn-store.js';
+import * as pricingStore from '../stores/pricing-store.js';
+import * as costStore from '../stores/cost-store.js';
 import { logger } from '../logger.js';
 
 /**
@@ -952,6 +954,97 @@ export function createTasksRouter(
 
   router.get('/api/workstreams-usage', (_req: Request, res: Response) => {
     res.json(Object.fromEntries(turnStore.rollupAllWorkstreams()));
+  });
+
+  // ─── Cost rollups ──────────────────────────────────────────────────────
+  // Cost is computed at read time from per-call usage rows joined to the
+  // `model_pricing` table, using the price effective at each call's
+  // `occurred_at`. Returns CostRollup. Currency defaults to USD; pass
+  // ?currency=XXX to override.
+  router.get('/api/tasks/:id/cost', (req: Request, res: Response) => {
+    const id = String(req.params['id'] ?? '');
+    const currency = String(req.query['currency'] ?? 'USD');
+    res.json(costStore.costForTask(id, currency));
+  });
+
+  router.get('/api/workstreams/:id/cost', (req: Request, res: Response) => {
+    const id = String(req.params['id'] ?? '');
+    const currency = String(req.query['currency'] ?? 'USD');
+    res.json(costStore.costForWorkstream(id, currency));
+  });
+
+  router.get('/api/repos/:repo/cost', (req: Request, res: Response) => {
+    const repo = decodeURIComponent(String(req.params['repo'] ?? ''));
+    const currency = String(req.query['currency'] ?? 'USD');
+    res.json(costStore.costForRepo(repo, currency));
+  });
+
+  // ─── Model pricing CRUD ────────────────────────────────────────────────
+  // Backs the cost rollups above. Rows are versioned by `effective_from`
+  // (ISO date) so prices can change without losing historical accuracy.
+  router.get('/api/pricing', (req: Request, res: Response) => {
+    const model = req.query['model'] ? String(req.query['model']) : undefined;
+    res.json({ prices: pricingStore.listPrices(model ? { model } : {}) });
+  });
+
+  router.post('/api/pricing', (req: Request, res: Response) => {
+    const body = req.body as Partial<{
+      model: string;
+      tier: string;
+      minInputTokens: number;
+      currency: string;
+      inputPerMtok: number;
+      cachedInputPerMtok: number | null;
+      cacheWritePerMtok: number | null;
+      outputPerMtok: number;
+      effectiveFrom: string;
+      source: string | null;
+      notes: string | null;
+    }>;
+    if (
+      !body?.model ||
+      typeof body.inputPerMtok !== 'number' ||
+      typeof body.outputPerMtok !== 'number' ||
+      !body.effectiveFrom
+    ) {
+      res.status(400).json({
+        error: 'model, inputPerMtok, outputPerMtok, effectiveFrom are required',
+      });
+      return;
+    }
+    try {
+      const price = pricingStore.upsertPrice({
+        model: body.model,
+        ...(body.tier ? { tier: body.tier } : {}),
+        ...(body.minInputTokens != null ? { minInputTokens: body.minInputTokens } : {}),
+        ...(body.currency ? { currency: body.currency } : {}),
+        inputPerMtok: body.inputPerMtok,
+        ...(body.cachedInputPerMtok !== undefined
+          ? { cachedInputPerMtok: body.cachedInputPerMtok }
+          : {}),
+        ...(body.cacheWritePerMtok !== undefined
+          ? { cacheWritePerMtok: body.cacheWritePerMtok }
+          : {}),
+        outputPerMtok: body.outputPerMtok,
+        effectiveFrom: body.effectiveFrom,
+        ...(body.source !== undefined ? { source: body.source } : {}),
+        ...(body.notes !== undefined ? { notes: body.notes } : {}),
+      });
+      res.status(201).json(price);
+    } catch (err) {
+      logger.warn({ err }, 'pricing upsert failed');
+      res.status(500).json({ error: 'upsert failed' });
+    }
+  });
+
+  router.delete('/api/pricing/:id', (req: Request, res: Response) => {
+    const id = String(req.params['id'] ?? '');
+    const ok = pricingStore.deletePrice(id);
+    if (!ok) {
+      res.status(404).json({ error: 'not found' });
+      return;
+    }
+    res.status(204).end();
   });
 
   return router;

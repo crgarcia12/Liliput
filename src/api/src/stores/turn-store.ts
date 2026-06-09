@@ -221,16 +221,30 @@ export function closeCurrentTurn(taskId: string): Turn | undefined {
 }
 
 export interface UsageDelta {
+  /** Model id reported by the SDK `assistant.usage` event. Required so the
+   *  per-call row can be priced later. Old callers that don't have a model
+   *  (legacy tests) may pass undefined; the per-call row is still written
+   *  with model='unknown' so totals stay correct. */
+  model?: string;
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
   nanoAiu?: number;
+  /** ISO-8601 UTC timestamp of the LLM call. Defaults to now(). */
+  occurredAt?: string;
+  /** Wall-clock duration of the LLM call in ms, if the SDK reported it. */
+  durationMs?: number;
   /** Number of API calls represented by this delta. Defaults to 1. */
   calls?: number;
+  /** Owning agent id when known. Stored on the per-call row so cost can
+   *  later be sliced per agent kind (coder / reviewer / ops-fixer). */
+  agentId?: string;
 }
 
-/** Add a usage delta to a turn's running totals. */
+/** Add a usage delta to a turn's running totals AND persist a per-call row
+ *  (one per SDK `assistant.usage` event) so cost can be computed against
+ *  the price effective at the time of the call. */
 export function recordUsage(turnId: string, delta: UsageDelta): Turn | undefined {
   const db = getDb();
   const row = db.prepare('SELECT * FROM turns WHERE id = ?').get(turnId) as
@@ -239,15 +253,20 @@ export function recordUsage(turnId: string, delta: UsageDelta): Turn | undefined
   if (!row) return undefined;
 
   const calls = delta.calls ?? 1;
-  const newInput = row.input_tokens + (delta.inputTokens ?? 0);
-  const newOutput = row.output_tokens + (delta.outputTokens ?? 0);
-  const newCacheRead = row.cache_read_tokens + (delta.cacheReadTokens ?? 0);
-  const newCacheWrite = row.cache_write_tokens + (delta.cacheWriteTokens ?? 0);
+  const inputTokens = delta.inputTokens ?? 0;
+  const outputTokens = delta.outputTokens ?? 0;
+  const cacheReadTokens = delta.cacheReadTokens ?? 0;
+  const cacheWriteTokens = delta.cacheWriteTokens ?? 0;
+  const newInput = row.input_tokens + inputTokens;
+  const newOutput = row.output_tokens + outputTokens;
+  const newCacheRead = row.cache_read_tokens + cacheReadTokens;
+  const newCacheWrite = row.cache_write_tokens + cacheWriteTokens;
   const newNanoAiu =
     delta.nanoAiu != null ? (row.nano_aiu ?? 0) + delta.nanoAiu : row.nano_aiu;
   const newCalls = row.call_count + calls;
+  const occurredAt = delta.occurredAt ?? new Date().toISOString();
 
-  db.prepare(
+  const updateTurn = db.prepare(
     `UPDATE turns
         SET input_tokens = ?,
             output_tokens = ?,
@@ -256,7 +275,46 @@ export function recordUsage(turnId: string, delta: UsageDelta): Turn | undefined
             nano_aiu = ?,
             call_count = ?
       WHERE id = ?`,
-  ).run(newInput, newOutput, newCacheRead, newCacheWrite, newNanoAiu, newCalls, turnId);
+  );
+  const insertCall = db.prepare(
+    `INSERT INTO turn_usage_call (
+       id, turn_id, task_id, agent_id, model,
+       input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+       nano_aiu, duration_ms, occurred_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+
+  const txn = db.transaction(() => {
+    updateTurn.run(
+      newInput,
+      newOutput,
+      newCacheRead,
+      newCacheWrite,
+      newNanoAiu,
+      newCalls,
+      turnId,
+    );
+    // One row per SDK `assistant.usage` event (calls=1 is the common case).
+    // If a caller batches multiple calls into a single delta (calls > 1) we
+    // still write a single row with the summed counts — preserves cost math
+    // but loses per-call granularity. The only producer today (agent-engine
+    // `recordUsageEvent`) always passes calls=1, so this is fine.
+    insertCall.run(
+      uuid(),
+      turnId,
+      row.task_id,
+      delta.agentId ?? null,
+      delta.model ?? 'unknown',
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+      delta.nanoAiu ?? null,
+      delta.durationMs ?? null,
+      occurredAt,
+    );
+  });
+  txn();
 
   return getTurn(turnId);
 }

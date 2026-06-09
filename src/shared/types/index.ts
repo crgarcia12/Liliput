@@ -598,3 +598,92 @@ export interface WorkstreamUsageResponse extends UsageRollup {
 export interface RepoUsageResponse extends UsageRollup {
   repository: string;
 }
+
+// ─── Per-LLM-call usage rows + pricing ───────────────────────
+//
+// Liliput records two layers of token usage:
+//   1. Aggregate counters on `Turn` (cheap to read, lossy — single per-turn total)
+//   2. Per-call rows (`TurnUsageCall`) — one per SDK `assistant.usage` event,
+//      with the model, raw token counts, and the timestamp of the call.
+//      These are the source of truth for cost computation, because prices
+//      change over time and one turn may mix multiple models (coder + ops
+//      fixer + reviewer).
+
+/** Single LLM API call as reported by the SDK `assistant.usage` event. */
+export interface TurnUsageCall {
+  id: string;
+  turnId: string;
+  taskId: string;
+  agentId?: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  nanoAiu?: number;
+  durationMs?: number;
+  /** ISO-8601 UTC. Used to resolve which `ModelPrice` row applied at the
+   *  time of the call (prices change). */
+  occurredAt: string;
+}
+
+/** A price entry for a model. Prices are per 1,000,000 tokens (matches
+ *  GitHub Copilot's published units).
+ *
+ *  Lookup at cost time picks the row where:
+ *    model = ?
+ *    AND effective_from <= occurredAt
+ *    AND min_input_tokens <= callInputTokens
+ *  ordered by (effective_from DESC, min_input_tokens DESC) LIMIT 1.
+ *
+ *  Tier + min_input_tokens model GitHub's "Default" vs "Long context"
+ *  pricing (e.g. GPT-5.5 charges 2× over 272K input tokens). Models
+ *  without tiering use tier='default' + min_input_tokens=0. */
+export interface ModelPrice {
+  id: string;
+  model: string;
+  /** Display label for the tier (e.g. 'default', 'long_context'). Free-form. */
+  tier: string;
+  /** Pricing applies when call inputTokens >= this. Default 0. */
+  minInputTokens: number;
+  currency: string;
+  /** Per million input tokens, in `currency`. */
+  inputPerMtok: number;
+  /** Per million cached-input (cache read) tokens. */
+  cachedInputPerMtok?: number;
+  /** Per million cache-write tokens (Anthropic-style). */
+  cacheWritePerMtok?: number;
+  /** Per million output tokens. */
+  outputPerMtok: number;
+  /** ISO-8601 UTC date this price became effective. */
+  effectiveFrom: string;
+  /** Optional provenance, e.g. 'github-copilot-2026-06-09'. */
+  source?: string;
+  notes?: string;
+  createdAt: string;
+}
+
+/** Per-model breakdown row in a cost rollup. */
+export interface CostByModel {
+  model: string;
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  /** Estimated cost in the rollup's currency (USD by default). */
+  estimatedCost: number;
+  /** True when at least one call in this model bucket had no matching
+   *  `ModelPrice` row — its cost is reported as 0 and counted in
+   *  `unpricedCalls` at the rollup level. */
+  hasUnpriced: boolean;
+}
+
+/** Aggregate cost across all calls of a task/workstream/repo. */
+export interface CostRollup {
+  currency: string;
+  estimatedCost: number;
+  pricedCalls: number;
+  unpricedCalls: number;
+  perModel: CostByModel[];
+}
