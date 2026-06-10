@@ -804,7 +804,16 @@ function chatStatus(io: SocketServer, taskId: string, text: string): void {
 
 // ─── Multi-agent pipeline state ───────────────────────────────
 
-const PIPELINE_KEYS: PipelineStage[] = ['rewrite', 'plan', 'critique', 'implement', 'review'];
+const PIPELINE_KEYS: PipelineStage[] = [
+  'rewrite',
+  'plan',
+  'critique',
+  'implement',
+  'build',
+  'deploy',
+  'validate',
+  'review',
+];
 
 function emptyPipelineStages(): Record<PipelineStage, PipelineStageStatus> {
   return {
@@ -812,6 +821,9 @@ function emptyPipelineStages(): Record<PipelineStage, PipelineStageStatus> {
     plan: 'pending',
     critique: 'pending',
     implement: 'pending',
+    build: 'pending',
+    deploy: 'pending',
+    validate: 'pending',
     review: 'pending',
   };
 }
@@ -1728,6 +1740,15 @@ interface ValidateOutcome {
  * devUrl set, PR opened) is unaffected by validate-loop failures.
  */
 async function validateAndHealLoop(ctx: ValidateContext): Promise<ValidateOutcome> {
+  setPipelineStage(ctx.io, ctx.taskId, 'validate', 'active');
+  try {
+    return await validateAndHealLoopInner(ctx);
+  } finally {
+    setPipelineStage(ctx.io, ctx.taskId, 'validate', 'done');
+  }
+}
+
+async function validateAndHealLoopInner(ctx: ValidateContext): Promise<ValidateOutcome> {
   const { io, taskId } = ctx;
   let imageRef = ctx.initialImageRef;
   let sha = ctx.initialSha;
@@ -2439,6 +2460,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   setPipelineStage(io, taskId, 'implement', 'done');
 
   // Builder
+  setPipelineStage(io, taskId, 'build', 'active');
   const builder = spawnPhase(io, taskId, 'builder', 'Builder Liliputian');
   if (!builder) throw new Error('Failed to register builder agent');
 
@@ -2562,8 +2584,10 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   store.updateTask(taskId, { imageRef: buildOutcome.imageRef, commitSha: buildOutcome.sha });
   completePhase(io, taskId, coder);
   completePhase(io, taskId, builder);
+  setPipelineStage(io, taskId, 'build', 'done');
 
   // Deployer
+  setPipelineStage(io, taskId, 'deploy', 'active');
   setTaskStatus(io, taskId, 'deploying');
   const deployer = spawnPhase(io, taskId, 'deployer', 'Deployer Liliputian');
   if (!deployer) throw new Error('Failed to register deployer agent');
@@ -2606,11 +2630,11 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   const devUrl = `${PUBLIC_BASE_URL}${pathPrefix}/`;
   logPhase(io, taskId, deployer, 'info', `Dev environment live at ${devUrl}`);
   completePhase(io, taskId, deployer);
+  setPipelineStage(io, taskId, 'deploy', 'done');
 
   // Auto-open a draft PR right after deploy so the user can see it from the UI
   // during review. Ship marks it ready (or merges in direct mode); Discard closes it.
   const reviewer = spawnPhase(io, taskId, 'reviewer', 'Reviewer Liliputian');
-  setPipelineStage(io, taskId, 'review', 'active');
   let prUrl: string | undefined;
   let prNumber: number | undefined;
   if (reviewer && task.repository && task.branch) {
@@ -2705,6 +2729,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   // → validate) check whether anything important was missed. Blocks for up to
   // the reviewer timeout (typically a few seconds). If the reviewer flags
   // something the queued feedback will be picked up by the next coder turn.
+  setPipelineStage(io, taskId, 'review', 'active');
   try {
     await triggerPipelineReview(io, taskId, {
       workspaceRoot: handle.cwd,
@@ -3296,6 +3321,7 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   setPipelineStage(io, taskId, 'implement', 'done');
 
   // Commit + push delta.
+  setPipelineStage(io, taskId, 'build', 'active');
   const builder = spawnPhase(io, taskId, 'builder', 'Builder Liliputian');
   if (!builder) throw new Error('Failed to register builder agent');
 
@@ -3387,9 +3413,11 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   });
   store.updateTask(taskId, { imageRef: buildOutcome.imageRef, commitSha: buildOutcome.sha });
   completePhase(io, taskId, builder);
+  setPipelineStage(io, taskId, 'build', 'done');
 
   chatStatus(io, taskId, `🚀 Image \`${buildOutcome.imageRef.split('/').pop()}\` built. Rolling preview deployment…`);
 
+  setPipelineStage(io, taskId, 'deploy', 'active');
   setTaskStatus(io, taskId, 'deploying');
   const deployer = spawnPhase(io, taskId, 'deployer', 'Deployer Liliputian');
   if (!deployer) throw new Error('Failed to register deployer agent');
@@ -3411,6 +3439,7 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   });
   store.updateTask(taskId, { imageRef: deployOutcome.imageRef, commitSha: deployOutcome.sha });
   completePhase(io, taskId, deployer);
+  setPipelineStage(io, taskId, 'deploy', 'done');
 
   const devUrl = `${PUBLIC_BASE_URL}${live.pathPrefix}/`;
   // Persist devUrl/namespace early but keep status='deploying' until validate
@@ -3485,6 +3514,7 @@ async function runRebuildOnly(
   const task = store.getTask(taskId);
   if (!task) throw new Error('Task not found');
 
+  setPipelineStage(io, taskId, 'build', 'active');
   const builder = spawnPhase(io, taskId, 'builder', 'Builder Liliputian');
   if (!builder) throw new Error('Failed to register builder agent');
 
@@ -3572,9 +3602,11 @@ async function runRebuildOnly(
   });
   store.updateTask(taskId, { imageRef: buildOutcome.imageRef, commitSha: buildOutcome.sha });
   completePhase(io, taskId, builder);
+  setPipelineStage(io, taskId, 'build', 'done');
 
   chatStatus(io, taskId, `🚀 Image \`${buildOutcome.imageRef.split('/').pop()}\` built. Rolling preview deployment…`);
 
+  setPipelineStage(io, taskId, 'deploy', 'active');
   setTaskStatus(io, taskId, 'deploying');
   const deployer = spawnPhase(io, taskId, 'deployer', 'Deployer Liliputian');
   if (!deployer) throw new Error('Failed to register deployer agent');
@@ -3596,6 +3628,7 @@ async function runRebuildOnly(
   });
   store.updateTask(taskId, { imageRef: deployOutcome.imageRef, commitSha: deployOutcome.sha });
   completePhase(io, taskId, deployer);
+  setPipelineStage(io, taskId, 'deploy', 'done');
 
   const devUrl = `${PUBLIC_BASE_URL}${live.pathPrefix}/`;
   store.updateTask(taskId, { devUrl, devNamespace: live.namespace, devPort: live.port, devEnvState: 'active' });

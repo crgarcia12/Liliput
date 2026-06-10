@@ -161,6 +161,9 @@ export type PipelineStage =
   | 'plan'       // Architect drafts an implementation plan
   | 'critique'   // Critic (rubber-duck) reviews the plan
   | 'implement'  // Coder writes the code
+  | 'build'      // Builder commits, pushes, and builds the container image
+  | 'deploy'     // Deployer rolls the image onto AKS dev preview
+  | 'validate'   // Tester (Validator) probes the live preview & auto-heals
   | 'review';    // Reviewer (rubber-duck) reviews the result
 
 export type PipelineStageStatus =
@@ -183,6 +186,9 @@ export const PIPELINE_STAGES: ReadonlyArray<{
   { key: 'plan',      label: 'Plan',      icon: '🗺️',  role: 'architect' },
   { key: 'critique',  label: 'Critique',  icon: '🦆',  role: 'critic' },
   { key: 'implement', label: 'Implement', icon: '🔨',  role: 'coder' },
+  { key: 'build',     label: 'Build',     icon: '📦',  role: 'builder' },
+  { key: 'deploy',    label: 'Deploy',    icon: '🚀',  role: 'deployer' },
+  { key: 'validate',  label: 'Validate',  icon: '🩺',  role: 'tester' },
   { key: 'review',    label: 'Review',    icon: '👀',  role: 'reviewer' },
 ];
 

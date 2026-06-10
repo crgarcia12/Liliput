@@ -7,11 +7,14 @@ import type { PipelineStage, PipelineStageStatus, PipelineState } from '@shared/
 // imports *types* from the shared package — pulling in a runtime value trips
 // the CommonJS/ESM module-format conflict during the Next.js build.
 const PIPELINE_STAGES: ReadonlyArray<{ key: PipelineStage; label: string; icon: string }> = [
-  { key: 'rewrite', label: 'Rewrite', icon: '✍️' },
-  { key: 'plan', label: 'Plan', icon: '🗺️' },
-  { key: 'critique', label: 'Critique', icon: '🦆' },
+  { key: 'rewrite',   label: 'Rewrite',   icon: '✍️' },
+  { key: 'plan',      label: 'Plan',      icon: '🗺️' },
+  { key: 'critique',  label: 'Critique',  icon: '🦆' },
   { key: 'implement', label: 'Implement', icon: '🔨' },
-  { key: 'review', label: 'Review', icon: '👀' },
+  { key: 'build',     label: 'Build',     icon: '📦' },
+  { key: 'deploy',    label: 'Deploy',    icon: '🚀' },
+  { key: 'validate',  label: 'Validate',  icon: '🩺' },
+  { key: 'review',    label: 'Review',    icon: '👀' },
 ];
 
 /**
@@ -57,6 +60,9 @@ export default function AgentPipeline({ pipeline }: Props) {
       plan: 'pending',
       critique: 'pending',
       implement: 'pending',
+      build: 'pending',
+      deploy: 'pending',
+      validate: 'pending',
       review: 'pending',
     };
 
