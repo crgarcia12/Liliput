@@ -38,13 +38,13 @@ export default function TaskPage() {
 
   const { connected, agentEvents, chatMessages: socketMessages, activity, pipeline: livePipeline, joinTask, leaveTask } =
     useSocket();
-  const { getTask, sendMessage, shipTask, discardTask, setTaskModel, setTaskReasoningEffort } = useTasks();
+  const { getTask, sendMessage, shipTask, discardTask, closeTask, cancelTask, setTaskModel, setTaskReasoningEffort } = useTasks();
 
   const [task, setTask] = useState<Task | null>(null);
   const [localMessages, setLocalMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [actionPending, setActionPending] = useState<'ship' | 'discard' | 'approve' | null>(null);
+  const [actionPending, setActionPending] = useState<'ship' | 'discard' | 'close' | 'cancel' | 'approve' | null>(null);
   const [showSpec, setShowSpec] = useState(true);
   const [modelOptions, setModelOptions] = useState<readonly ModelOption[]>([]);
   const [modelDefault, setModelDefault] = useState<string>('');
@@ -296,10 +296,35 @@ export default function TaskPage() {
     return Array.from(agentMap.values());
   }, [task, agentEvents, taskId]);
 
-  const isWorking = agents.some((a) => a.status === 'working');
+  // Treat the task as actively working only when both an agent is in the
+  // 'working' state AND the task isn't in a terminal status. Without the
+  // terminal-status gate, stale 'working' rows from a prior run kept the
+  // "Liliputians are working…" indicator on after the task had completed
+  // / failed / been discarded.
+  const isTerminalStatus =
+    task?.status === 'completed' ||
+    task?.status === 'discarded' ||
+    task?.status === 'failed' ||
+    task?.status === 'deleting' ||
+    task?.status === 'review';
+  const isWorking = !isTerminalStatus && agents.some((a) => a.status === 'working');
 
   const handleSend = useCallback(
     async (message: string) => {
+      // Reopen guard: chatting on a closed/cancelled workstream silently
+      // reopens it (the API routes a 'completed'/'failed' chat through
+      // iterateTask). Confirm once so it doesn't happen by accident.
+      const reopens =
+        task?.status === 'completed' ||
+        task?.status === 'discarded' ||
+        task?.status === 'failed';
+      if (reopens) {
+        const label =
+          task?.status === 'failed' ? 'cancelled' : task?.status;
+        if (!confirm(`This workstream is "${label}". Sending a message will reopen it and run another agent turn. Continue?`)) {
+          return;
+        }
+      }
       const userMsg: ChatMessage = {
         id: `local-${Date.now()}`,
         taskId,
@@ -321,7 +346,7 @@ export default function TaskPage() {
         setLocalMessages((prev) => [...prev, errMsg]);
       }
     },
-    [taskId, sendMessage],
+    [taskId, sendMessage, task?.status],
   );
 
   const handleApproveSpec = useCallback(async () => {
@@ -578,7 +603,12 @@ export default function TaskPage() {
               <span className="text-base leading-none">📋</span>
               <span className="leading-tight">Workstreams</span>
             </Link>
-            {task?.status === 'review' && (
+            {/* Action bar
+                - PR link: always visible when a PR exists (any status).
+                - Ship / Discard: review state only.
+                - Cancel: while an agent is actively working — aborts the turn.
+                - Close: any non-terminal state — park work without opening a PR. */}
+            {task && (task.pullRequestUrl || task.status === 'review' || isWorking || !isTerminalStatus) && (
               <div className="flex flex-col gap-1 justify-center">
                 {task.pullRequestUrl && (
                   <a
@@ -591,46 +621,95 @@ export default function TaskPage() {
                   </a>
                 )}
                 <div className="flex gap-1">
-                  <button
-                    onClick={async () => {
-                      if (!task) return;
-                      setActionPending('ship');
-                      try {
-                        const updated = await shipTask(task.id);
-                        setTask(updated);
-                      } catch (err) {
-                        setError(err instanceof Error ? err.message : 'Ship failed');
-                      } finally {
-                        setActionPending(null);
-                      }
-                    }}
-                    disabled={actionPending !== null}
-                    className="text-[11px] px-2 py-0.5 rounded bg-green-700 hover:bg-green-600 text-white disabled:opacity-50"
-                  >
-                    {actionPending === 'ship'
-                      ? 'Shipping…'
-                      : `🚀 Ship (${task.commitMode === 'direct' ? 'merge' : 'PR'})`}
-                  </button>
-                  <button
-                    onClick={async () => {
-                      if (!task) return;
-                      if (!confirm('Discard this task? Dev environment + branch will be deleted.'))
-                        return;
-                      setActionPending('discard');
-                      try {
-                        const updated = await discardTask(task.id);
-                        setTask(updated);
-                      } catch (err) {
-                        setError(err instanceof Error ? err.message : 'Discard failed');
-                      } finally {
-                        setActionPending(null);
-                      }
-                    }}
-                    disabled={actionPending !== null}
-                    className="text-[11px] px-2 py-0.5 rounded bg-red-800 hover:bg-red-700 text-white disabled:opacity-50"
-                  >
-                    {actionPending === 'discard' ? 'Discarding…' : '🗑️'}
-                  </button>
+                  {task.status === 'review' && (
+                    <>
+                      <button
+                        onClick={async () => {
+                          if (!task) return;
+                          setActionPending('ship');
+                          try {
+                            const updated = await shipTask(task.id);
+                            setTask(updated);
+                          } catch (err) {
+                            setError(err instanceof Error ? err.message : 'Ship failed');
+                          } finally {
+                            setActionPending(null);
+                          }
+                        }}
+                        disabled={actionPending !== null}
+                        className="text-[11px] px-2 py-0.5 rounded bg-green-700 hover:bg-green-600 text-white disabled:opacity-50"
+                      >
+                        {actionPending === 'ship'
+                          ? 'Shipping…'
+                          : `🚀 Ship (${task.commitMode === 'direct' ? 'merge' : 'PR'})`}
+                      </button>
+                      <button
+                        onClick={async () => {
+                          if (!task) return;
+                          if (!confirm('Discard this task? Dev environment + branch will be deleted.'))
+                            return;
+                          setActionPending('discard');
+                          try {
+                            const updated = await discardTask(task.id);
+                            setTask(updated);
+                          } catch (err) {
+                            setError(err instanceof Error ? err.message : 'Discard failed');
+                          } finally {
+                            setActionPending(null);
+                          }
+                        }}
+                        disabled={actionPending !== null}
+                        className="text-[11px] px-2 py-0.5 rounded bg-red-800 hover:bg-red-700 text-white disabled:opacity-50"
+                        title="Discard — delete dev env, close PR, delete branch"
+                      >
+                        {actionPending === 'discard' ? 'Discarding…' : '🗑️'}
+                      </button>
+                    </>
+                  )}
+                  {isWorking && (
+                    <button
+                      onClick={async () => {
+                        if (!task) return;
+                        setActionPending('cancel');
+                        try {
+                          const updated = await cancelTask(task.id);
+                          setTask(updated);
+                        } catch (err) {
+                          setError(err instanceof Error ? err.message : 'Cancel failed');
+                        } finally {
+                          setActionPending(null);
+                        }
+                      }}
+                      disabled={actionPending !== null}
+                      className="text-[11px] px-2 py-0.5 rounded bg-orange-700 hover:bg-orange-600 text-white disabled:opacity-50"
+                      title="Stop the current agent turn — branch + dev env stay"
+                    >
+                      {actionPending === 'cancel' ? 'Cancelling…' : '⏹ Cancel'}
+                    </button>
+                  )}
+                  {!isTerminalStatus && (
+                    <button
+                      onClick={async () => {
+                        if (!task) return;
+                        if (!confirm('Close this workstream? The branch and any commits stay on the remote (no PR). The dev environment will be paused.'))
+                          return;
+                        setActionPending('close');
+                        try {
+                          const updated = await closeTask(task.id);
+                          setTask(updated);
+                        } catch (err) {
+                          setError(err instanceof Error ? err.message : 'Close failed');
+                        } finally {
+                          setActionPending(null);
+                        }
+                      }}
+                      disabled={actionPending !== null}
+                      className="text-[11px] px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-white disabled:opacity-50"
+                      title="Close — keep branch + commits, no PR"
+                    >
+                      {actionPending === 'close' ? 'Closing…' : '🏁 Close'}
+                    </button>
+                  )}
                 </div>
               </div>
             )}

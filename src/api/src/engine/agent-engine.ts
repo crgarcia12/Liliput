@@ -2856,6 +2856,104 @@ export async function discardTask(io: SocketServer, taskId: string): Promise<Tas
 }
 
 /**
+ * Close a task in place — no PR, no branch delete. Used when the user just
+ * wants to park the work where it is: the agent's commits stay on the remote
+ * branch, the dev namespace is kept (image cached) so it can be resurrected,
+ * and the task transitions to `completed`. Differs from `shipTask` (opens PR)
+ * and `discardTask` (closes PR + deletes branch + deletes namespace).
+ */
+export async function closeTask(io: SocketServer, taskId: string): Promise<Task> {
+  const task = store.getTask(taskId);
+  if (!task) throw new Error('Task not found');
+
+  // Abort any in-flight agent turn so the SDK stops immediately.
+  try {
+    const live = liveSessions.get(taskId);
+    if (live) abortAgentTurn(live.agentSession);
+  } catch (err) {
+    logger.warn(
+      { taskId, err: err instanceof Error ? err.message : String(err) },
+      'closeTask: abort failed (continuing)',
+    );
+  }
+
+  // Best-effort stop the dev env (preserve namespace + image so a future chat
+  // can resurrect it). Skip when already stopped/deleted or when the task
+  // never produced one.
+  const devEnvState = task.devEnvState ?? 'active';
+  if (task.devNamespace && devEnvState === 'active') {
+    try {
+      await stopDevEnvForTask(io, taskId);
+    } catch (err) {
+      logger.warn(
+        { taskId, err: err instanceof Error ? err.message : String(err) },
+        'closeTask: stopDevEnv failed (continuing)',
+      );
+    }
+  }
+
+  // Free the SDK session + on-disk workspace. The branch is already on the
+  // remote so nothing about the user's work is lost.
+  await tearDownLiveSession(taskId);
+
+  setTaskStatus(io, taskId, 'completed');
+  const msg = store.addChatMessage(
+    taskId,
+    'liliput',
+    '🏁 Workstream closed without opening a PR. The branch is preserved on the remote — chat to reopen and continue.',
+  );
+  if (msg) io.to(`task:${taskId}`).emit('chat:message', msg);
+  return store.getTask(taskId)!;
+}
+
+/**
+ * Cancel an in-flight run without tearing anything down. Aborts the current
+ * agent turn (SDK call) and flips the task to `failed` with a "cancelled by
+ * user" message. The branch, dev env, and workspace are left intact so the
+ * user can pick it back up via chat (which routes through the standard
+ * `failed → iterateTask` recovery path).
+ */
+export async function cancelTask(io: SocketServer, taskId: string): Promise<Task> {
+  const task = store.getTask(taskId);
+  if (!task) throw new Error('Task not found');
+
+  // Abort the SDK turn (returns control to the engine immediately) and pop
+  // any pending chat messages so they don't replay on the next turn.
+  try {
+    const live = liveSessions.get(taskId);
+    if (live) abortAgentTurn(live.agentSession);
+  } catch (err) {
+    logger.warn(
+      { taskId, err: err instanceof Error ? err.message : String(err) },
+      'cancelTask: abort live session failed (continuing)',
+    );
+  }
+  const inFlight = inFlightAgents.get(taskId);
+  if (inFlight) {
+    inFlight.pendingChatMessages.length = 0;
+    try {
+      void abortAgentTurn(inFlight.agentSession);
+    } catch (err) {
+      logger.warn(
+        { taskId, err: err instanceof Error ? err.message : String(err) },
+        'cancelTask: abort in-flight agent failed (continuing)',
+      );
+    }
+  }
+
+  setTaskStatus(io, taskId, 'failed', {
+    errorMessage: 'Cancelled by user — chat to continue.',
+  });
+  const msg = store.addChatMessage(
+    taskId,
+    'liliput',
+    '🛑 Cancelled. Chat with another instruction to resume on the same branch.',
+  );
+  if (msg) io.to(`task:${taskId}`).emit('chat:message', msg);
+  return store.getTask(taskId)!;
+}
+
+/**
  * Tear down all external state for a task: close PR, delete remote branch,
  * delete dev k8s namespace, dispose live SDK session, remove workspace dir,
  * resync the gateway. Idempotent — every step is best-effort and logs but

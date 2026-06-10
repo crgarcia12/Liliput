@@ -53,6 +53,42 @@ export default function MobileTaskChatPage() {
         <h1 className="text-sm font-bold truncate flex-1 min-w-0 text-cyan-400">
           {task?.title || 'Task'}
         </h1>
+        {task?.pullRequestUrl && (
+          <a
+            href={task.pullRequestUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[10px] px-2 py-1 rounded bg-purple-700 hover:bg-purple-600 text-white shrink-0"
+            aria-label="Open pull request"
+          >
+            🔀 PR{task.pullRequestNumber ? ` #${task.pullRequestNumber}` : ''} ↗
+          </a>
+        )}
+        {m.isWorking && (
+          <button
+            onClick={async () => {
+              await m.cancelTask();
+            }}
+            disabled={m.actionPending !== null}
+            className="text-[10px] px-2 py-1 rounded bg-orange-700 hover:bg-orange-600 text-white shrink-0 disabled:opacity-50"
+            title="Stop the current agent turn"
+          >
+            {m.actionPending === 'cancel' ? '…' : '⏹'}
+          </button>
+        )}
+        {task && task.status !== 'completed' && task.status !== 'discarded' && task.status !== 'failed' && task.status !== 'deleting' && task.status !== 'review' && (
+          <button
+            onClick={async () => {
+              if (!confirm('Close this workstream? Branch + commits stay on the remote (no PR). Dev environment will be paused.')) return;
+              await m.closeTask();
+            }}
+            disabled={m.actionPending !== null}
+            className="text-[10px] px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-white shrink-0 disabled:opacity-50"
+            title="Close — keep branch + commits, no PR"
+          >
+            {m.actionPending === 'close' ? '…' : '🏁'}
+          </button>
+        )}
         {task?.status && (
           <span
             className={`text-[10px] px-2 py-0.5 rounded shrink-0 ${

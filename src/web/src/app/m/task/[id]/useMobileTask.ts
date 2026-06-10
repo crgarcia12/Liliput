@@ -11,7 +11,7 @@ import type { Task, ChatMessage, Agent, ActivityEntry, PipelineState } from '@sh
 
 const API_URL = '';
 
-export type ActionKind = 'ship' | 'discard' | 'approve';
+export type ActionKind = 'ship' | 'discard' | 'close' | 'cancel' | 'approve';
 
 export interface UseMobileTaskReturn {
   task: Task | null;
@@ -29,6 +29,8 @@ export interface UseMobileTaskReturn {
   approveSpec: () => Promise<void>;
   shipTask: () => Promise<void>;
   discardTask: () => Promise<void>;
+  closeTask: () => Promise<void>;
+  cancelTask: () => Promise<void>;
   setTaskModel: (model: string) => Promise<void>;
   setTaskReasoningEffort: (
     effort: ReasoningEffortSelection,
@@ -55,6 +57,8 @@ export function useMobileTask(taskId: string): UseMobileTaskReturn {
     sendMessage: apiSendMessage,
     shipTask: apiShipTask,
     discardTask: apiDiscardTask,
+    closeTask: apiCloseTask,
+    cancelTask: apiCancelTask,
     setTaskModel: apiSetTaskModel,
     setTaskReasoningEffort: apiSetTaskReasoningEffort,
   } = useTasks();
@@ -210,10 +214,27 @@ export function useMobileTask(taskId: string): UseMobileTaskReturn {
     return Array.from(agentMap.values());
   }, [task, agentEvents, taskId]);
 
-  const isWorking = agents.some((a) => a.status === 'working');
+  const isTerminalStatus =
+    task?.status === 'completed' ||
+    task?.status === 'discarded' ||
+    task?.status === 'failed' ||
+    task?.status === 'deleting' ||
+    task?.status === 'review';
+  const isWorking = !isTerminalStatus && agents.some((a) => a.status === 'working');
 
   const sendMessage = useCallback(
     async (message: string) => {
+      const reopens =
+        task?.status === 'completed' ||
+        task?.status === 'discarded' ||
+        task?.status === 'failed';
+      if (reopens) {
+        const label =
+          task?.status === 'failed' ? 'cancelled' : task?.status;
+        if (!confirm(`This workstream is "${label}". Sending a message will reopen it and run another agent turn. Continue?`)) {
+          return;
+        }
+      }
       const userMsg: ChatMessage = {
         id: `local-${Date.now()}`,
         taskId,
@@ -235,7 +256,7 @@ export function useMobileTask(taskId: string): UseMobileTaskReturn {
         setLocalMessages((prev) => [...prev, errMsg]);
       }
     },
-    [taskId, apiSendMessage],
+    [taskId, apiSendMessage, task?.status],
   );
 
   const approveSpec = useCallback(async () => {
@@ -284,6 +305,32 @@ export function useMobileTask(taskId: string): UseMobileTaskReturn {
       setActionPending(null);
     }
   }, [task, apiDiscardTask]);
+
+  const closeTask = useCallback(async () => {
+    if (!task) return;
+    setActionPending('close');
+    try {
+      const updated = await apiCloseTask(task.id);
+      setTask(updated);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Close failed');
+    } finally {
+      setActionPending(null);
+    }
+  }, [task, apiCloseTask]);
+
+  const cancelTask = useCallback(async () => {
+    if (!task) return;
+    setActionPending('cancel');
+    try {
+      const updated = await apiCancelTask(task.id);
+      setTask(updated);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Cancel failed');
+    } finally {
+      setActionPending(null);
+    }
+  }, [task, apiCancelTask]);
 
   const setTaskModel = useCallback(
     async (model: string) => {
@@ -378,6 +425,8 @@ export function useMobileTask(taskId: string): UseMobileTaskReturn {
     approveSpec,
     shipTask,
     discardTask,
+    closeTask,
+    cancelTask,
     setTaskModel,
     setTaskReasoningEffort,
     setTaskReviewerModel,

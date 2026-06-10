@@ -31,6 +31,8 @@ interface UseTasksReturn {
   approveSpec: (taskId: string) => Promise<void>;
   shipTask: (taskId: string) => Promise<Task>;
   discardTask: (taskId: string) => Promise<Task>;
+  closeTask: (taskId: string) => Promise<Task>;
+  cancelTask: (taskId: string) => Promise<Task>;
   setTaskModel: (taskId: string, model: string) => Promise<Task>;
   setTaskReasoningEffort: (taskId: string, reasoningEffort: ReasoningEffortSelection) => Promise<Task>;
 }
@@ -107,6 +109,20 @@ export function useTasks(): UseTasksReturn {
     return data.task;
   }, []);
 
+  const closeTask = useCallback(async (taskId: string): Promise<Task> => {
+    const data = await apiRequest<TaskDetailResponse>(`/api/tasks/${taskId}/close`, {
+      method: 'POST',
+    });
+    return data.task;
+  }, []);
+
+  const cancelTask = useCallback(async (taskId: string): Promise<Task> => {
+    const data = await apiRequest<TaskDetailResponse>(`/api/tasks/${taskId}/cancel`, {
+      method: 'POST',
+    });
+    return data.task;
+  }, []);
+
   const setTaskModel = useCallback(async (taskId: string, model: string): Promise<Task> => {
     const data = await apiRequest<TaskDetailResponse>(`/api/tasks/${taskId}/model`, {
       method: 'PATCH',
@@ -134,5 +150,5 @@ export function useTasks(): UseTasksReturn {
     [],
   );
 
-  return { createTask, getTasks, getTask, sendMessage, approveSpec, shipTask, discardTask, setTaskModel, setTaskReasoningEffort };
+  return { createTask, getTasks, getTask, sendMessage, approveSpec, shipTask, discardTask, closeTask, cancelTask, setTaskModel, setTaskReasoningEffort };
 }

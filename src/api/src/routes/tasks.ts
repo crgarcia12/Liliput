@@ -9,7 +9,7 @@ import * as wsStore from '../stores/workstream-store.js';
 import { generateSpec as defaultGenerateSpec, type SpecGenerator } from '../engine/spec-generator.js';
 import { triggerSpecReview } from '../engine/reviewer-trigger.js';
 import { listDevPods, getPodLogs } from '../engine/k8s-deployer.js';
-import { startBuild, shipTask, discardTask, iterateTask, canIterate, enqueueChatForAgent, hasInFlightAgent, stopDevEnvForTask, startDevEnvForTask, deleteDevEnvForTask } from '../engine/agent-engine.js';
+import { startBuild, shipTask, discardTask, closeTask, cancelTask, iterateTask, canIterate, enqueueChatForAgent, hasInFlightAgent, stopDevEnvForTask, startDevEnvForTask, deleteDevEnvForTask } from '../engine/agent-engine.js';
 import { verifyRepositoryAccess } from '../engine/github-pr.js';
 import { runFeatureDecomposer } from '../engine/feature-decomposer-runner.js';
 import { emitIssuesForWorkstream } from '../engine/pm-issue-flow.js';
@@ -834,6 +834,35 @@ export function createTasksRouter(
       const message = err instanceof Error ? err.message : String(err);
       logger.error({ err: message }, 'Failed to discard task');
       res.status(500).json({ error: 'Failed to discard task', details: message });
+    }
+  });
+
+  // POST /api/tasks/:id/close — stop where it is. Keep branch + PR-less commits.
+  // Dev env is paused (namespace preserved) so chat can resurrect it.
+  router.post('/api/tasks/:id/close', async (req: Request, res: Response) => {
+    try {
+      const taskId = req.params['id'] as string;
+      const updated = await closeTask(io, taskId);
+      res.json({ task: updated });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error({ err: message }, 'Failed to close task');
+      res.status(500).json({ error: 'Failed to close task', details: message });
+    }
+  });
+
+  // POST /api/tasks/:id/cancel — abort in-flight agent. Leaves branch + dev env
+  // intact; task flips to 'failed' so the chat handler routes the next message
+  // through the standard recovery path.
+  router.post('/api/tasks/:id/cancel', async (req: Request, res: Response) => {
+    try {
+      const taskId = req.params['id'] as string;
+      const updated = await cancelTask(io, taskId);
+      res.json({ task: updated });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error({ err: message }, 'Failed to cancel task');
+      res.status(500).json({ error: 'Failed to cancel task', details: message });
     }
   });
 
