@@ -9,6 +9,18 @@ import type {
   UpdateUserAgentDefaultRequest,
 } from '@shared/types';
 
+/** Frontend mirror of the backend `AGENT_CONFIG_ROLES` constant. Inlined
+ *  here so that pages can rely on a pure type-only import from
+ *  `@shared/types` (Turbopack rejects mixed CommonJS/ESM runtime imports
+ *  from the shared module). Keep in sync with `src/shared/types/index.ts`. */
+export const AGENT_CONFIG_ROLES: readonly AgentConfigRole[] = [
+  'rewriter',
+  'architect',
+  'critic',
+  'coder',
+  'reviewer',
+] as const;
+
 const API_URL = '';
 
 interface UseProfileDefaultsReturn {

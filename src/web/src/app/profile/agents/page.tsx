@@ -4,12 +4,12 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import TopBar from '../../../components/TopBar';
 import type { ModelOption, ModelsResponse, ReasoningEffort } from '@shared/types';
-import { AGENT_CONFIG_ROLES } from '@shared/types';
 import {
   useProfileDefaults,
   roleLabel,
   roleDescription,
   REASONING_EFFORTS,
+  AGENT_CONFIG_ROLES,
 } from '../../../hooks/useProfileDefaults';
 
 export default function ProfileAgentsPage() {
