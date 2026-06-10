@@ -94,6 +94,11 @@ export interface Task {
   status: TaskStatus;
   workstreamId?: string;      // Parent workstream (auto-assigned if missing)
   featureId?: string;         // Parent feature (set when fan-out spawns this task)
+  /** User who created the task. Used to resolve per-user agent-model defaults
+   *  from `user_agent_defaults` when this task does not pin its own model.
+   *  Undefined for legacy tasks (pre-multi-user) — those fall through to
+   *  env / server defaults exactly as before. */
+  ownerUserId?: string;
   spec?: string;              // Generated specification markdown
   repository?: string;        // Target GitHub repo (e.g. "owner/repo") — what the agent edits
   baseBranch?: string;        // Branch to fork from (default "main")
@@ -550,6 +555,47 @@ export interface TaskListResponse {
 
 export interface TaskDetailResponse {
   task: Task;
+}
+
+// ─── Per-user agent-model defaults ───────────────────────────
+
+/** Agent roles whose model + reasoning-effort are user-configurable via the
+ *  profile. Subset of `AgentRole` — only the 5 LLM-heavy roles. Other roles
+ *  (builder/deployer/tester/researcher/fixer) inherit from the coder. */
+export type AgentConfigRole = 'rewriter' | 'architect' | 'critic' | 'coder' | 'reviewer';
+
+export const AGENT_CONFIG_ROLES: readonly AgentConfigRole[] = [
+  'rewriter',
+  'architect',
+  'critic',
+  'coder',
+  'reviewer',
+] as const;
+
+/** One row of the user's agent-model profile. `model`/`reasoningEffort` are
+ *  nullable — null = "use server fallback" for that role. */
+export interface UserAgentDefault {
+  role: AgentConfigRole;
+  /** Resolved model id (user pin → env → server default). Always populated. */
+  effectiveModel: string;
+  /** User's pinned model id, if any. Null = inherit from server fallback. */
+  pinnedModel?: string | null;
+  /** User's pinned reasoning effort, if any. Null = auto-derive from model. */
+  pinnedReasoningEffort?: ReasoningEffort | null;
+  /** Resolved reasoning effort (user pin → env → auto-derive). May be undefined. */
+  effectiveReasoningEffort?: ReasoningEffort;
+  /** Where the effective values came from — useful for UI hints. */
+  source: 'user' | 'env' | 'default';
+}
+
+export interface UserAgentDefaultsResponse {
+  defaults: readonly UserAgentDefault[];
+}
+
+export interface UpdateUserAgentDefaultRequest {
+  /** Set to null/missing to clear the pin (fall back to env / server default). */
+  model?: string | null;
+  reasoningEffort?: ReasoningEffort | null;
 }
 
 // ─── Auth Status (Copilot SDK health) ─────────────────────────

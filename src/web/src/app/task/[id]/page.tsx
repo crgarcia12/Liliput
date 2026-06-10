@@ -14,6 +14,7 @@ import ResizableSplit from '../../../components/ResizableSplit';
 import CostBadge from '../../../components/CostBadge';
 import { useSocket } from '../../../hooks/useSocket';
 import { useTasks } from '../../../hooks/useTasks';
+import { useProfileDefaults } from '../../../hooks/useProfileDefaults';
 import { get as apiGet } from '../../../lib/api-client';
 import {
   rememberChatConfig,
@@ -39,6 +40,11 @@ export default function TaskPage() {
   const { connected, agentEvents, chatMessages: socketMessages, activity, pipeline: livePipeline, joinTask, leaveTask } =
     useSocket();
   const { getTask, sendMessage, shipTask, discardTask, closeTask, cancelTask, setTaskModel, setTaskReasoningEffort } = useTasks();
+  const { defaults: profileDefaults } = useProfileDefaults();
+  const coderProfileLabel =
+    profileDefaults.find((d) => d.role === 'coder')?.effectiveModel ?? '';
+  const reviewerProfileLabel =
+    profileDefaults.find((d) => d.role === 'reviewer')?.effectiveModel ?? '';
 
   const [task, setTask] = useState<Task | null>(null);
   const [localMessages, setLocalMessages] = useState<ChatMessage[]>([]);
@@ -60,6 +66,7 @@ export default function TaskPage() {
     body: {
       reviewerModel?: string | null;
       reviewerReasoningEffort?: ReasoningEffortSelection | null;
+      reviewerEnabled?: boolean;
     },
   ): Promise<Task> {
     setReviewerPending(true);
@@ -437,11 +444,25 @@ export default function TaskPage() {
                 <label className="flex items-center gap-1 text-xs shrink-0">
                   <span className="text-gray-500">🧠</span>
                   <select
-                    value={task.model ?? modelDefault}
+                    value={task.model ?? '__profile_default__'}
                     disabled={modelPending}
                     onChange={async (e) => {
                       const next = e.target.value;
-                      if (!task || next === (task.model ?? modelDefault)) return;
+                      if (!task) return;
+                      if (next === '__profile_default__') {
+                        if (!task.model) return;
+                        setModelPending(true);
+                        try {
+                          const updated = await setTaskModel(task.id, null);
+                          setTask(updated);
+                        } catch (err) {
+                          setError(err instanceof Error ? err.message : 'Failed to unpin model');
+                        } finally {
+                          setModelPending(false);
+                        }
+                        return;
+                      }
+                      if (next === (task.model ?? '__profile_default__')) return;
                       setModelPending(true);
                       try {
                         const updated = await setTaskModel(task.id, next);
@@ -455,6 +476,9 @@ export default function TaskPage() {
                     className="bg-[#050510] border border-[#1a1a2e] rounded px-1.5 py-0.5 text-gray-300 focus:outline-none focus:border-cyan-500 disabled:opacity-50"
                     title="Copilot SDK model — applies on next agent turn"
                   >
+                    <option value="__profile_default__">
+                      🔗 Profile default{coderProfileLabel ? ` (${coderProfileLabel})` : ''}
+                    </option>
                     {modelOptions.map((m) => (
                       <option key={m.id} value={m.id}>
                         {m.label}
@@ -516,11 +540,25 @@ export default function TaskPage() {
                 >
                   <span className="text-violet-400">🔍</span>
                   <select
-                    value={task.reviewerModel ?? ''}
+                    value={task.reviewerModel ?? '__profile_default__'}
                     disabled={reviewerPending}
                     onChange={async (e) => {
                       const next = e.target.value;
-                      if (!task || next === (task.reviewerModel ?? '')) return;
+                      if (!task) return;
+                      if (next === '__profile_default__') {
+                        if (!task.reviewerModel && task.reviewerEnabled !== false) return;
+                        try {
+                          const updated = await patchReviewer(task.id, {
+                            reviewerModel: null,
+                            reviewerEnabled: true,
+                          });
+                          setTask(updated);
+                        } catch (err) {
+                          setError(err instanceof Error ? err.message : 'Failed to unpin reviewer');
+                        }
+                        return;
+                      }
+                      if (next === (task.reviewerModel ?? '__profile_default__')) return;
                       try {
                         const updated = await patchReviewer(task.id, {
                           reviewerModel: next === '' ? null : next,
@@ -532,7 +570,10 @@ export default function TaskPage() {
                     }}
                     className="bg-[#050510] border border-[#1a1a2e] rounded px-1.5 py-0.5 text-violet-300 focus:outline-none focus:border-violet-500 disabled:opacity-50"
                   >
-                    <option value="">(off)</option>
+                    <option value="__profile_default__">
+                      🔗 Profile default{reviewerProfileLabel ? ` (${reviewerProfileLabel})` : ' (off)'}
+                    </option>
+                    <option value="">(force off)</option>
                     {modelOptions.map((m) => (
                       <option key={`rev-${m.id}`} value={m.id}>
                         {m.label}

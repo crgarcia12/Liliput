@@ -33,7 +33,7 @@ interface UseTasksReturn {
   discardTask: (taskId: string) => Promise<Task>;
   closeTask: (taskId: string) => Promise<Task>;
   cancelTask: (taskId: string) => Promise<Task>;
-  setTaskModel: (taskId: string, model: string) => Promise<Task>;
+  setTaskModel: (taskId: string, model: string | null) => Promise<Task>;
   setTaskReasoningEffort: (taskId: string, reasoningEffort: ReasoningEffortSelection) => Promise<Task>;
 }
 
@@ -123,12 +123,12 @@ export function useTasks(): UseTasksReturn {
     return data.task;
   }, []);
 
-  const setTaskModel = useCallback(async (taskId: string, model: string): Promise<Task> => {
+  const setTaskModel = useCallback(async (taskId: string, model: string | null): Promise<Task> => {
     const data = await apiRequest<TaskDetailResponse>(`/api/tasks/${taskId}/model`, {
       method: 'PATCH',
       body: JSON.stringify({ model }),
     });
-    rememberChatConfig({ model });
+    if (model) rememberChatConfig({ model });
     return data.task;
   }, []);
 

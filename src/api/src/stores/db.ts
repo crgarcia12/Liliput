@@ -235,6 +235,23 @@ CREATE TABLE IF NOT EXISTS model_pricing (
 );
 CREATE INDEX IF NOT EXISTS idx_model_pricing_lookup
   ON model_pricing(model, effective_from, min_input_tokens);
+
+-- Per-user agent model defaults. One row per (user_id, agent_role). NULL
+-- columns mean "fall through to env / server default" for that field.
+-- Resolution order at turn-open is: task pin -> this table -> env -> server
+-- constant. Rows are read live, so changing the profile takes effect on the
+-- next turn (existing snapshots in the turns table are unaffected -- they
+-- capture the resolved values at the time the turn opened).
+CREATE TABLE IF NOT EXISTS user_agent_defaults (
+  user_id          TEXT NOT NULL,
+  agent_role       TEXT NOT NULL,        -- 'rewriter' | 'architect' | 'critic' | 'coder' | 'reviewer'
+  model            TEXT,                 -- NULL = use env / server default
+  reasoning_effort TEXT,                 -- NULL = auto-derive from model id
+  updated_at       TEXT NOT NULL,
+  PRIMARY KEY (user_id, agent_role),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_user_agent_defaults_user ON user_agent_defaults(user_id);
 `;
 
 export function getDb(): Database.Database {

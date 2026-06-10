@@ -29,6 +29,7 @@ const NAV: Array<{ href: string; label: string; icon: string }> = [
   { href: '/dev-environments', label: 'Dev envs', icon: '☁️' },
   { href: '/verdicts', label: 'Verdicts', icon: '⚖️' },
   { href: '/tool-wishes', label: 'Tool wishes', icon: '🛠' },
+  { href: '/profile/agents', label: 'Profile', icon: '⚙️' },
 ];
 
 export default function TopBar({ subtitle, connected, extras, hideNewCta }: TopBarProps) {

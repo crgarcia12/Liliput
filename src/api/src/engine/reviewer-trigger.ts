@@ -34,6 +34,8 @@ import {
   type ReviewContext,
   type ReviewerConfig,
 } from './reviewer-loop.js';
+import { resolveAgentSdkParams } from './agent-config.js';
+import { getDefault as getUserAgentDefault } from '../stores/user-defaults-store.js';
 
 const execFileP = promisify(execFile);
 
@@ -47,14 +49,29 @@ const CHANGED_FILES_MAX = 200;
 function reviewerEnabled(task: Task): boolean {
   if (task.reviewerEnabled === false) return false;
   if (task.reviewerEnabled === true) return true;
-  // Implicit: enabled when a reviewerModel is set, off otherwise.
-  return Boolean(task.reviewerModel && task.reviewerModel.trim());
+  // Implicit: enabled when a reviewerModel is set OR the user has a reviewer
+  // model pinned in their profile (so cheap-defaults seeding for new users
+  // turns the reviewer on automatically).
+  if (task.reviewerModel && task.reviewerModel.trim()) return true;
+  if (task.ownerUserId) {
+    try {
+      const stored = getUserAgentDefault(task.ownerUserId, 'reviewer');
+      if (stored?.model) return true;
+    } catch {
+      // Non-fatal — fall through to disabled.
+    }
+  }
+  return false;
 }
 
 function reviewerConfig(task: Task): ReviewerConfig {
+  const sdk = resolveAgentSdkParams(task, 'reviewer', {
+    ...(task.reviewerModel ? { taskModel: task.reviewerModel } : {}),
+    ...(task.reviewerReasoningEffort ? { taskReasoningEffort: task.reviewerReasoningEffort } : {}),
+  });
   return {
-    ...(task.reviewerModel ? { model: task.reviewerModel } : {}),
-    ...(task.reviewerReasoningEffort ? { reasoningEffort: task.reviewerReasoningEffort } : {}),
+    model: sdk.model,
+    ...(sdk.reasoningEffort ? { reasoningEffort: sdk.reasoningEffort } : {}),
   };
 }
 
@@ -278,17 +295,18 @@ export async function triggerPipelineReview(
       };
     }
 
+    const reviewerCfg = reviewerConfig(task);
     logger.info(
       {
         taskId,
         sha: ctx.sha,
         kind: ctx.kind,
-        model: task.reviewerModel ?? '(default)',
-        effort: task.reviewerReasoningEffort ?? '(auto)',
+        model: reviewerCfg.model ?? '(default)',
+        effort: reviewerCfg.reasoningEffort ?? '(auto)',
       },
       'reviewer-trigger: starting pipeline review',
     );
-    const result = await reviewEvent(reviewCtx, reviewerConfig(task));
+    const result = await reviewEvent(reviewCtx, reviewerCfg);
     if (!result.feedback) {
       logger.info({ taskId, reason: result.reason }, 'reviewer-trigger: pipeline review — no feedback');
       return { feedback: null };

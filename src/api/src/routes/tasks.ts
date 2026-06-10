@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
+import type { AuthRequest } from '../middleware/auth-middleware.js';
 import type { Server as SocketServer } from 'socket.io';
 import type { CreateTaskRequest, ChatRequest, ModelsResponse } from '../../../shared/types/index.js';
 import { DEFAULT_MODEL_ID } from '../../../shared/types/index.js';
@@ -113,7 +114,7 @@ export function createTasksRouter(
   const router = Router();
 
   // POST /api/tasks — create a new task
-  router.post('/api/tasks', async (req: Request, res: Response) => {
+  router.post('/api/tasks', async (req: AuthRequest, res: Response) => {
     try {
       const {
         title,
@@ -240,6 +241,7 @@ export function createTasksRouter(
         baseBranch,
         commitMode,
         ...(resolvedWorkstreamId ? { workstreamId: resolvedWorkstreamId } : {}),
+        ...(req.user?.id ? { ownerUserId: req.user.id } : {}),
         ...(model ? { model } : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
         ...(reviewerModel ? { reviewerModel } : {}),
@@ -579,11 +581,27 @@ export function createTasksRouter(
         res.status(404).json({ error: 'Task not found' });
         return;
       }
-      const { model } = (req.body ?? {}) as { model?: string };
+      const { model } = (req.body ?? {}) as { model?: string | null };
       logger.info(
         { taskId: task.id, currentModel: task.model ?? '', incomingBody: req.body, parsedModel: model },
         'PATCH /api/tasks/:id/model received',
       );
+      // model === null OR empty string → clear the per-task pin so the
+      // resolver falls through to the user profile (live) or server default.
+      if (model === null || (typeof model === 'string' && model.trim() === '')) {
+        const previous = task.model ?? '(default)';
+        store.updateTask(task.id, { model: undefined });
+        const sysMsg = store.addChatMessage(
+          task.id,
+          'system',
+          `🔗 Model unpinned: ${previous} → (profile default). Takes effect on the next agent turn.`,
+        );
+        io.to(`task:${task.id}`).emit('chat:message', sysMsg);
+        const updated = store.getTask(task.id);
+        logger.info({ taskId: task.id, from: previous, to: '(profile default)' }, 'Task model unpinned');
+        res.json({ task: updated });
+        return;
+      }
       if (!model || !model.trim()) {
         res.status(400).json({ error: 'model is required', field: 'model' });
         return;

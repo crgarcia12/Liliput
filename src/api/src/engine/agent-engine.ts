@@ -41,6 +41,7 @@ import {
   type AgentSession,
 } from './agent-loop.js';
 import { resolveDockerfile } from './dockerfile-detector.js';
+import { resolveAgentSdkParams } from './agent-config.js';
 import { acrBuild } from './azure-builder.js';
 import { isRecoverableSdkError, resetCopilotClient } from './copilot-client.js';
 import { runOpsFixer } from './ops-fixer.js';
@@ -910,9 +911,32 @@ async function runPreflightStages(
   repo: string,
   opts?: { requestTitle?: string; requestText?: string },
 ): Promise<{ planningContext: string; effectiveRequest: string }> {
-  const cfg: StageConfig = {
-    ...(task.model ? { model: task.model } : {}),
-    ...(task.reasoningEffort ? { reasoningEffort: task.reasoningEffort } : {}),
+  // Resolve each preflight role independently. Today task-level fields only
+  // exist for `coder`/`reviewer`; rewriter/architect/critic inherit through
+  // the resolver (user profile → env → server default). The coder's per-task
+  // pin is the only legacy task field forwarded — used for architect, since
+  // the planner traditionally inherited the coder's model when nothing else
+  // was set. Profile entries override that fallback.
+  const inherit = {
+    ...(task.model ? { taskModel: task.model } : {}),
+    ...(task.reasoningEffort ? { taskReasoningEffort: task.reasoningEffort } : {}),
+  };
+  const rewriterSdk = resolveAgentSdkParams(task, 'rewriter');
+  const architectSdk = resolveAgentSdkParams(task, 'architect', inherit);
+  const criticSdk = resolveAgentSdkParams(task, 'critic');
+  const rewriterCfg: StageConfig = {
+    model: rewriterSdk.model,
+    ...(rewriterSdk.reasoningEffort ? { reasoningEffort: rewriterSdk.reasoningEffort } : {}),
+    repository: repo,
+  };
+  const architectCfg: StageConfig = {
+    model: architectSdk.model,
+    ...(architectSdk.reasoningEffort ? { reasoningEffort: architectSdk.reasoningEffort } : {}),
+    repository: repo,
+  };
+  const criticCfg: StageConfig = {
+    model: criticSdk.model,
+    ...(criticSdk.reasoningEffort ? { reasoningEffort: criticSdk.reasoningEffort } : {}),
     repository: repo,
   };
 
@@ -928,7 +952,7 @@ async function runPreflightStages(
   const rewriter = spawnPhase(io, taskId, 'rewriter', 'Rewriter Liliputian');
   setPipelineStage(io, taskId, 'rewrite', 'active');
   try {
-    const rw = await rewriteRequest(requestTitle, requestText, cfg);
+    const rw = await rewriteRequest(requestTitle, requestText, rewriterCfg);
     if (rw.ran && rw.rewritten.trim() && rw.rewritten.trim() !== requestText.trim()) {
       effectiveRequest = rw.rewritten;
       rewrittenPrompt = rw.rewritten;
@@ -948,7 +972,7 @@ async function runPreflightStages(
   setPipelineStage(io, taskId, 'plan', 'active');
   let planMd: string | null = null;
   try {
-    const pr = await generatePlan(task.title, effectiveRequest, cfg, task.spec);
+    const pr = await generatePlan(task.title, effectiveRequest, architectCfg, task.spec);
     planMd = pr.plan;
   } catch (err) {
     if (architect)
@@ -967,7 +991,7 @@ async function runPreflightStages(
     const critic = spawnPhase(io, taskId, 'critic', 'Critic Liliputian');
     setPipelineStage(io, taskId, 'critique', 'active');
     try {
-      const cr = await critiquePlan(task.title, effectiveRequest, planMd, cfg);
+      const cr = await critiquePlan(task.title, effectiveRequest, planMd, criticCfg);
       critiqueFeedback = cr.feedback;
       if (critic) {
         if (critiqueFeedback) logPhase(io, taskId, critic, 'info', `Critique of the plan:\n${critiqueFeedback}`);
@@ -2371,8 +2395,16 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
     );
   }
 
-  logPhase(io, taskId, coder, 'info', `Spawning Copilot SDK session (model: ${task.model || 'default'})…`);
-  const agentSession = await createAgentSession(handle.cwd, task.model, task.reasoningEffort);
+  const coderSdk = resolveAgentSdkParams(
+    task,
+    'coder',
+    {
+      ...(task.model ? { taskModel: task.model } : {}),
+      ...(task.reasoningEffort ? { taskReasoningEffort: task.reasoningEffort } : {}),
+    },
+  );
+  logPhase(io, taskId, coder, 'info', `Spawning Copilot SDK session (model: ${coderSdk.model})…`);
+  const agentSession = await createAgentSession(handle.cwd, coderSdk.model, coderSdk.reasoningEffort);
   registerInFlightAgent(taskId, {
     agentSession,
     pendingChatMessages: [],
@@ -3231,7 +3263,15 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   // SDK session before the next turn — otherwise the cached session keeps
   // sending the old reasoning_effort and 400s on models like
   // claude-opus-4.7-xhigh that only accept ONE specific value.
-  await applyModelChange(live.agentSession, task.model, task.reasoningEffort);
+  const coderSdk = resolveAgentSdkParams(
+    task,
+    'coder',
+    {
+      ...(task.model ? { taskModel: task.model } : {}),
+      ...(task.reasoningEffort ? { taskReasoningEffort: task.reasoningEffort } : {}),
+    },
+  );
+  await applyModelChange(live.agentSession, coderSdk.model, coderSdk.reasoningEffort);
 
   setTaskStatus(io, taskId, 'building');
 
@@ -3871,8 +3911,16 @@ async function resurrectLiveSession(
     // cheap and ensures the file exists if the workspace was reused.
     await writeContractIntoWorkspace(handle.cwd, { pathPrefix, port: df.port });
 
-    logPhase(io, taskId, phaseAgent, 'info', `Re-creating Copilot SDK session (model: ${task.model || 'default'})…`);
-    const agentSession = await createAgentSession(handle.cwd, task.model, task.reasoningEffort);
+    const coderSdk = resolveAgentSdkParams(
+      task,
+      'coder',
+      {
+        ...(task.model ? { taskModel: task.model } : {}),
+        ...(task.reasoningEffort ? { taskReasoningEffort: task.reasoningEffort } : {}),
+      },
+    );
+    logPhase(io, taskId, phaseAgent, 'info', `Re-creating Copilot SDK session (model: ${coderSdk.model})…`);
+    const agentSession = await createAgentSession(handle.cwd, coderSdk.model, coderSdk.reasoningEffort);
 
     const imageName = `liliput-app-${sanitiseK8sName(task.repository.replace('/', '-'))}`;
     const devPrefix = sanitiseK8sName(process.env.LILIPUT_DEV_PREFIX || 'dev');

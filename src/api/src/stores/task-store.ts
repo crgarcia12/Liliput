@@ -160,6 +160,7 @@ export function createTask(
     baseBranch?: string;
     commitMode?: CommitMode;
     workstreamId?: string;
+    ownerUserId?: string;
     model?: string;
     reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
     reviewerModel?: string;
@@ -183,6 +184,7 @@ export function createTask(
     baseBranch: options.baseBranch ?? 'main',
     commitMode: options.commitMode ?? 'pr',
     ...(options.workstreamId ? { workstreamId: options.workstreamId } : {}),
+    ...(options.ownerUserId ? { ownerUserId: options.ownerUserId } : {}),
     ...(options.model && options.model.trim() ? { model: options.model.trim() } : {}),
     ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
     ...(options.reviewerModel && options.reviewerModel.trim()

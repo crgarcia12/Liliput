@@ -139,6 +139,13 @@ export default function MobileRootPage() {
             <span className="text-sm font-bold text-cyan-400 truncate">Liliput</span>
             <span className="text-xs text-gray-500 truncate">· Workstreams</span>
           </Link>
+          <Link
+            href="/m/profile/agents"
+            className="text-xs text-gray-400 hover:text-cyan-300 shrink-0 px-2 py-1"
+            title="Agent model defaults"
+          >
+            ⚙
+          </Link>
           <span
             className={`inline-flex items-center justify-center w-2.5 h-2.5 rounded-full shrink-0 ${
               connected ? 'bg-green-400' : 'bg-red-400'

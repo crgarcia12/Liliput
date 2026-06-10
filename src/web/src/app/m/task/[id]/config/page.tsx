@@ -6,6 +6,7 @@ import Link from 'next/link';
 import type { ModelOption, ModelsResponse } from '@shared/types';
 import { useMobileTask } from '../useMobileTask';
 import { get as apiGet } from '../../../../../lib/api-client';
+import { useProfileDefaults } from '../../../../../hooks/useProfileDefaults';
 
 export default function MobileTaskConfigPage() {
   const params = useParams();
@@ -16,6 +17,12 @@ export default function MobileTaskConfigPage() {
   const [modelDefault, setModelDefault] = useState<string>('');
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [modelsSource, setModelsSource] = useState<'sdk' | 'fallback' | null>(null);
+
+  const { defaults: profileDefaults } = useProfileDefaults();
+  const coderProfile = profileDefaults.find((d) => d.role === 'coder');
+  const reviewerProfile = profileDefaults.find((d) => d.role === 'reviewer');
+  const coderProfileLabel = coderProfile?.effectiveModel ?? modelDefault ?? '';
+  const reviewerProfileLabel = reviewerProfile?.effectiveModel ?? '';
 
   useEffect(() => {
     let cancelled = false;
@@ -97,15 +104,22 @@ export default function MobileTaskConfigPage() {
                 </label>
                 <select
                   id="m-model"
-                  value={task.model ?? modelDefault}
+                  value={task.model ?? '__profile_default__'}
                   disabled={m.modelPending}
                   onChange={(e) => {
                     const next = e.target.value;
-                    if (next === (task.model ?? modelDefault)) return;
+                    if (next === '__profile_default__') {
+                      if (task.model) m.setTaskModel(null);
+                      return;
+                    }
+                    if (next === (task.model ?? '__profile_default__')) return;
                     m.setTaskModel(next);
                   }}
                   className="w-full bg-[#050510] border border-[#1a1a2e] rounded px-3 py-3 min-h-[44px] text-sm text-gray-200 focus:outline-none focus:border-cyan-500 disabled:opacity-50"
                 >
+                  <option value="__profile_default__">
+                    🔗 Use my profile default{coderProfileLabel ? ` (${coderProfileLabel})` : ''}
+                  </option>
                   {modelOptions.map((opt) => (
                     <option key={opt.id} value={opt.id}>
                       {opt.label}
@@ -113,7 +127,8 @@ export default function MobileTaskConfigPage() {
                   ))}
                 </select>
                 <p className="text-[11px] text-gray-500 mt-1">
-                  Applies on next agent turn.
+                  Applies on next agent turn. Pick &quot;Use my profile default&quot; to follow your{' '}
+                  <Link href="/m/profile/agents" className="underline">profile</Link> live.
                 </p>
               </section>
             )}
@@ -169,16 +184,23 @@ export default function MobileTaskConfigPage() {
                 </label>
                 <select
                   id="m-reviewer-model"
-                  value={task.reviewerModel ?? ''}
+                  value={task.reviewerModel ?? '__profile_default__'}
                   disabled={m.reviewerPending}
                   onChange={(e) => {
                     const next = e.target.value;
-                    if (next === (task.reviewerModel ?? '')) return;
+                    if (next === '__profile_default__') {
+                      if (task.reviewerModel) m.setTaskReviewerModel('');
+                      return;
+                    }
+                    if (next === (task.reviewerModel ?? '__profile_default__')) return;
                     m.setTaskReviewerModel(next);
                   }}
                   className="w-full bg-[#050510] border border-[#1a1a2e] rounded px-3 py-3 min-h-[44px] text-sm text-violet-200 focus:outline-none focus:border-violet-500 disabled:opacity-50"
                 >
-                  <option value="">off</option>
+                  <option value="__profile_default__">
+                    🔗 Use my profile default{reviewerProfileLabel ? ` (${reviewerProfileLabel})` : ' (off)'}
+                  </option>
+                  <option value="">off (force disable)</option>
                   {modelOptions.map((opt) => (
                     <option key={`reviewer-${opt.id}`} value={opt.id}>
                       {opt.label}

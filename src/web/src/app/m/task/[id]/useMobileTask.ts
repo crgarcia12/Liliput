@@ -31,7 +31,7 @@ export interface UseMobileTaskReturn {
   discardTask: () => Promise<void>;
   closeTask: () => Promise<void>;
   cancelTask: () => Promise<void>;
-  setTaskModel: (model: string) => Promise<void>;
+  setTaskModel: (model: string | null) => Promise<void>;
   setTaskReasoningEffort: (
     effort: ReasoningEffortSelection,
   ) => Promise<void>;
@@ -333,7 +333,7 @@ export function useMobileTask(taskId: string): UseMobileTaskReturn {
   }, [task, apiCancelTask]);
 
   const setTaskModel = useCallback(
-    async (model: string) => {
+    async (model: string | null) => {
       if (!task) return;
       setModelPending(true);
       try {
