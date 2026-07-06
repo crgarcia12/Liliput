@@ -151,6 +151,14 @@ export async function deployApp(opts: DeployAppOptions): Promise<void> {
               imagePullPolicy: 'Always',
               ports: [{ containerPort: opts.port }],
               env: envEntries,
+              // Project Azure credentials/endpoints (AZURE_CLIENT_ID/SECRET,
+              // AZURE_TENANT_ID, AZURE_AI_FOUNDRY_ENDPOINT, AZURE_OPENAI_ENDPOINT)
+              // when the azure-app-registration skill has provisioned them for
+              // this project. Marked optional so projects that never invoked the
+              // skill (no secret) deploy unchanged. Because deployApp does a full
+              // replace on every deploy, wiring this here keeps the credentials
+              // attached across redeploys instead of being wiped.
+              envFrom: [{ secretRef: { name: 'liliput-azure-sp', optional: true } }],
               resources: {
                 requests: { cpu: '10m', memory: '64Mi' },
                 limits: { cpu: '500m', memory: '512Mi' },
