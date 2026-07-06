@@ -789,7 +789,45 @@ export function createTasksRouter(
     }
   });
 
-  // POST /api/tasks/:id/approve-spec — approve spec and start building
+  // PATCH /api/tasks/:id/spec — save user edits to the generated spec.
+  // Only allowed while `specifying` (before the build starts), so the user can
+  // tweak requirements/acceptance criteria before approving. The edited spec is
+  // what the coder and feature decomposer consume on approval.
+  router.patch('/api/tasks/:id/spec', (req: Request, res: Response) => {
+    try {
+      const task = store.getTask(req.params['id'] as string);
+      if (!task || task.status === 'deleting') {
+        res.status(404).json({ error: 'Task not found' });
+        return;
+      }
+
+      if (task.status !== 'specifying') {
+        res.status(400).json({ error: `Cannot edit spec in "${task.status}" status. Task must be in "specifying" status.` });
+        return;
+      }
+
+      const { spec } = (req.body ?? {}) as { spec?: string };
+      const trimmed = (spec ?? '').trim();
+      if (!trimmed) {
+        res.status(400).json({ error: 'spec is required', field: 'spec' });
+        return;
+      }
+
+      store.updateTask(task.id, { spec: trimmed });
+      io.to(`task:${task.id}`).emit('task:spec', { taskId: task.id, spec: trimmed });
+
+      const updated = store.getTask(task.id);
+      res.json({ task: updated });
+    } catch (err: unknown) {
+      const errMessage = err instanceof Error ? err.message : String(err);
+      logger.error({ err: errMessage }, 'Failed to update spec');
+      res.status(500).json({ error: 'Failed to update spec', details: errMessage });
+    }
+  });
+
+  // POST /api/tasks/:id/approve-spec — approve spec and start building.
+  // Accepts an optional `spec` in the body so the user can approve edits in one
+  // step (edit-then-approve) without a separate PATCH round-trip.
   router.post('/api/tasks/:id/approve-spec', (req: Request, res: Response) => {
     try {
       const task = store.getTask(req.params['id'] as string);
@@ -803,7 +841,15 @@ export function createTasksRouter(
         return;
       }
 
-      if (!task.spec) {
+      const { spec: editedSpec } = (req.body ?? {}) as { spec?: string };
+      const trimmedEdit = (editedSpec ?? '').trim();
+      if (trimmedEdit) {
+        store.updateTask(task.id, { spec: trimmedEdit });
+        io.to(`task:${task.id}`).emit('task:spec', { taskId: task.id, spec: trimmedEdit });
+      }
+
+      const currentSpec = store.getTask(task.id)?.spec;
+      if (!currentSpec) {
         res.status(400).json({ error: 'No spec to approve. Send a chat message first to generate the spec.' });
         return;
       }

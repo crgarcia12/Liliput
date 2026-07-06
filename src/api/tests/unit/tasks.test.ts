@@ -342,6 +342,67 @@ describe('POST /api/tasks/:id/approve-spec', () => {
     const res = await request(app).post(`/api/tasks/${id}/approve-spec`);
     expect(res.status).toBe(400);
   });
+
+  it('should approve an edited spec passed in the request body', async () => {
+    const { app } = buildApp();
+    const createRes = await request(app)
+      .post('/api/tasks')
+      .send({ title: 'T', description: 'D', repository: 'https://github.com/example/repo' });
+    const id = createRes.body.task.id;
+
+    await request(app).post(`/api/tasks/${id}/chat`).send({ message: 'Details' });
+    await flushAsync();
+
+    const edited = '# Specification: T\n\n## Overview\nEdited by the user.';
+    const res = await request(app).post(`/api/tasks/${id}/approve-spec`).send({ spec: edited });
+    expect(res.status).toBe(200);
+    expect(res.body.task.status).toBe('building');
+    expect(res.body.task.spec).toBe(edited);
+  });
+});
+
+describe('PATCH /api/tasks/:id/spec', () => {
+  it('should save an edited spec while specifying', async () => {
+    const { app } = buildApp();
+    const createRes = await request(app)
+      .post('/api/tasks')
+      .send({ title: 'T', description: 'D', repository: 'https://github.com/example/repo' });
+    const id = createRes.body.task.id;
+
+    await request(app).post(`/api/tasks/${id}/chat`).send({ message: 'Details' });
+    await flushAsync();
+
+    const edited = '# Specification: T\n\n## Overview\nManually edited spec.';
+    const res = await request(app).patch(`/api/tasks/${id}/spec`).send({ spec: edited });
+    expect(res.status).toBe(200);
+    expect(res.body.task.spec).toBe(edited);
+    expect(res.body.task.status).toBe('specifying');
+  });
+
+  it('should return 400 when spec is empty', async () => {
+    const { app } = buildApp();
+    const createRes = await request(app)
+      .post('/api/tasks')
+      .send({ title: 'T', description: 'D', repository: 'https://github.com/example/repo' });
+    const id = createRes.body.task.id;
+
+    await request(app).post(`/api/tasks/${id}/chat`).send({ message: 'Details' });
+    await flushAsync();
+
+    const res = await request(app).patch(`/api/tasks/${id}/spec`).send({ spec: '   ' });
+    expect(res.status).toBe(400);
+  });
+
+  it('should return 400 when not in specifying status', async () => {
+    const { app } = buildApp();
+    const createRes = await request(app)
+      .post('/api/tasks')
+      .send({ title: 'T', description: 'D' });
+    const id = createRes.body.task.id;
+
+    const res = await request(app).patch(`/api/tasks/${id}/spec`).send({ spec: 'x' });
+    expect(res.status).toBe(400);
+  });
 });
 
 describe('DELETE /api/tasks/:id', () => {
