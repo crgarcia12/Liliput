@@ -230,6 +230,14 @@ spec:
             # Azure app-registration tool — see docs/azure-permissions.md
             - name: LILIPUT_AI_FOUNDRY_SCOPE
               value: "/subscriptions/ac866176-3fcf-43c6-817a-6309be256398/resourceGroups/crgar-ai-rg"
+            # Endpoints projected into each project's `liliput-azure-sp` secret
+            # so Liliput-built apps can reach Azure AI Foundry / OpenAI. Without
+            # these, the app-registration tool hands down credentials but no
+            # endpoint URL and apps fail with "AI foundry is not configured".
+            - name: AZURE_AI_FOUNDRY_ENDPOINT
+              value: "https://crgar-liliput-ai.cognitiveservices.azure.com/"
+            - name: AZURE_OPENAI_ENDPOINT
+              value: "https://crgar-liliput-ai.openai.azure.com/"
             - name: LILIPUT_INTERNAL_TOKEN
               valueFrom:
                 secretKeyRef:
