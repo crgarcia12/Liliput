@@ -263,6 +263,7 @@ export async function ensureAppRegistration(
   // Useful endpoints — only include if present in env to avoid stale data.
   for (const k of [
     'AZURE_AI_FOUNDRY_ENDPOINT',
+    'AZURE_AI_FOUNDRY_DEPLOYMENT',
     'AZURE_OPENAI_ENDPOINT',
     'AZURE_AI_PROJECT_ENDPOINT',
   ]) {

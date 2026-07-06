@@ -236,6 +236,11 @@ spec:
             # endpoint URL and apps fail with "AI foundry is not configured".
             - name: AZURE_AI_FOUNDRY_ENDPOINT
               value: "https://crgar-liliput-ai.cognitiveservices.azure.com/"
+            # Default AI Foundry model deployment projected into each project's
+            # secret. Apps that read AZURE_AI_FOUNDRY_DEPLOYMENT (e.g. to build
+            # the chat/completions URL) need this to consider Foundry configured.
+            - name: AZURE_AI_FOUNDRY_DEPLOYMENT
+              value: "gpt-4_1-mini"
             - name: AZURE_OPENAI_ENDPOINT
               value: "https://crgar-liliput-ai.openai.azure.com/"
             - name: LILIPUT_INTERNAL_TOKEN
