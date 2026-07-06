@@ -135,6 +135,26 @@ export async function deployApp(opts: DeployAppOptions): Promise<void> {
     envEntries.push({ name: 'NEXT_PUBLIC_BASE_PATH', value: opts.pathPrefix });
   }
 
+  // Pass Liliput's configured Azure AI endpoints/deployment through to every
+  // app it deploys. These live in Liliput's own env (k8s/liliput.yaml) and are
+  // what apps check to decide whether AI Foundry is "configured". Injecting
+  // them directly here (not only via the optional liliput-azure-sp secret)
+  // guarantees they survive every redeploy even for projects that never
+  // invoked the azure-app-registration skill. A key already present in
+  // opts.env wins so callers can override. Credentials (AZURE_CLIENT_*) still
+  // come from the optional secret below.
+  for (const k of [
+    'AZURE_AI_FOUNDRY_ENDPOINT',
+    'AZURE_AI_FOUNDRY_DEPLOYMENT',
+    'AZURE_OPENAI_ENDPOINT',
+    'AZURE_AI_PROJECT_ENDPOINT',
+  ]) {
+    const v = process.env[k];
+    if (v && !envEntries.some((e) => e.name === k)) {
+      envEntries.push({ name: k, value: v });
+    }
+  }
+
   const deploymentBody: k8s.V1Deployment = {
     metadata: { name: opts.appName, namespace: opts.namespace, labels },
     spec: {
