@@ -262,15 +262,21 @@ spec:
             # Dev tasks; RM reviews PRs deterministically; reconciler heals
             # missed webhooks. The loop is off-by-default so existing tasks
             # keep using the legacy clarify→build flow until we turn this on.
+            #
+            # Kept OFF intentionally: automatically splitting a spec into many
+            # Features and fanning them out as parallel Dev tasks is very hard
+            # to review, especially early on. Feature splitting is a manual,
+            # operator-driven action instead. Re-enable by flipping to "1".
             - name: LILIPUT_PM_EMIT_ENABLED
-              value: "1"
+              value: "0"
             - name: LILIPUT_RECONCILER_ENABLED
-              value: "1"
+              value: "0"
             # Runs the LLM feature-decomposer at spec-generation time so each
             # spec is split into Feature rows. Required for PM emit (one issue
-            # per Feature). Without this flag the loop never gets fed.
+            # per Feature). Kept OFF so a single request builds as a single
+            # feature — the operator triggers decomposition/fan-out manually.
             - name: AUTOPILOT_DECOMPOSE
-              value: "1"
+              value: "0"
             - name: GITHUB_WEBHOOK_SECRET
               valueFrom:
                 secretKeyRef:
