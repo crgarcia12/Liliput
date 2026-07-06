@@ -426,6 +426,113 @@ export async function rawGit(
   return run('git', args, { cwd: handle.cwd });
 }
 
+/**
+ * Fetch a single ref from origin into `origin/<ref>` without merging. Quiet and
+ * best-effort — transient network failures throw so the caller can decide.
+ */
+export async function fetchRef(handle: RepoHandle, ref: string): Promise<void> {
+  await run('git', ['fetch', '--quiet', 'origin', ref], { cwd: handle.cwd });
+}
+
+/**
+ * True when `origin/<baseBranch>` is already an ancestor of HEAD — i.e. the base
+ * branch is fully contained in the current branch and no merge is needed. This
+ * is the cheap "nothing changed" gate for the per-round conflict guard: when it
+ * returns true there is provably nothing to reconcile. Assumes `origin/<base>`
+ * has been fetched (see {@link fetchRef}).
+ */
+export async function isBaseMergedIntoHead(
+  handle: RepoHandle,
+  baseBranch: string,
+): Promise<boolean> {
+  try {
+    // Exit 0 → is-ancestor (contained); exit 1 → not contained; other → error.
+    await run('git', ['merge-base', '--is-ancestor', `origin/${baseBranch}`, 'HEAD'], {
+      cwd: handle.cwd,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Probe whether merging `origin/<baseBranch>` into HEAD would conflict, WITHOUT
+ * touching the working tree or index. Uses `git merge-tree --write-tree`
+ * (git ≥ 2.38) which computes the merge in memory. Returns `{ conflicts, files }`.
+ *
+ * Falls back to `{ conflicts: null }` when the local git is too old to support
+ * `--write-tree`, so the caller can escalate to a real trial merge instead.
+ */
+export async function probeMergeConflicts(
+  handle: RepoHandle,
+  baseBranch: string,
+): Promise<{ conflicts: boolean | null; files: string[] }> {
+  return new Promise((resolve) => {
+    const child = spawn(
+      'git',
+      ['merge-tree', '--write-tree', '--name-only', 'HEAD', `origin/${baseBranch}`],
+      { cwd: handle.cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d: Buffer) => (stdout += d.toString()));
+    child.stderr.on('data', (d: Buffer) => (stderr += d.toString()));
+    child.on('error', () => resolve({ conflicts: null, files: [] }));
+    child.on('close', (code) => {
+      // git merge-tree --write-tree: exit 0 = clean, 1 = conflicts, >1 = error.
+      if (code === 0) {
+        resolve({ conflicts: false, files: [] });
+      } else if (code === 1) {
+        // On conflict the first stdout line is the tree OID; the remaining
+        // lines (with --name-only) are the conflicted paths.
+        const lines = stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+        resolve({ conflicts: true, files: lines.slice(1) });
+      } else {
+        // Unknown option / old git / other failure — signal "unknown".
+        void stderr;
+        resolve({ conflicts: null, files: [] });
+      }
+    });
+  });
+}
+
+/**
+ * Merge `origin/<baseBranch>` into the current branch with a merge commit.
+ * Throws on conflict (leaving conflict markers + a MERGE_HEAD in place so a
+ * fixer turn can resolve them). Caller is responsible for {@link abortMerge}
+ * on unrecoverable failure.
+ */
+export async function mergeBaseIntoBranch(
+  handle: RepoHandle,
+  baseBranch: string,
+): Promise<void> {
+  await run(
+    'git',
+    ['merge', '--no-edit', `origin/${baseBranch}`],
+    { cwd: handle.cwd },
+  );
+}
+
+/** Abort an in-progress merge, restoring the pre-merge state. Best-effort. */
+export async function abortMerge(handle: RepoHandle): Promise<void> {
+  try {
+    await run('git', ['merge', '--abort'], { cwd: handle.cwd });
+  } catch {
+    // No merge in progress / already aborted — ignore.
+  }
+}
+
+/** List files currently in a conflicted (unmerged) state. Empty when none. */
+export async function conflictedFiles(handle: RepoHandle): Promise<string[]> {
+  const { stdout } = await run(
+    'git',
+    ['diff', '--name-only', '--diff-filter=U'],
+    { cwd: handle.cwd },
+  );
+  return stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+}
+
 /** Returns the list of files modified in the working tree relative to HEAD. */
 export async function changedFiles(handle: RepoHandle): Promise<string[]> {
   const { stdout } = await run('git', ['status', '--porcelain'], {

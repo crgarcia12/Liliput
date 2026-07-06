@@ -46,6 +46,7 @@ import { acrBuild } from './azure-builder.js';
 import { isRecoverableSdkError, resetCopilotClient } from './copilot-client.js';
 import { runOpsFixer } from './ops-fixer.js';
 import { runGitOpWithFixer } from './git-fixer.js';
+import { guardMainConflicts } from './conflict-guard.js';
 import {
   ensureNamespace,
   deployApp,
@@ -85,6 +86,12 @@ const DEFAULT_REPO = process.env['LILIPUT_DEFAULT_TARGET_REPO'];
 /** How many times to invoke the ops-fixer agent for build/deploy failures. */
 const MAX_BUILD_FIX_ATTEMPTS = parseInt(process.env['MAX_BUILD_FIX_ATTEMPTS'] ?? '2', 10);
 const MAX_DEPLOY_FIX_ATTEMPTS = parseInt(process.env['MAX_DEPLOY_FIX_ATTEMPTS'] ?? '2', 10);
+/**
+ * Per-round conflict guard: after each iteration's push, reconcile the branch
+ * with the base branch and Copilot-resolve any conflicts. On by default (kill
+ * switch: LILIPUT_CONFLICT_GUARD_ENABLED=0).
+ */
+const CONFLICT_GUARD_ENABLED = process.env['LILIPUT_CONFLICT_GUARD_ENABLED'] !== '0';
 /**
  * Cap for the post-deploy validate+heal loop. The user's mandate is "press
  * the button and walk away — keep trying until it works." This cap is a
@@ -3531,6 +3538,46 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
     },
   });
   logPhase(io, taskId, builder, 'info', 'Branch pushed; PR will pick up the new commit automatically.');
+
+  // Per-round conflict guard: keep the branch free of merge conflicts with the
+  // base branch. Cheap-gates on a fetch + ancestor check, does an in-memory
+  // conflict probe, and only spawns a Copilot resolver turn when a REAL
+  // conflict exists. Never throws — a guard hiccup must not break the round.
+  if (CONFLICT_GUARD_ENABLED) {
+    let conflictAgent: string | undefined;
+    const guardResult = await guardMainConflicts({
+      agentSession: live.agentSession,
+      handle: live.repoHandle,
+      baseBranch: task.baseBranch ?? 'main',
+      repo: live.repo,
+      autoPush: true,
+      ...(task.pullRequestNumber !== undefined ? { prNumber: task.pullRequestNumber } : {}),
+      onLog: (level, msg, cmd, out) =>
+        logPhase(io, taskId, conflictAgent ?? builder, level, msg, cmd, out),
+      onResolverStart: () => {
+        conflictAgent = spawnPhase(io, taskId, 'fixer', 'Conflict Resolver Liliputian');
+      },
+      onResolverEnd: () => {
+        if (conflictAgent) {
+          completePhase(io, taskId, conflictAgent);
+          conflictAgent = undefined;
+        }
+      },
+    });
+    if (guardResult.status === 'resolved') {
+      chatStatus(
+        io,
+        taskId,
+        `🔀 Resolved merge conflicts with ${task.baseBranch ?? 'main'} (${guardResult.conflictedFiles.length} file(s)).`,
+      );
+    } else if (guardResult.status === 'unresolved') {
+      chatStatus(
+        io,
+        taskId,
+        `⚠️ Could not auto-resolve conflicts with ${task.baseBranch ?? 'main'} — flagged for manual rebase.`,
+      );
+    }
+  }
 
   if (!ACR_NAME) {
     failPhase(io, taskId, builder, 'ACR_NAME env var not set — cannot rebuild image.');
