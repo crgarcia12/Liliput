@@ -31,12 +31,35 @@ const STATUS_STYLES: Record<TaskStatus, { label: string; cls: string }> = {
   deleting:    { label: 'Deleting',    cls: 'bg-gray-500/15 text-gray-400 border-gray-500/30' },
 };
 
+type ViewMode = 'cards' | 'list';
+type LifecycleAction = 'stop' | 'start' | 'delete';
+
+async function responseError(response: Response): Promise<string> {
+  const body: unknown = await response.json().catch(() => null);
+  if (body !== null && typeof body === 'object') {
+    if ('details' in body && typeof body.details === 'string') return body.details;
+    if ('error' in body && typeof body.error === 'string') return body.error;
+  }
+  return `HTTP ${response.status}`;
+}
+
+async function requestDevEnvLifecycle(taskId: string, action: LifecycleAction): Promise<void> {
+  const url = `/api/tasks/${taskId}/dev-env${action === 'delete' ? '' : `/${action}`}`;
+  const response = await fetch(url, { method: action === 'delete' ? 'DELETE' : 'POST' });
+  if (!response.ok) throw new Error(await responseError(response));
+}
+
 export default function DevEnvironmentsPage() {
   const { connected } = useSocket();
   const { getTasks } = useTasks();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>('cards');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const [bulkResult, setBulkResult] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -75,6 +98,104 @@ export default function DevEnvironmentsPage() {
     return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
   }, [envs]);
 
+  const selectableEnvs = useMemo(
+    () => envs.filter((task) => (task.devEnvState ?? 'active') !== 'deleted'),
+    [envs],
+  );
+  const selectedEnvs = useMemo(
+    () => selectableEnvs.filter((task) => selectedIds.has(task.id)),
+    [selectableEnvs, selectedIds],
+  );
+  const allSelected =
+    selectableEnvs.length > 0 && selectedEnvs.length === selectableEnvs.length;
+  const someSelected = selectedEnvs.length > 0 && !allSelected;
+
+  const toggleSelection = useCallback((taskId: string, checked: boolean) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(taskId);
+      else next.delete(taskId);
+      return next;
+    });
+    setBulkError(null);
+    setBulkResult(null);
+  }, []);
+
+  const toggleAll = useCallback(
+    (checked: boolean) => {
+      setSelectedIds((current) => {
+        const next = new Set(current);
+        for (const task of selectableEnvs) {
+          if (checked) next.add(task.id);
+          else next.delete(task.id);
+        }
+        return next;
+      });
+      setBulkError(null);
+      setBulkResult(null);
+    },
+    [selectableEnvs],
+  );
+
+  const deleteSelected = useCallback(async () => {
+    if (selectedEnvs.length === 0) return;
+    if (
+      !confirm(
+        `Delete ${selectedEnvs.length} dev environments?\n\nThis removes their Kubernetes deployments and routes. Images stay in ACR, and chat can recreate each environment.`,
+      )
+    ) {
+      return;
+    }
+
+    setBulkDeleting(true);
+    setBulkError(null);
+    setBulkResult(null);
+    try {
+      const results = await Promise.allSettled(
+        selectedEnvs.map(async (task) => {
+          await requestDevEnvLifecycle(task.id, 'delete');
+          return task;
+        }),
+      );
+      const deletedIds = new Set(
+        results.flatMap((result) =>
+          result.status === 'fulfilled' ? [result.value.id] : [],
+        ),
+      );
+      const failures = results.flatMap((result, index) => {
+        if (result.status === 'fulfilled') return [];
+        const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
+        return [`${selectedEnvs[index]!.title}: ${reason}`];
+      });
+
+      if (deletedIds.size > 0) {
+        setTasks((current) =>
+          current.map((task) =>
+            deletedIds.has(task.id) ? { ...task, devEnvState: 'deleted' } : task,
+          ),
+        );
+        setSelectedIds((current) => {
+          const next = new Set(current);
+          for (const taskId of deletedIds) next.delete(taskId);
+          return next;
+        });
+        setBulkResult(
+          `Deleted ${deletedIds.size} ${deletedIds.size === 1 ? 'environment' : 'environments'}.`,
+        );
+      }
+
+      if (failures.length > 0) {
+        setBulkError(
+          `Failed to delete ${failures.length} ${failures.length === 1 ? 'environment' : 'environments'}: ${failures.join('; ')}`,
+        );
+      }
+
+      await refresh();
+    } finally {
+      setBulkDeleting(false);
+    }
+  }, [refresh, selectedEnvs]);
+
   return (
     <div className="min-h-screen bg-[#050510] text-gray-200 font-mono">
       <TopBar subtitle="Dev environments" connected={connected} />
@@ -100,13 +221,102 @@ export default function DevEnvironmentsPage() {
           </div>
         )}
 
+        {envs.length > 0 && (
+          <section className="flex flex-wrap items-center justify-between gap-3 bg-[#0d0d14] border border-[#1a1a2e] rounded-lg p-3">
+            <div
+              role="group"
+              aria-label="Environment view"
+              className="inline-flex rounded-md border border-[#2a2a3e] p-0.5"
+            >
+              <button
+                type="button"
+                data-testid="dev-env-view-cards"
+                aria-pressed={viewMode === 'cards'}
+                onClick={() => setViewMode('cards')}
+                className={`px-3 py-1.5 rounded text-xs transition-colors ${
+                  viewMode === 'cards'
+                    ? 'bg-cyan-600 text-white'
+                    : 'text-gray-400 hover:text-gray-100 hover:bg-[#1a1a2e]'
+                }`}
+              >
+                ▦ Cards
+              </button>
+              <button
+                type="button"
+                data-testid="dev-env-view-list"
+                aria-pressed={viewMode === 'list'}
+                onClick={() => setViewMode('list')}
+                className={`px-3 py-1.5 rounded text-xs transition-colors ${
+                  viewMode === 'list'
+                    ? 'bg-cyan-600 text-white'
+                    : 'text-gray-400 hover:text-gray-100 hover:bg-[#1a1a2e]'
+                }`}
+              >
+                ☷ List
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3 text-xs">
+              <label className="flex items-center gap-2 text-gray-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  data-testid="dev-env-select-all"
+                  aria-label="Select all deletable environments"
+                  aria-checked={someSelected ? 'mixed' : allSelected}
+                  checked={allSelected}
+                  ref={(input) => {
+                    if (input) input.indeterminate = someSelected;
+                  }}
+                  onChange={(event) => toggleAll(event.target.checked)}
+                  disabled={selectableEnvs.length === 0 || bulkDeleting}
+                  className="accent-cyan-500"
+                />
+                Select all
+              </label>
+              <span className="text-gray-500">
+                {selectedEnvs.length} selected
+              </span>
+              <button
+                type="button"
+                data-testid="dev-env-bulk-delete"
+                onClick={() => void deleteSelected()}
+                disabled={selectedEnvs.length === 0 || bulkDeleting}
+                className="px-3 py-1.5 bg-red-600/20 hover:bg-red-600/40 border border-red-500/40 rounded text-red-200 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {bulkDeleting
+                  ? `Deleting ${selectedEnvs.length}…`
+                  : `Delete selected (${selectedEnvs.length})`}
+              </button>
+            </div>
+          </section>
+        )}
+
+        {bulkResult && (
+          <div
+            role="status"
+            data-testid="dev-env-bulk-result"
+            className="bg-green-500/10 border border-green-500/30 rounded-lg p-3 text-sm text-green-300"
+          >
+            {bulkResult}
+          </div>
+        )}
+
+        {bulkError && (
+          <div
+            role="alert"
+            className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-sm text-red-300"
+          >
+            {bulkError}
+          </div>
+        )}
+
         {loading && envs.length === 0 ? (
           <div className="text-gray-500 text-sm">Loading…</div>
         ) : envs.length === 0 ? (
           <div className="text-gray-500 text-sm border border-[#1a1a2e] rounded-lg p-6 text-center">
             No dev environments yet. Deployed previews will show up here.
           </div>
-        ) : (
+        ) : viewMode === 'cards' ? (
           byRepo.map(([repo, repoEnvs]) => (
             <section key={repo} className="space-y-3">
               <h2 className="text-sm font-semibold text-cyan-300 flex items-center gap-2">
@@ -118,18 +328,164 @@ export default function DevEnvironmentsPage() {
               </h2>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                 {repoEnvs.map((t) => (
-                  <DevEnvCard key={t.id} task={t} />
+                  <DevEnvCard
+                    key={t.id}
+                    task={t}
+                    selected={selectedIds.has(t.id)}
+                    onSelectionChange={toggleSelection}
+                  />
                 ))}
               </div>
             </section>
           ))
+        ) : (
+          <DevEnvList
+           tasks={envs}
+           selectedIds={selectedIds}
+           onSelectionChange={toggleSelection}
+          />
         )}
       </main>
     </div>
   );
 }
 
-function DevEnvCard({ task }: { task: Task }) {
+function DevEnvList({
+  tasks,
+  selectedIds,
+  onSelectionChange,
+}: {
+  tasks: Task[];
+  selectedIds: ReadonlySet<string>;
+  onSelectionChange: (taskId: string, checked: boolean) => void;
+}) {
+  return (
+    <div className="overflow-x-auto bg-[#0d0d14] border border-[#1a1a2e] rounded-lg">
+      <table
+        data-testid="dev-env-list"
+        aria-label="Dev environments list"
+        className="w-full min-w-[900px] text-left text-xs"
+      >
+        <thead className="bg-[#12121d] text-gray-500 uppercase tracking-wide">
+          <tr>
+           <th scope="col" className="w-10 px-3 py-2">
+             <span className="sr-only">Select</span>
+           </th>
+           <th scope="col" className="px-3 py-2">Environment</th>
+           <th scope="col" className="px-3 py-2">Repository</th>
+           <th scope="col" className="px-3 py-2">State</th>
+           <th scope="col" className="px-3 py-2">Namespace</th>
+           <th scope="col" className="px-3 py-2">Branch</th>
+           <th scope="col" className="px-3 py-2">Updated</th>
+           <th scope="col" className="px-3 py-2 text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-[#1a1a2e]">
+          {tasks.map((task) => {
+           const devEnvState = task.devEnvState ?? 'active';
+           const selectable = devEnvState !== 'deleted';
+           const style = STATUS_STYLES[task.status];
+           return (
+             <tr
+               key={task.id}
+               className={`hover:bg-[#12121d] ${
+                 selectedIds.has(task.id) ? 'bg-cyan-500/5' : ''
+               }`}
+             >
+               <td className="px-3 py-3">
+                 <input
+                   type="checkbox"
+                   aria-label={`Select ${task.title}`}
+                   checked={selectable && selectedIds.has(task.id)}
+                   onChange={(event) => onSelectionChange(task.id, event.target.checked)}
+                   disabled={!selectable}
+                   className="accent-cyan-500 disabled:opacity-30"
+                 />
+               </td>
+               <th scope="row" className="px-3 py-3 font-medium">
+                 <Link href={`/task/${task.id}`} className="text-gray-100 hover:text-cyan-300">
+                   {task.title}
+                 </Link>
+                 {task.devUrl && (
+                   <a
+                     href={task.devUrl}
+                     target="_blank"
+                     rel="noreferrer"
+                     className="block mt-1 max-w-52 truncate text-[10px] font-normal text-cyan-400 hover:underline"
+                     title={task.devUrl}
+                   >
+                     {task.devUrl}
+                   </a>
+                 )}
+               </th>
+               <td className="px-3 py-3 text-gray-300">{task.repository ?? 'unknown'}</td>
+               <td className="px-3 py-3">
+                 <div className="flex flex-wrap gap-1">
+                   <span className={`text-[10px] px-2 py-0.5 rounded-full border ${style.cls}`}>
+                     {style.label}
+                   </span>
+                   <span
+                     className={`text-[10px] px-2 py-0.5 rounded-full border ${
+                       devEnvState === 'active'
+                         ? 'bg-green-500/15 text-green-300 border-green-500/30'
+                         : devEnvState === 'stopped'
+                           ? 'bg-gray-500/15 text-gray-300 border-gray-500/30'
+                           : 'bg-red-500/15 text-red-300 border-red-500/30'
+                     }`}
+                   >
+                     {devEnvState === 'active' ? 'Active' : devEnvState === 'stopped' ? 'Stopped' : 'Deleted'}
+                   </span>
+                 </div>
+               </td>
+               <td className="px-3 py-3">
+                 <code className="text-amber-300">{task.devNamespace ?? '—'}</code>
+               </td>
+               <td className="px-3 py-3">
+                 <code className="text-green-300">{task.branch ?? '—'}</code>
+                 {task.commitSha && (
+                   <span className="block mt-1 text-[10px] text-gray-600">
+                     @ {task.commitSha.substring(0, 7)}
+                   </span>
+                 )}
+               </td>
+               <td className="px-3 py-3 text-gray-500">
+                 <time dateTime={task.updatedAt}>{task.updatedAt.slice(0, 10)}</time>
+               </td>
+               <td className="px-3 py-3">
+                 <div className="flex justify-end gap-2">
+                   {task.devUrl && (
+                     <a
+                       href={task.devUrl}
+                       target="_blank"
+                       rel="noreferrer"
+                       className="text-cyan-300 hover:underline"
+                     >
+                       Open
+                     </a>
+                   )}
+                   <Link href={`/task/${task.id}`} className="text-gray-300 hover:text-white">
+                     Chat
+                   </Link>
+                 </div>
+               </td>
+             </tr>
+           );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function DevEnvCard({
+  task,
+  selected,
+  onSelectionChange,
+}: {
+  task: Task;
+  selected: boolean;
+  onSelectionChange: (taskId: string, checked: boolean) => void;
+}) {
   const style = STATUS_STYLES[task.status];
   const [open, setOpen] = useState(false);
   const [pods, setPods] = useState<PodInfo[] | null>(null);
@@ -152,12 +508,7 @@ function DevEnvCard({ task }: { task: Task }) {
       setLifecycleBusy(action);
       setLifecycleErr(null);
       try {
-        const url = `/api/tasks/${task.id}/dev-env${action === 'delete' ? '' : `/${action}`}`;
-        const r = await fetch(url, { method: action === 'delete' ? 'DELETE' : 'POST' });
-        if (!r.ok) {
-          const err = await r.json().catch(() => ({}));
-          throw new Error(err.details ?? err.error ?? `HTTP ${r.status}`);
-        }
+        await requestDevEnvLifecycle(task.id, action);
       } catch (e) {
         setLifecycleErr(e instanceof Error ? e.message : String(e));
       } finally {
@@ -213,6 +564,15 @@ function DevEnvCard({ task }: { task: Task }) {
   return (
     <div className="bg-[#0d0d14] border border-[#1a1a2e] rounded-lg p-4 hover:border-cyan-500/40 transition-colors">
       <div className="flex items-start justify-between gap-3 mb-3">
+        {devEnvState !== 'deleted' && (
+          <input
+            type="checkbox"
+            aria-label={`Select ${task.title}`}
+            checked={selected}
+            onChange={(event) => onSelectionChange(task.id, event.target.checked)}
+            className="mt-0.5 accent-cyan-500"
+          />
+        )}
         <Link
           href={`/task/${task.id}`}
           className="text-sm font-semibold text-gray-100 hover:text-cyan-300 line-clamp-2 flex-1"
