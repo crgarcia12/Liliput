@@ -1,5 +1,7 @@
 import { test, expect } from '@playwright/test';
 
+const API_BASE_URL = process.env.PLAYWRIGHT_API_BASE_URL ?? 'http://localhost:5001';
+
 /**
  * Smoke test: confirm Liliput web shell loads and the top-bar brand renders.
  * Does NOT assert any product-specific behavior — that lives in feature-scoped
@@ -15,7 +17,7 @@ test.describe('Liliput web smoke', () => {
   });
 
   test('API /api/health is reachable from the browser context', async ({ request }) => {
-    const res = await request.get('http://localhost:5001/api/health');
+    const res = await request.get(`${API_BASE_URL}/api/health`);
     expect(res.status()).toBe(200);
     const body = await res.json();
     expect(body.service).toBe('liliput-api');
