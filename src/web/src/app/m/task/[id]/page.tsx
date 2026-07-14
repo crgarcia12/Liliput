@@ -129,27 +129,69 @@ export default function MobileTaskChatPage() {
       {showSpecBanner && (
         <div className="border-b border-purple-800/50 bg-purple-950/20">
           <div className="flex items-center justify-between px-3 py-2 text-xs gap-2">
-            <span className="text-purple-300 font-semibold truncate">📜 Spec ready</span>
+            <span className="text-purple-300 font-semibold truncate">
+              📜 Spec ready{m.editingSpec ? ' — editing' : ''}
+            </span>
             <div className="flex items-center gap-2 shrink-0">
-              <button
-                onClick={() => setShowSpec((s) => !s)}
-                className="text-purple-300 hover:text-purple-100 px-3 py-2 min-h-[44px]"
-              >
-                {showSpec ? 'Hide' : 'Show'}
-              </button>
+              {m.editingSpec ? (
+                <>
+                  <button
+                    onClick={m.cancelEditSpec}
+                    disabled={m.specSaving}
+                    className="text-purple-300 hover:text-purple-100 px-3 py-2 min-h-[44px] disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={m.saveSpec}
+                    disabled={m.specSaving || !m.specDraft.trim()}
+                    className="px-3 py-2 min-h-[44px] rounded bg-purple-800 hover:bg-purple-700 text-white text-xs disabled:opacity-50"
+                  >
+                    {m.specSaving ? 'Saving…' : '💾 Save'}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => {
+                      m.startEditSpec();
+                      setShowSpec(true);
+                    }}
+                    className="text-purple-300 hover:text-purple-100 px-3 py-2 min-h-[44px]"
+                  >
+                    ✎ Edit
+                  </button>
+                  <button
+                    onClick={() => setShowSpec((s) => !s)}
+                    className="text-purple-300 hover:text-purple-100 px-3 py-2 min-h-[44px]"
+                  >
+                    {showSpec ? 'Hide' : 'Show'}
+                  </button>
+                </>
+              )}
               <button
                 onClick={m.approveSpec}
-                disabled={m.actionPending === 'approve'}
+                disabled={m.actionPending === 'approve' || m.specSaving}
                 className="px-3 py-2 min-h-[44px] rounded bg-purple-700 hover:bg-purple-600 text-white text-xs disabled:opacity-50"
               >
                 {m.actionPending === 'approve' ? 'Approving…' : '✓ Approve'}
               </button>
             </div>
           </div>
-          {showSpec && task?.spec && (
-            <pre className="px-3 pb-3 max-h-64 overflow-y-auto text-[11px] text-gray-300 whitespace-pre-wrap font-mono">
-              {task.spec}
-            </pre>
+          {m.editingSpec ? (
+            <textarea
+              value={m.specDraft}
+              onChange={(e) => m.setSpecDraft(e.target.value)}
+              spellCheck={false}
+              className="mx-3 mb-3 block w-[calc(100%-1.5rem)] h-64 resize-y rounded border border-purple-800/50 bg-[#0a0a0f] px-3 py-2 text-[11px] text-gray-200 font-mono focus:outline-none focus:border-purple-500"
+            />
+          ) : (
+            showSpec &&
+            task?.spec && (
+              <pre className="px-3 pb-3 max-h-64 overflow-y-auto text-[11px] text-gray-300 whitespace-pre-wrap font-mono">
+                {task.spec}
+              </pre>
+            )
           )}
         </div>
       )}

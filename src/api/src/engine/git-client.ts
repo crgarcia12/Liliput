@@ -546,6 +546,22 @@ export async function changedFiles(handle: RepoHandle): Promise<string[]> {
     .filter(Boolean);
 }
 
+/** List every file changed on the branch since the supplied base commit. */
+export async function filesChangedSince(
+  handle: RepoHandle,
+  baseSha: string,
+): Promise<string[]> {
+  const { stdout } = await run(
+    'git',
+    ['diff', '--name-only', `${baseSha}..HEAD`],
+    { cwd: handle.cwd },
+  );
+  return stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 /** Remove the workspace directory. Best-effort — never throws. */
 export async function cleanup(handle: RepoHandle): Promise<void> {
   try {

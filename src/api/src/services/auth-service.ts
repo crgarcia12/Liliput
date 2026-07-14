@@ -1,5 +1,6 @@
 import bcryptjs from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { randomBytes } from 'node:crypto';
 import { getDb } from '../stores/db.js';
 
 export interface User {
@@ -21,8 +22,7 @@ function getJwtSecret(): string {
 
   // Dev-only: generate a random secret if not provided
   // In production, this should always be set via environment variable
-  const crypto = require('crypto') as typeof import('crypto');
-  const generated = crypto.randomBytes(32).toString('hex');
+  const generated = randomBytes(32).toString('hex');
   console.warn(
     'JWT_SECRET not set — using generated secret. This will change on restart!',
   );
@@ -144,7 +144,7 @@ export function verifySessionToken(token: string): SessionToken | null {
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as SessionToken;
     return decoded;
-  } catch (err) {
+  } catch {
     return null;
   }
 }

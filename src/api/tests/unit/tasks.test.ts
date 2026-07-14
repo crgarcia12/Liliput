@@ -13,6 +13,22 @@ vi.mock('../../src/engine/github-pr.js', async (importOriginal) => {
   };
 });
 
+// Keep route tests deterministic and independent of Copilot SDK/network latency.
+vi.mock('../../src/engine/copilot-client.js', async (importOriginal) => {
+  const original = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...original,
+    listAvailableModels: vi.fn(async () => ({
+      models: [
+        { id: 'claude-sonnet-4.5', label: 'Claude Sonnet 4.5', family: 'claude' },
+        { id: 'gpt-5-mini', label: 'GPT-5 mini', family: 'gpt' },
+        { id: 'gpt-5', label: 'GPT-5', family: 'gpt' },
+      ],
+      source: 'sdk',
+    })),
+  };
+});
+
 import { createTasksRouter } from '../../src/routes/tasks.js';
 import { createWorkstreamsRouter } from '../../src/routes/workstreams.js';
 import { resetStore } from '../../src/stores/task-store.js';

@@ -63,7 +63,7 @@ export default function ToolWishesPage() {
           <div className="text-zinc-500 italic">
             No tool wishes recorded yet. Agents emit{' '}
             <code className="text-zinc-300">TOOL-WISH: name — reason</code> in
-            their chat when they want a CLI that isn't installed.
+            their chat when they want a CLI that isn&apos;t installed.
           </div>
         ) : (
           <div className="space-y-3">

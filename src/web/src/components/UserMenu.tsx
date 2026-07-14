@@ -1,22 +1,37 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { usePathname } from 'next/navigation';
 import { logout } from '@/lib/api-client';
-import type { SessionToken } from '@/lib/auth-utils';
-import { getSessionInfo } from '@/lib/auth-utils';
+import { decodeToken } from '@/lib/auth-utils';
 import { ChangePasswordModal } from './ChangePasswordModal';
+
+function subscribeToAuthToken(onStoreChange: () => void): () => void {
+  const handleStorage = (event: StorageEvent): void => {
+    if (event.key === 'auth_token') onStoreChange();
+  };
+  window.addEventListener('storage', handleStorage);
+  return () => window.removeEventListener('storage', handleStorage);
+}
+
+function getAuthTokenSnapshot(): string | null {
+  return window.localStorage.getItem('auth_token');
+}
+
+function getServerAuthTokenSnapshot(): null {
+  return null;
+}
 
 export function UserMenu() {
   const pathname = usePathname();
-  const [user, setUser] = useState<SessionToken | null>(null);
+  const authToken = useSyncExternalStore(
+    subscribeToAuthToken,
+    getAuthTokenSnapshot,
+    getServerAuthTokenSnapshot,
+  );
+  const user = authToken ? decodeToken(authToken) : null;
   const [isOpen, setIsOpen] = useState(false);
   const [changePwOpen, setChangePwOpen] = useState(false);
-
-  useEffect(() => {
-    const sessionInfo = getSessionInfo();
-    setUser(sessionInfo);
-  }, []);
 
   if (pathname === '/login') return null;
   if (!user) return null;

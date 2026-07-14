@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { changePassword } from '@/lib/api-client';
 
 interface Props {
@@ -16,39 +16,26 @@ interface Props {
  * remains valid until it expires (24h).
  */
 export function ChangePasswordModal({ open, onClose }: Props): React.JSX.Element | null {
+  if (!open) return null;
+  return <ChangePasswordForm onClose={onClose} />;
+}
+
+function ChangePasswordForm({ onClose }: Pick<Props, 'onClose'>): React.JSX.Element {
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const firstFieldRef = useRef<HTMLInputElement | null>(null);
-
-  // Reset form whenever the modal opens.
-  useEffect(() => {
-    if (open) {
-      setCurrent('');
-      setNext('');
-      setConfirm('');
-      setError(null);
-      setSuccess(false);
-      setSubmitting(false);
-      // Focus the first field on open so it's keyboard-driveable.
-      setTimeout(() => firstFieldRef.current?.focus(), 0);
-    }
-  }, [open]);
 
   // ESC closes the modal.
   useEffect(() => {
-    if (!open) return;
     const handler = (e: KeyboardEvent): void => {
       if (e.key === 'Escape' && !submitting) onClose();
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [open, submitting, onClose]);
-
-  if (!open) return null;
+  }, [submitting, onClose]);
 
   const submit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
@@ -95,7 +82,7 @@ export function ChangePasswordModal({ open, onClose }: Props): React.JSX.Element
           <label className="block text-xs text-[#a0a0a8]">
             Current password
             <input
-              ref={firstFieldRef}
+              autoFocus
               type="password"
               value={current}
               onChange={(e) => setCurrent(e.target.value)}

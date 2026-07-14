@@ -50,9 +50,9 @@ interface PhaseStepperProps {
 }
 
 export default function PhaseStepper({ task, agents }: PhaseStepperProps) {
-  const [, force] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const t = setInterval(() => force((x) => x + 1), 1000);
+    const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
 
@@ -94,7 +94,7 @@ export default function PhaseStepper({ task, agents }: PhaseStepperProps) {
       {!isTerminal && currentIdx >= 0 && (
         <span className="ml-2 text-gray-500">
           ·{' '}
-          <span className="text-gray-300">{fmtElapsed(Date.now() - phaseStart)}</span>{' '}
+          <span className="text-gray-300">{fmtElapsed(now - phaseStart)}</span>{' '}
           in {PHASES[currentIdx].short.toLowerCase()}
         </span>
       )}

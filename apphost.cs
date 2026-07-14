@@ -8,10 +8,11 @@ var builder = DistributedApplication.CreateBuilder(args);
 var api = builder.AddJavaScriptApp("api", "./src/api")
     .WithEnvironment("JWT_SECRET", "aspire-local-dev-jwt-secret")
     .WithHttpEndpoint(port: 5001, env: "PORT")
-    .WithHttpHealthCheck("/health");
+    .WithHttpHealthCheck("/api/health");
 
 // Web — Next.js frontend
 builder.AddJavaScriptApp("web", "./src/web")
+    .WithHttpEndpoint(port: 3001, env: "PORT")
     .WithExternalHttpEndpoints()
     .WithReference(api)
     .WaitFor(api);

@@ -107,6 +107,9 @@ export interface Task {
   pullRequestUrl?: string;    // Created PR URL (commitMode='pr') or direct commit URL
   pullRequestNumber?: number; // PR number (set together with pullRequestUrl)
   commitSha?: string;         // SHA of the agent's last commit
+  baseCommitSha?: string;     // Branch point used to report the complete PR file set
+  implementationNotes?: string[]; // Agent summaries of completed implementation rounds
+  implementationChangedFiles?: string[]; // Cumulative files changed by the implementation
   imageRef?: string;          // ACR image reference built for the dev env
   devNamespace?: string;      // K8s namespace hosting the dev env
   devUrl?: string;            // Public URL where the dev env is reachable

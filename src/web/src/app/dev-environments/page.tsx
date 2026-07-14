@@ -82,7 +82,7 @@ export default function DevEnvironmentsPage() {
       <main className="max-w-6xl mx-auto px-6 py-6 space-y-6">
         <section className="bg-[#0d0d14] border border-[#1a1a2e] rounded-lg p-4">
           <h2 className="text-sm font-semibold text-gray-300 mb-2">
-            What's running on the cluster
+            What&apos;s running on the cluster
           </h2>
           <p className="text-xs text-gray-500 leading-relaxed">
             Each task that builds successfully gets its own preview environment in AKS:

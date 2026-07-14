@@ -13,6 +13,7 @@
  */
 
 import * as k8s from '@kubernetes/client-node';
+import { Writable } from 'node:stream';
 import { logger } from '../logger.js';
 
 const kc = new k8s.KubeConfig();
@@ -378,13 +379,13 @@ export async function execInPod(
   return new Promise<ExecResult>((resolve, reject) => {
     let stdout = '';
     let stderr = '';
-    const stdoutStream = new (require('node:stream').Writable)({
+    const stdoutStream = new Writable({
       write(chunk: Buffer, _enc: string, cb: () => void): void {
         stdout += chunk.toString();
         cb();
       },
     });
-    const stderrStream = new (require('node:stream').Writable)({
+    const stderrStream = new Writable({
       write(chunk: Buffer, _enc: string, cb: () => void): void {
         stderr += chunk.toString();
         cb();

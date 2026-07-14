@@ -58,6 +58,8 @@ Follow the repo's existing conventions. For a Liliput-spec2cloud project:
 1. Open a PR using `.github/pull_request_template.md`. Fill in **every**
    section:
    - `Closes #N` — mandatory.
+   - Summary — describe the implementation, changed behavior, and important
+     trade-offs. Never copy or restate the originating user prompt.
    - AC checklist — copy each AC from the issue verbatim, tick it, and
      point to the exact test path that proves it.
    - Test evidence — paste the actual test run output.

@@ -196,7 +196,7 @@ export async function del<T>(endpoint: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export default {
+const apiClient = {
   get,
   post,
   put,
@@ -208,3 +208,5 @@ export default {
   clearToken,
   changePassword,
 };
+
+export default apiClient;

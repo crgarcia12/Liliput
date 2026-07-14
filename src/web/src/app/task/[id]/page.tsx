@@ -56,7 +56,6 @@ export default function TaskPage() {
   const [specDraft, setSpecDraft] = useState('');
   const [specSaving, setSpecSaving] = useState(false);
   const [modelOptions, setModelOptions] = useState<readonly ModelOption[]>([]);
-  const [modelDefault, setModelDefault] = useState<string>('');
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [modelsSource, setModelsSource] = useState<'sdk' | 'fallback' | null>(null);
   const [taskCost, setTaskCost] = useState<CostRollup | undefined>(undefined);
@@ -99,7 +98,6 @@ export default function TaskPage() {
         setModelsError(null);
         setModelsSource(data.source ?? 'sdk');
         setModelOptions(data.options);
-        setModelDefault(data.default);
       })
       .catch((err: unknown) => {
         if (cancelled) return;

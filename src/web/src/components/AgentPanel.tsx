@@ -3,13 +3,8 @@
 import { useEffect, useState } from 'react';
 import type { Agent, AgentRole, AgentStatus } from '@shared/types';
 
-function LastActive({ iso }: { iso: string }) {
-  const [, force] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => force((x) => x + 1), 1000);
-    return () => clearInterval(t);
-  }, []);
-  const ms = Date.now() - new Date(iso).getTime();
+function LastActive({ iso, now }: { iso: string; now: number }) {
+  const ms = now - new Date(iso).getTime();
   const s = Math.max(0, Math.floor(ms / 1000));
   if (s < 5) return <span className="text-green-400">just now</span>;
   if (s < 60) return <span>{s}s ago</span>;
@@ -18,13 +13,8 @@ function LastActive({ iso }: { iso: string }) {
   return <span className="text-red-400">{Math.floor(m / 60)}h {m % 60}m ago</span>;
 }
 
-function Elapsed({ iso }: { iso: string }) {
-  const [, force] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => force((x) => x + 1), 1000);
-    return () => clearInterval(t);
-  }, []);
-  const ms = Date.now() - new Date(iso).getTime();
+function Elapsed({ iso, now }: { iso: string; now: number }) {
+  const ms = now - new Date(iso).getTime();
   const s = Math.max(0, Math.floor(ms / 1000));
   if (s < 60) return <span>{s}s</span>;
   const m = Math.floor(s / 60);
@@ -60,6 +50,12 @@ const STATUS_STYLES: Record<AgentStatus, { bg: string; text: string; label: stri
 
 export default function AgentPanel({ agents }: AgentPanelProps) {
   const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set());
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   const toggleLogs = (agentId: string) => {
     setExpandedLogs((prev) => {
@@ -119,14 +115,14 @@ export default function AgentPanel({ agents }: AgentPanelProps) {
               <p className="text-[10px] text-gray-500 mt-1 flex items-center gap-2 flex-wrap">
                 {agent.startedAt && (
                   <span>
-                    ⏱ <Elapsed iso={agent.startedAt} />
+                    ⏱ <Elapsed iso={agent.startedAt} now={now} />
                   </span>
                 )}
                 {typeof agent.toolCallCount === 'number' && agent.toolCallCount > 0 && (
                   <span>🔧 {agent.toolCallCount}</span>
                 )}
                 <span>
-                  · last: <LastActive iso={agent.updatedAt} />
+                  · last: <LastActive iso={agent.updatedAt} now={now} />
                 </span>
               </p>
             )}

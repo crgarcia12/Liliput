@@ -27,6 +27,13 @@ export interface UseMobileTaskReturn {
   actionPending: ActionKind | null;
   sendMessage: (message: string) => Promise<void>;
   approveSpec: () => Promise<void>;
+  editingSpec: boolean;
+  specDraft: string;
+  setSpecDraft: (spec: string) => void;
+  specSaving: boolean;
+  startEditSpec: () => void;
+  cancelEditSpec: () => void;
+  saveSpec: () => Promise<void>;
   shipTask: () => Promise<void>;
   discardTask: () => Promise<void>;
   closeTask: () => Promise<void>;
@@ -71,6 +78,9 @@ export function useMobileTask(taskId: string): UseMobileTaskReturn {
   const [modelPending, setModelPending] = useState(false);
   const [reasoningPending, setReasoningPending] = useState(false);
   const [reviewerPending, setReviewerPending] = useState(false);
+  const [editingSpec, setEditingSpec] = useState(false);
+  const [specDraft, setSpecDraft] = useState('');
+  const [specSaving, setSpecSaving] = useState(false);
 
   // Mirror desktop's optimization: don't replace state objects when nothing
   // visible has changed. Preserves text selection across 4s polls.
@@ -263,9 +273,11 @@ export function useMobileTask(taskId: string): UseMobileTaskReturn {
     if (!task) return;
     setActionPending('approve');
     try {
+      const body = editingSpec && specDraft.trim() ? { spec: specDraft.trim() } : {};
       const res = await fetch(`${API_URL}/api/tasks/${task.id}/approve-spec`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const body = await res.text();
@@ -273,12 +285,49 @@ export function useMobileTask(taskId: string): UseMobileTaskReturn {
       }
       const data = (await res.json()) as { task: Task };
       setTask(data.task);
+      setEditingSpec(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setActionPending(null);
     }
-  }, [task]);
+  }, [task, editingSpec, specDraft]);
+
+  const startEditSpec = useCallback(() => {
+    if (!task?.spec) return;
+    setSpecDraft(task.spec);
+    setEditingSpec(true);
+  }, [task?.spec]);
+
+  const cancelEditSpec = useCallback(() => {
+    setEditingSpec(false);
+    setSpecDraft('');
+  }, []);
+
+  const saveSpec = useCallback(async () => {
+    if (!task) return;
+    const trimmed = specDraft.trim();
+    if (!trimmed) return;
+    setSpecSaving(true);
+    try {
+      const res = await fetch(`${API_URL}/api/tasks/${task.id}/spec`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spec: trimmed }),
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`save spec failed: ${res.status} ${body}`);
+      }
+      const data = (await res.json()) as { task: Task };
+      setTask(data.task);
+      setEditingSpec(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSpecSaving(false);
+    }
+  }, [task, specDraft]);
 
   const shipTask = useCallback(async () => {
     if (!task) return;
@@ -423,6 +472,13 @@ export function useMobileTask(taskId: string): UseMobileTaskReturn {
     actionPending,
     sendMessage,
     approveSpec,
+    editingSpec,
+    specDraft,
+    setSpecDraft,
+    specSaving,
+    startEditSpec,
+    cancelEditSpec,
+    saveSpec,
     shipTask,
     discardTask,
     closeTask,

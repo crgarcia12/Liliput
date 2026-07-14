@@ -135,7 +135,6 @@ function AgentFigure({
 
   // Pop-in animation
   useEffect(() => {
-    setScale(0.01);
     const timer = setTimeout(() => setScale(1), 50);
     return () => clearTimeout(timer);
   }, [agent.id]);
@@ -202,7 +201,8 @@ function CompletionSparkles({ color }: { color: string }) {
   const positions = useMemo(() => {
     const arr = new Float32Array(30);
     for (let i = 0; i < 30; i++) {
-      arr[i] = (Math.random() - 0.5) * 0.5;
+      const value = Math.sin((i + 1) * 12.9898) * 43758.5453;
+      arr[i] = (value - Math.floor(value) - 0.5) * 0.5;
     }
     return arr;
   }, []);

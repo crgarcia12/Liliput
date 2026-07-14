@@ -53,7 +53,6 @@ export function createAgentRouter(): Router {
     const skipBuild = body.skipBuild ?? true;
     const branch = `liliput-agent/dry-run-${Date.now().toString(36)}`;
     const steps: StepResult[] = [];
-    let handle: git.RepoHandle | undefined;
 
     const time = async <T>(
       step: string,
@@ -75,7 +74,7 @@ export function createAgentRouter(): Router {
       }
     };
 
-    handle = await time('clone', () => git.clone({ repo, ref: base }));
+    const handle = await time('clone', () => git.clone({ repo, ref: base }));
     if (!handle) {
       res.status(500).json({ ok: false, branch, steps });
       return;

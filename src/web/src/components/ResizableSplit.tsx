@@ -3,9 +3,9 @@
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from 'react';
 
@@ -35,6 +35,28 @@ interface Props {
 
 const DEFAULT_MIN = { left: 0.15, center: 0.2, right: 0.15 };
 
+interface LayoutFractions {
+  left: number;
+  center: number;
+}
+
+function parseStoredLayout(raw: string | null): Partial<LayoutFractions> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as Partial<LayoutFractions>;
+    return {
+      ...(typeof parsed.left === 'number' ? { left: parsed.left } : {}),
+      ...(typeof parsed.center === 'number' ? { center: parsed.center } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
+function getServerStorageSnapshot(): null {
+  return null;
+}
+
 export default function ResizableSplit({
   storageKey,
   defaults,
@@ -45,35 +67,55 @@ export default function ResizableSplit({
   className,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  // Fractions of total width (so the layout adapts to viewport changes).
-  const [leftFr, setLeftFr] = useState<number>(defaults.left);
-  const [centerFr, setCenterFr] = useState<number>(defaults.center);
-  const dragging = useRef<null | 'left' | 'right'>(null);
-
-  // Hydrate from localStorage on mount.
-  useLayoutEffect(() => {
+  const subscribeToStorage = useCallback(
+    (onStoreChange: () => void) => {
+      const handleStorage = (event: StorageEvent): void => {
+        if (event.key === storageKey) onStoreChange();
+      };
+      window.addEventListener('storage', handleStorage);
+      return () => window.removeEventListener('storage', handleStorage);
+    },
+    [storageKey],
+  );
+  const getStorageSnapshot = useCallback((): string | null => {
     try {
-      const raw = window.localStorage.getItem(storageKey);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as { left?: number; center?: number };
-      if (typeof parsed.left === 'number') setLeftFr(parsed.left);
-      if (typeof parsed.center === 'number') setCenterFr(parsed.center);
+      return window.localStorage.getItem(storageKey);
     } catch {
-      /* ignore corrupted prefs */
+      return null;
     }
   }, [storageKey]);
+  const storedRaw = useSyncExternalStore(
+    subscribeToStorage,
+    getStorageSnapshot,
+    getServerStorageSnapshot,
+  );
+  const storedLayout = parseStoredLayout(storedRaw);
+  const [localLayout, setLocalLayout] = useState<
+    (LayoutFractions & { storageKey: string }) | null
+  >(null);
+  const activeLocalLayout =
+    localLayout?.storageKey === storageKey ? localLayout : null;
+  const leftFr = activeLocalLayout?.left ?? storedLayout.left ?? defaults.left;
+  const centerFr =
+    activeLocalLayout?.center ?? storedLayout.center ?? defaults.center;
+  const fractionsRef = useRef({ left: leftFr, center: centerFr });
+  const dragging = useRef<null | 'left' | 'right'>(null);
 
-  // Persist on change.
   useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        storageKey,
-        JSON.stringify({ left: leftFr, center: centerFr }),
-      );
-    } catch {
-      /* quota / private mode — ignore */
-    }
-  }, [storageKey, leftFr, centerFr]);
+    fractionsRef.current = { left: leftFr, center: centerFr };
+  }, [leftFr, centerFr]);
+
+  const updateLayout = useCallback(
+    (layout: LayoutFractions): void => {
+      setLocalLayout({ storageKey, ...layout });
+      try {
+        window.localStorage.setItem(storageKey, JSON.stringify(layout));
+      } catch {
+        /* quota / private mode - keep the in-memory layout */
+      }
+    },
+    [storageKey],
+  );
 
   const onMove = useCallback(
     (e: PointerEvent) => {
@@ -84,28 +126,30 @@ export default function ResizableSplit({
       const rect = el.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const fr = Math.min(1, Math.max(0, x / rect.width));
+      const { left: currentLeft, center: currentCenter } = fractionsRef.current;
       if (which === 'left') {
         // The left handle controls the boundary between left and center.
         // Right pane keeps its current fraction, so center = 1 - leftFr - rightFr.
-        const rightFr = 1 - leftFr - centerFr;
+        const rightFr = 1 - currentLeft - currentCenter;
         const nextLeft = Math.min(
           1 - min.center - rightFr,
           Math.max(min.left, fr),
         );
         const nextCenter = 1 - nextLeft - rightFr;
-        setLeftFr(nextLeft);
-        setCenterFr(nextCenter);
+        fractionsRef.current = { left: nextLeft, center: nextCenter };
+        updateLayout({ left: nextLeft, center: nextCenter });
       } else {
         // Right handle controls boundary between center and right.
         // Left pane keeps its fraction; center = fr - leftFr.
         const nextCenter = Math.min(
-          1 - leftFr - min.right,
-          Math.max(min.center, fr - leftFr),
+          1 - currentLeft - min.right,
+          Math.max(min.center, fr - currentLeft),
         );
-        setCenterFr(nextCenter);
+        fractionsRef.current = { left: currentLeft, center: nextCenter };
+        updateLayout({ left: currentLeft, center: nextCenter });
       }
     },
-    [leftFr, centerFr, min.left, min.center, min.right],
+    [min.left, min.center, min.right, updateLayout],
   );
 
   const stop = useCallback(() => {
@@ -113,7 +157,6 @@ export default function ResizableSplit({
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
     window.removeEventListener('pointermove', onMove);
-    window.removeEventListener('pointerup', stop);
   }, [onMove]);
 
   const start = (which: 'left' | 'right') => (e: React.PointerEvent) => {
@@ -122,11 +165,17 @@ export default function ResizableSplit({
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
     window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', stop);
+    window.addEventListener('pointerup', stop, { once: true });
   };
 
   // Cleanup if the component unmounts mid-drag.
-  useEffect(() => () => stop(), [stop]);
+  useEffect(
+    () => () => {
+      stop();
+      window.removeEventListener('pointerup', stop);
+    },
+    [stop],
+  );
 
   const rightFr = Math.max(min.right, 1 - leftFr - centerFr);
 

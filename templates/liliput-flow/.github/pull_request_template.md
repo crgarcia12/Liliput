@@ -7,7 +7,10 @@
 Closes #<!-- issue number — REQUIRED. RM rejects PRs without this. -->
 
 ## Summary
-<!-- 2–4 sentences. What changed and why. -->
+<!--
+  2–4 sentences describing what was implemented and why.
+  Never paste or restate the originating user's prompt or task description.
+-->
 
 ## Acceptance criteria check
 <!--
