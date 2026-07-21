@@ -1,171 +1,198 @@
 # Liliput
 
-```text
-LILIPUT // AUTONOMOUS SOFTWARE FACTORY
+<p align="center">
+  <strong>An observable software factory for GitHub repositories.</strong><br/>
+  Intent becomes an isolated agent run, tested code, a live AKS preview, review evidence, and a pull request.
+</p>
 
-Tell it what should exist.
-Watch a tiny engineering world organize itself.
-Ship the result as tested, reviewed, running software.
-```
+<p align="center">
+  <img src="docs/assets/liliput-pipeline.svg" alt="Animated Liliput execution pipeline from intent to pull request" width="100%"/>
+</p>
 
-**Liliput is an entire world for software agents.** It is not a chat box, not a
-script runner, and not a thin wrapper around a code editor. It is a miniature
-software development factory where agents act like a product team: they plan,
-split work, clone repositories, read project rules, write code, run tests,
-deploy previews, review changes, recover from failures, and prepare pull
-requests for humans to approve.
+<p align="center">
+  <a href="https://liliput.crgarcia.com.ar">Live system</a>
+  &nbsp;&middot;&nbsp;
+  <a href="cli/README.md">Terminal client</a>
+  &nbsp;&middot;&nbsp;
+  <a href="#runtime-architecture">Architecture</a>
+  &nbsp;&middot;&nbsp;
+  <a href="CONTRIBUTING.md">Contributing</a>
+</p>
 
-A Liliputian can take a plain-English goal and move it through the same stations
-a real team would use: product intent, implementation, verification, release
-review, deployment, and operational feedback. The factory can run with a human
-watching every move, or it can keep looping autonomously until the work is
-tested and ready.
+<p align="center">
+  <a href="https://github.com/crgarcia12/Liliput/actions/workflows/ci.yml"><img src="https://github.com/crgarcia12/Liliput/actions/workflows/ci.yml/badge.svg" alt="CI status"/></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-ISC-7dd3fc" alt="ISC license"/></a>
+</p>
+
+Most coding agents optimize for producing a diff. Liliput optimizes for
+producing an **auditable delivery**.
+
+It is a Next.js and Express control plane around GitHub Copilot SDK sessions.
+Each task gets a cloned repository workspace, repo-owned instructions and
+skills, a live execution trace, quality gates, an optional AKS preview, and a
+human release decision.
+
+> The unit of work is not a model response. It is a repository state transition
+> backed by evidence.
+
+## At a glance
+
+| Concern | Liliput's contract |
+| --- | --- |
+| Input | A plain-language outcome and a target GitHub repository |
+| Isolation | A cloned workspace per task on persistent storage |
+| Context | Instructions, skills, and MCP configuration discovered from the target repo |
+| Execution | Copilot SDK agent turns that can search, edit, run commands, test, commit, and push |
+| Evidence | Tool calls, logs, model usage, test output, deploy health, and reviewer verdicts |
+| Output | A branch, a live preview when configured, and a pull request ready for human judgment |
+| Control | Observe, interrupt, redirect, retry, ship, or discard from the web UI or terminal |
+
+## The control plane is the product
+
+<p align="center">
+  <img src="docs/screenshots/home.png" alt="Liliput workstream view showing agent history, live execution logs, an ACR build, an AKS rollout, and an HTTP health check" width="100%"/>
+</p>
+
+<p align="center">
+  <sub>A real task trace, not a staged happy path: a model refusal is visible, the next iteration recovers, tests pass, an image is built, AKS rolls it out, and the preview reaches HTTP 200.</sub>
+</p>
+
+Liliput keeps the engineering process visible instead of collapsing it into a
+success-shaped answer. The operator can inspect which agent acted, which tools
+ran, what failed, how the next iteration responded, and what evidence supports
+the final result.
+
+## How one task moves through the system
+
+1. **Create a task.** Select a repository, describe the outcome, and choose the
+   coding and reviewer models.
+2. **Enter an isolated workspace.** Liliput clones the repository and creates a
+   task branch without sharing mutable source state with another task.
+3. **Load repository-owned context.** The agent discovers project instructions,
+   local skills, deployment contracts, and MCP servers from the clone.
+4. **Run an evidence-producing loop.** The agent searches, edits, executes
+   commands, writes or updates tests, and records each event.
+5. **Build and prove the result.** Liliput can push the branch, build an image in
+   ACR, deploy a namespace-scoped AKS preview, probe it, and feed failures back
+   into the next iteration.
+6. **Apply review gates.** Reviewer agents inspect the implementation and its
+   evidence before the task reaches a release decision.
+7. **Return control to the engineer.** Ship the pull request, redirect the task,
+   retry a failed stage, or discard the work.
+
+## What is implemented
+
+| System | Implementation |
+| --- | --- |
+| Task orchestration | Persistent workstreams, tasks, turns, statuses, retries, and human actions |
+| Agent runtime | In-process Copilot SDK sessions with role-specific model and reasoning settings |
+| Repository context | Automatic discovery of repo instructions, agentskills.io skills, and MCP servers |
+| Live evidence | Socket.IO event streaming for messages, tools, logs, usage, and state transitions |
+| Quality loops | Project tests, Cucumber, Playwright, critic/reviewer turns, health probes, and verdicts |
+| Git delivery | Isolated branches, commits, pushes, pull requests, and a per-iteration conflict guard |
+| Preview runtime | ACR image builds plus Kubernetes Deployment, Service, routing, logs, and health checks |
+| Azure identity | Repo-scoped Entra service principals and credential projection for AI-enabled previews |
+| Control surfaces | Next.js operations UI and a Go/Bubble Tea terminal client |
+| Durable team loop | Optional PM -> Dev -> Release Manager state carried by GitHub issues, labels, and PRs |
+
+## Engineering principles
+
+### Observable autonomy
+
+Agents may iterate independently, but tool calls, failures, model selection,
+usage, test output, deployment state, and review decisions remain inspectable.
+
+### The repository owns the context
+
+Liliput does not rely on one global prompt. Each cloned target repository can
+teach the agent through its own instructions, skills, tests, contracts, and MCP
+configuration.
+
+### Evidence outranks narration
+
+A confident summary is not a release gate. Tests, commits, image digests,
+rollout state, HTTP probes, diffs, and reviewer verdicts are.
+
+### Human control stays in the loop
+
+Operators can interrupt a running task, add direction, inspect the preview,
+ship the branch, or discard it. Feature decomposition and multi-feature fan-out
+are operator-controlled by default, not silently automatic.
+
+## Runtime architecture
 
 ```mermaid
 flowchart LR
-    Intent["Intent<br/>what should exist"]
-    Control["Mission control<br/>web dashboard or CLI"]
-    Planner["Planning agents<br/>shape the work"]
-    Builder["Builder agents<br/>code + tests"]
-    Reviewer["Reviewer agents<br/>quality gate"]
-    Deploy["Deployment agents<br/>preview environments"]
-    PR["Pull request<br/>ready for human judgment"]
+    Operator["Engineer<br/>browser or terminal"]
 
-    Intent --> Control --> Planner --> Builder --> Reviewer --> Deploy --> PR
-    Deploy -->|"logs, health, failures"| Builder
-    Reviewer -->|"feedback"| Builder
-    PR -->|"ship / iterate / discard"| Control
+    subgraph AKS["AKS control plane"]
+        Ingress["ingress-nginx<br/>TLS"]
+        Gateway["NGINX gateway<br/>auth + preview routes"]
+        Web["Next.js web<br/>operations UI"]
+        API["Express API<br/>orchestration engine"]
+        State[("PVC<br/>SQLite + workspaces")]
+    end
+
+    subgraph Execution["Execution systems"]
+        SDK["GitHub Copilot SDK<br/>agent sessions"]
+        GitHub["GitHub<br/>repos + branches + PRs"]
+        ACR["Azure Container Registry<br/>preview images"]
+        Preview["AKS preview namespaces<br/>app + service + route"]
+    end
+
+    Operator --> Ingress --> Gateway
+    Gateway --> Web
+    Gateway --> API
+    Web <-->|"REST + Socket.IO"| API
+    API --> State
+    API --> SDK
+    API --> GitHub
+    API --> ACR
+    API --> Preview
+    Preview --> Gateway
 ```
 
-## Why it feels different
+The API pod is currently the single-writer brain. It owns task coordination,
+Copilot SDK sessions, Git operations, image builds, Kubernetes deployment, and
+live event publication. SQLite and cloned workspaces survive on the persistent
+volume. An API pod restart interrupts an active in-process SDK turn, while its
+durable task and repository state remain available for recovery.
 
-| Ordinary agent tools | Liliput |
-| --- | --- |
-| One prompt, one answer | A persistent task with turns, state, logs, previews, and review |
-| A model edits files | A factory coordinates planning, coding, testing, deployment, and PRs |
-| Hidden execution | Every tool call, event, model, token, and verdict is visible |
-| Stops when code is written | Can keep testing, deploying, diagnosing, and iterating |
-| Local-only context | Target repos bring their own instructions, skills, and MCP servers |
+## Repository layout
 
-The important idea is **observable autonomy**. Liliput is allowed to work
-independently, but it is never invisible. You can watch the factory floor, jump
-into a running task, redirect a Liliputian mid-flight, and review exactly how the
-result was produced.
-
-## The factory floor
-
-```mermaid
-flowchart TB
-    subgraph Human["Human layer"]
-        Idea["Idea / bug / product request"]
-        Review["Review, steer, ship"]
-    end
-
-    subgraph Factory["Liliput factory"]
-        Dashboard["Portal"]
-        TUI["Terminal cockpit"]
-        Workstream["Workstream"]
-        Feature["Feature slices"]
-        Task["Task execution"]
-        Turn["Agent turns"]
-        Logs["Live event stream"]
-    end
-
-    subgraph Agents["Agent society"]
-        PM["PM"]
-        Dev["Developer"]
-        RM["Release manager"]
-        Fixer["Failure fixer"]
-        Deployer["Deployer"]
-    end
-
-    subgraph World["External world"]
-        Repo["Target repository"]
-        Tests["Unit / Cucumber / Playwright"]
-        Preview["Preview deployment"]
-        PullRequest["Pull request"]
-    end
-
-    Idea --> Dashboard
-    Idea --> TUI
-    Dashboard --> Workstream --> Feature --> Task --> Turn
-    TUI --> Task
-    Turn --> PM
-    Turn --> Dev
-    Turn --> RM
-    Turn --> Fixer
-    Turn --> Deployer
-    Dev --> Repo
-    Dev --> Tests
-    Deployer --> Preview
-    RM --> PullRequest
-    Logs --> Dashboard
-    Logs --> TUI
-    Preview --> Review
-    PullRequest --> Review
+```text
+.
+|-- src/
+|   |-- api/       Express API, agent engine, stores, auth, Git, Azure, and Kubernetes
+|   |-- web/       Next.js control plane, task views, previews, and live activity
+|   `-- shared/    TypeScript contracts shared by API and Web
+|-- cli/           Go/Bubble Tea terminal client
+|-- e2e/           Playwright end-to-end tests and page objects
+|-- tests/         Cucumber feature tests
+|-- k8s/           AKS manifests for gateway, API, Web, storage, and ingress
+|-- infra/         Azure infrastructure templates and deployment scripts
+|-- templates/     Target-repo overlay for the durable PM -> Dev -> RM loop
+|-- specs/         Product, feature, architecture, and delivery specifications
+`-- .github/
+    |-- workflows/ CI, releases, token rotation, and AKS deployment
+    `-- skills/    Agent procedures discovered by Copilot SDK sessions
 ```
 
-## A task, from spark to ship
-
-1. **You describe the outcome.** A feature, bug fix, migration, cleanup, or
-   complete application goal.
-2. **Liliput creates a task.** It captures the repo, prompt, model settings,
-   reviewer settings, status, and execution history.
-3. **A Liliputian enters the repo.** The agent works in an isolated clone under
-   the workspace volume.
-4. **The repo teaches the agent.** Project instructions, skills, and MCP servers
-   are discovered from the target repository.
-5. **The agent builds.** It searches, edits, runs commands, writes tests, fixes
-   failures, and records every event.
-6. **The factory deploys.** When the task reaches preview state, Liliput builds
-   an image and creates a runnable environment.
-7. **Quality gates run.** Tests, reviewer feedback, health checks, and verdicts
-   decide whether to continue or present the work.
-8. **You take control.** Ship it, discard it, or chat with the active task to
-   redirect the next turn.
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant O as Operator
-    participant C as Control room
-    participant A as API brain
-    participant S as Copilot SDK session
-    participant W as Workspace
-    participant T as Test runner
-    participant D as Deployer
-    participant R as Review surface
-
-    O->>C: Submit intent
-    C->>A: Create task
-    A->>W: Clone target repo
-    A->>S: Start Liliputian in workspace
-    S->>W: Read, search, edit, run commands
-    S->>T: Execute checks when needed
-    T-->>S: Pass/fail evidence
-    S-->>A: Stream reasoning, tools, messages, usage
-    A->>D: Build and deploy preview
-    D-->>A: Health, logs, preview state
-    A->>R: Present PR, preview, diff, verdicts
-    O->>C: Ship, discard, or interrupt with new direction
-```
-
-## First run for a developer
+## Run locally
 
 ### Prerequisites
 
-| Need | Why |
+| Requirement | Needed for |
 | --- | --- |
-| Node.js | Runs the API and web app |
-| npm | Installs API, web, and root test tooling |
-| Go | Builds the terminal cockpit |
-| GitHub token | Lets real tasks clone, push, open PRs, and use Copilot |
-| Azure CLI + kubectl | Needed for hosted preview and deployment flows |
+| Node.js 22 and npm | API, web UI, and test tooling |
+| GitHub token with Copilot access | Real agent runs, Git operations, and pull requests |
+| Go | Optional terminal client |
+| Azure CLI and `kubectl` | Optional ACR builds and AKS preview deployments |
 
 ### Install
 
 ```powershell
-# Clone the repository using your approved internal Git remote.
+git clone https://github.com/crgarcia12/Liliput.git
 Set-Location Liliput
 
 npm ci
@@ -173,10 +200,10 @@ npm --prefix src/api ci
 npm --prefix src/web ci
 ```
 
-### Start the local factory
+### Start the control plane
 
 ```powershell
-# Local-only values. Never commit real secrets.
+# Local values only. Never commit real secrets.
 $env:JWT_SECRET = "replace-with-a-long-local-secret"
 $env:DEFAULT_ADMIN_PASSWORD = "replace-with-a-local-password"
 $env:COPILOT_GITHUB_TOKEN = "github-token-for-real-agent-runs"
@@ -184,215 +211,97 @@ $env:COPILOT_GITHUB_TOKEN = "github-token-for-real-agent-runs"
 npm run dev:all
 ```
 
-| Surface | Where |
+| Surface | URL |
 | --- | --- |
-| Landing page | Web port `3000`, path `/` |
-| Dashboard | Web port `3000`, path `/dashboard` |
-| API health | API port `5001`, path `/api/health` |
+| Landing page | `http://localhost:3000/` |
+| Dashboard | `http://localhost:3000/dashboard` |
+| API health | `http://localhost:5001/api/health` |
 
-The first boot seeds an `admin` user. If `DEFAULT_ADMIN_PASSWORD` is present,
-that value is used. If it is missing, the API generates a password and prints it
-once. Existing SQLite databases keep their users, so changing the variable later
-does not reset a password.
+The first boot seeds an `admin` user. If `DEFAULT_ADMIN_PASSWORD` is absent,
+Liliput generates a password and prints it once. Existing SQLite databases keep
+their users; changing the environment variable does not reset a stored
+password.
 
-## Repository map
+## Terminal client
 
-```text
-.
-|-- src/
-|   |-- api/       Express API, agent engine, auth, stores, deployment logic
-|   |-- web/       Next.js control room, dashboard, task views, live activity
-|   `-- shared/    Shared TypeScript contracts
-|-- cli/           Go terminal cockpit
-|-- k8s/           AKS manifests for gateway, API, web, PVC, ingress
-|-- infra/         Infrastructure templates and deployment scripts
-|-- e2e/           Playwright tests
-|-- tests/         Cucumber feature tests
-|-- specs/         Product, FRD, architecture, and delivery documents
-|-- templates/     Target-repo overlays for durable agent loops
-`-- .github/
-    |-- workflows/ Automation for CI, releases, and DEV deploys
-    `-- skills/    Agent procedures discovered by Copilot SDK sessions
-```
-
-## Runtime architecture
-
-```mermaid
-flowchart TB
-    User["Operator<br/>browser or terminal"]
-
-    subgraph Cluster["AKS runtime"]
-        Ingress["ingress-nginx<br/>TLS + host routing"]
-        Gateway["liliput-gateway<br/>nginx auth + route layer"]
-        Web["liliput-web<br/>Next.js UI"]
-        API["liliput-api<br/>Express + Socket.IO + agent brain"]
-        PVC[("Persistent volume<br/>SQLite + cloned workspaces")]
-    end
-
-    subgraph Systems["External systems"]
-        Git["GitHub<br/>repos, branches, PRs, issues"]
-        SDK["Copilot SDK<br/>agent sessions"]
-        Azure["Azure<br/>ACR + AKS previews"]
-    end
-
-    User --> Ingress --> Gateway
-    Gateway --> Web
-    Gateway --> API
-    API --> PVC
-    API --> Git
-    API --> SDK
-    API --> Azure
-```
-
-Current hosted deployments use ingress-nginx in front of the in-cluster gateway.
-The gateway protects dashboard, API, and Socket.IO routes, while leaving the
-landing and login surfaces public. Application Gateway for Containers is not in
-the current runtime path.
-
-## The API pod is the brain
-
-The API process owns the interesting work:
-
-| Responsibility | Where it happens |
-| --- | --- |
-| Task and turn state | SQLite |
-| Live event streaming | Socket.IO |
-| Agent sessions | Copilot SDK, in process |
-| Repo workspaces | Persistent volume under `/data/workspaces` |
-| Git operations | Child processes in cloned target repos |
-| Preview builds | Azure Container Registry and AKS |
-| Auth | JWT session cookie plus API verification endpoint |
-
-Because the SDK session is in process, a pod restart stops active turns. The
-database and cloned workspaces survive on the persistent volume, so durable
-state remains available after restart.
-
-## CLI: the terminal cockpit
-
-The CLI is a k9s-style control panel for the same backend.
+Install the Windows CLI through the repository's Scoop bucket:
 
 ```powershell
-scoop bucket add liliput <approved-liliput-bucket>
+scoop bucket add liliput https://github.com/crgarcia12/Liliput
 scoop install liliput
-liliput --server <approved-liliput-server> --login
+liliput --server http://localhost:5001 --login
 ```
 
-From source:
+The TUI exposes the same task list, live activity, chat, preview, ship, discard,
+and pod-log operations as the web control plane. See
+[`cli/README.md`](cli/README.md) for build instructions and keybindings.
 
-```powershell
-Set-Location cli
-go build -o liliput.exe .\cmd\liliput
-.\liliput.exe --server <local-api-server> --login
-```
-
-| Key | Action |
-| --- | --- |
-| `j` / `k`, arrows | Move |
-| `Enter` | Open task |
-| `n` | New task |
-| `/` | Filter |
-| `Tab` | Cycle task-detail panes |
-| `i` | Focus chat input |
-| `s` | Ship task |
-| `x` | Discard task |
-| `l` | Tail dev pod logs |
-| `?` | Help |
-| `q` | Back or quit |
-
-CLI internals live in `cli/internal/client` for REST and Socket.IO, and
-`cli/internal/ui` for Bubble Tea screens.
-
-## Where to make changes
-
-| Goal | Start here |
-| --- | --- |
-| Make the landing page more cinematic | `src/web/src/app/page.tsx` |
-| Change the authenticated dashboard | `src/web/src/app/dashboard/page.tsx` |
-| Add or change API routes | `src/api/src/routes/` and `src/api/src/app.ts` |
-| Change agent execution | `src/api/src/engine/agent-engine.ts` |
-| Change model or turn behavior | `src/api/src/engine/agent-loop.ts` |
-| Change reviewer behavior | `src/api/src/engine/reviewer-loop.ts` |
-| Change persistence | `src/api/src/stores/` |
-| Change gateway auth or routing | `k8s/liliput.yaml` |
-| Add a reusable agent procedure | `.github/skills/<skill>/SKILL.md` |
-| Change the terminal cockpit | `cli/internal/ui/` |
-| Change target-repo PM -> Dev -> RM overlay | `templates/liliput-flow/` |
-
-## Commands
+## Development commands
 
 | Command | Purpose |
 | --- | --- |
 | `npm run dev:all` | Run API and Web together |
 | `npm run build:all` | Build API and Web |
-| `npm run test:api` | Run API Vitest suite |
+| `npm run test:api` | Run the API Vitest suite |
 | `npm run test:cucumber` | Run Cucumber features |
-| `npm run test:e2e` | Run Playwright tests |
+| `npm run test:e2e` | Run Playwright end-to-end tests |
 | `npm run test:all` | Run API, Cucumber, and Playwright suites |
-| `npm --prefix src/api run lint` | Lint API |
-| `npm --prefix src/web run lint` | Lint Web |
+| `npm --prefix src/api run lint` | Lint the API |
+| `npm --prefix src/web run lint` | Lint the Web app |
 | `go test ./...` from `cli/` | Run CLI tests |
-
-For isolated slices:
-
-```powershell
-npm --prefix src/api run dev
-npm --prefix src/web run dev
-npm --prefix src/api run build
-npm --prefix src/web run build
-```
 
 ## Configuration
 
 Never commit real values. Keep them in local environment variables, Kubernetes
-secrets, or GitHub Actions secrets.
+Secrets, or GitHub Actions secrets.
 
 | Variable | Purpose |
 | --- | --- |
-| `JWT_SECRET` | Signs Liliput sessions |
+| `JWT_SECRET` | Signs Liliput sessions; keep stable across restarts |
 | `DEFAULT_ADMIN_PASSWORD` | Seeds the first admin user for a new database |
 | `DB_PATH` | SQLite database path |
-| `COPILOT_GITHUB_TOKEN` | Main token for GitHub and Copilot-backed work |
+| `COPILOT_GITHUB_TOKEN` | Primary token for Copilot-backed work and GitHub operations |
 | `GH_TOKEN`, `GITHUB_TOKEN` | Fallback GitHub token names |
-| `GITHUB_WEBHOOK_SECRET` | Enables signed webhook handling |
 | `COPILOT_MODEL` | Default coding model |
 | `COPILOT_REVIEWER_MODEL` | Default reviewer model |
-| `ACR_NAME` | Registry used for preview images |
-| `LILIPUT_PUBLIC_URL` | Public base used when generating navigation |
-| `LILIPUT_NAMESPACE` | Kubernetes namespace used by the API |
-| `LILIPUT_RECONCILER_ENABLED` | Enables issue and PR polling fallback |
-| `AUTOPILOT_DECOMPOSE` | Enables workstream feature decomposition |
+| `COPILOT_<ROLE>_MODEL` | Optional role override for rewriter, architect, critic, coder, or reviewer |
+| `ACR_NAME` | Azure Container Registry used for preview images |
+| `LILIPUT_PUBLIC_URL` | Public base URL used for webhooks and navigation |
+| `LILIPUT_NAMESPACE` | Kubernetes namespace used by the control plane |
+| `LILIPUT_AI_FOUNDRY_SCOPE` | Azure scope used when provisioning repo-specific AI credentials |
+| `LILIPUT_RECONCILER_ENABLED` | Enables issue and PR polling fallback when set to `1` |
+| `LILIPUT_PM_EMIT_ENABLED` | Enables PM issue emission when set to `1` |
+| `AUTOPILOT_DECOMPOSE` | Enables automatic workstream decomposition when explicitly configured |
 
-## Deployment path
+Automatic feature fan-out, PM issue emission, and the polling reconciler are
+disabled by default. This keeps work slicing and concurrency under operator
+control.
 
-DEV deployment is driven by `.github/workflows/deploy-liliput-dev.yml`.
+## Production deployment
 
-```mermaid
-flowchart LR
-    Main["main branch"]
-    Action["DEV deploy workflow"]
-    BuildAPI["Build API image"]
-    BuildWeb["Build Web image"]
-    Manifest["Render k8s manifests"]
-    Apply["Apply to liliput-dev"]
-    Ingress["Expose through ingress-nginx"]
+Production deployment is defined in
+[`.github/workflows/deploy-liliput.yml`](.github/workflows/deploy-liliput.yml).
+A push to `main` that changes application or Kubernetes files:
 
-    Main --> Action --> BuildAPI --> Manifest
-    Action --> BuildWeb --> Manifest
-    Manifest --> Apply --> Ingress
-```
+1. authenticates to Azure with GitHub OIDC;
+2. builds SHA-tagged API and Web images in ACR;
+3. renders and applies the Kubernetes manifests;
+4. updates only the affected deployments; and
+5. waits for API, Web, and gateway rollouts.
 
 Useful operator checks:
 
 ```powershell
-kubectl -n liliput-dev get pods
-kubectl -n liliput-dev logs deployment/liliput-api --tail=100
-kubectl -n liliput-dev rollout status deployment/liliput-api
+kubectl -n liliput get pods
+kubectl -n liliput rollout status deployment/liliput-api
+kubectl -n liliput logs deployment/liliput-api --tail=100
 ```
 
 ## Durable PM -> Dev -> RM loop
 
-Liliput can install a durable agent workflow into a target repo. The state lives
-in issues, labels, PRs, and timelines rather than a single chat session.
+Liliput can install an optional agent workflow into a target repository. Its
+state lives in GitHub issues, labels, PRs, and timelines instead of one chat
+session.
 
 ```text
 pm:ready
@@ -401,47 +310,44 @@ pm:ready
 dev:in-progress
    |
    v
-rm:review -----> done
+rm:review --------> done
    |
    v
 rm:changes-requested
    |
-   v
-dev:in-progress
+   `-------------> dev:in-progress
 ```
 
-Install the overlay into a target repository:
+Install the overlay:
 
 ```powershell
 bash scripts/bootstrap-liliput-flow.sh <target-repo-path> --apply-labels
 ```
 
-The PM agent writes small issues with acceptance criteria, the Dev agent
-implements test-first and opens PRs, and the Release Manager agent checks and
-merges or bounces the work with structured feedback.
+The PM agent writes a bounded issue with acceptance criteria. The Dev agent
+implements it test-first and opens a pull request. The Release Manager runs a
+deterministic checklist and either merges the change or returns structured
+feedback. Operators choose feature boundaries; Liliput does not fan out a
+product request into concurrent features by default.
 
-## Troubleshooting
+## Operational notes
 
-| Symptom | Likely cause | First move |
-| --- | --- | --- |
-| Dashboard redirects to login | Missing or expired session | Sign in again and check `JWT_SECRET` stability |
-| Login fails | Stored password does not match | Check first-boot logs or reset the local database |
-| Repo list or PR creation fails | Bad GitHub token | Verify `COPILOT_GITHUB_TOKEN` or fallback token |
-| Preview deployment fails | Azure, AKS, ACR, or manifest issue | Check API logs and preview namespace events |
-| Web cannot reach API locally | Wrong API base | Confirm Web rewrites to API port `5001` |
-| Task appears stuck after restart | Active SDK turn was interrupted | Retry or resume from persisted task state |
+- Preview deployment requires working Azure, ACR, AKS, DNS, and ingress
+  configuration; local control-plane development does not.
+- Real agent work requires a valid GitHub token with Copilot access.
+- The API uses SQLite and one active writer. Horizontal API scaling requires a
+  different state and coordination model.
+- Active SDK turns are in process. Persisted task state and workspaces survive
+  restarts, but an interrupted turn must be resumed or retried.
+- Secrets belong in environment variables, Kubernetes Secrets, or GitHub
+  Actions secrets, never in source control.
 
-## The vibe
+## Contributing
 
-Liliput should feel like a luminous operations deck for autonomous software
-creation:
-
-- **Small agents, big outcomes.**
-- **Full-stack work, not isolated code snippets.**
-- **Autonomy with telemetry, not magic behind a curtain.**
-- **Testing and deployment as first-class factory stations.**
-- **Human judgment at the gates, agent persistence in the loops.**
+Focused issues and pull requests are welcome. Start with
+[`CONTRIBUTING.md`](CONTRIBUTING.md), keep changes covered by the existing test
+layers, and preserve the evidence-first execution model.
 
 ## License
 
-ISC. See the repository license file.
+ISC. See [`LICENSE`](LICENSE).

@@ -47,5 +47,47 @@
       "targetedApiTests": "pass"
     }
   },
-  "lastUpdated": "2026-05-27T21:52:55Z"
+  "deployment": {
+    "status": "verified",
+    "environment": "production",
+    "platform": "aks",
+    "resourceGroup": "crgar-liliput-rg",
+    "cluster": "crgar-liliput-aks",
+    "namespace": "liliput",
+    "url": "https://liliput.crgarcia.com.ar",
+    "commitSha": "96213c7b56e4c5c8cd0b66d318a65367119739de",
+    "apiImage": "crgarliliputacr.azurecr.io/liliput-api:96213c7b56e4c5c8cd0b66d318a65367119739de",
+    "webImage": "crgarliliputacr.azurecr.io/liliput-web:96213c7b56e4c5c8cd0b66d318a65367119739de",
+    "deployedAt": "2026-07-16T09:58:09.6533293Z",
+    "aiFoundry": {
+      "account": "crgar-liliput-ai",
+      "resourceGroup": "crgar-ai-rg",
+      "location": "eastus2",
+      "deployments": [
+        {
+          "name": "gpt-5_6-sol",
+          "model": "gpt-5.6-sol",
+          "version": "2026-07-09",
+          "sku": "GlobalStandard",
+          "capacity": 10
+        },
+        {
+          "name": "gpt-5_6-terra",
+          "model": "gpt-5.6-terra",
+          "version": "2026-07-09",
+          "sku": "GlobalStandard",
+          "capacity": 10
+        },
+        {
+          "name": "gpt-5_6-luna",
+          "model": "gpt-5.6-luna",
+          "version": "2026-07-09",
+          "sku": "GlobalStandard",
+          "capacity": 10
+        }
+      ],
+      "verifiedAt": "2026-07-19T13:34:19.0791901Z"
+    }
+  },
+  "lastUpdated": "2026-07-19T13:34:19.0791901Z"
 }
