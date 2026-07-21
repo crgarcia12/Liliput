@@ -1,0 +1,138 @@
+feature: autonomous-campaign-state
+increment: ext-pre-001
+version: "1.0"
+basePath: /api/autonomous-campaigns
+exposure: internal-only
+description: >
+  Durable campaign, cycle, attempt, lease, transition, retry, and usage
+  contracts used by the internal coordinator. Public HTTP campaign controls
+  are intentionally deferred to ext-001.
+
+endpoints: []
+
+internalOperations:
+  - name: createCampaign
+    description: Create one draft campaign for a repository and base branch.
+    input: CreateAutonomousCampaignInput
+    output: AutonomousCampaign
+    conflicts:
+      - code: CAMPAIGN_CONFLICT
+        when: A non-stopped campaign already targets the repository and base branch.
+
+  - name: getCampaign
+    description: Read a campaign from durable SQLite state.
+    input:
+      campaignId: string
+    output: AutonomousCampaign | undefined
+
+  - name: createCycle
+    description: Create the single active feature cycle for a campaign.
+    input: CreateAutonomousCycleInput
+    output: AutonomousCampaignCycle
+    conflicts:
+      - code: CAMPAIGN_CONFLICT
+        when: The campaign already has a non-terminal cycle.
+
+  - name: getCurrentCycle
+    description: Read the current non-terminal cycle for a campaign.
+    input:
+      campaignId: string
+    output: AutonomousCampaignCycle | undefined
+
+  - name: createAttempt
+    description: Create or replay one bounded delivery attempt.
+    input: CreateAutonomousCampaignAttemptInput
+    output: AutonomousCampaignAttempt
+    idempotency:
+      key: idempotencyKey
+      behavior: Return the original attempt without creating another row.
+
+  - name: listAttempts
+    description: List attempts for one cycle in attempt-number order.
+    input:
+      cycleId: string
+    output: AutonomousCampaignAttempt[]
+
+  - name: transitionCampaign
+    description: Compare the expected state and atomically apply the next state.
+    input: TransitionAutonomousCampaignInput
+    output: AutonomousCampaignTransitionResult
+    idempotency:
+      key: idempotencyKey
+      behavior: Return the original transition result.
+    staleStateBehavior:
+      applied: false
+      persistedState: unchanged
+
+  - name: claimCampaignLease
+    description: Claim an absent or expired renewable coordinator lease.
+    input: ClaimAutonomousCampaignLeaseInput
+    output: AutonomousCampaignLeaseClaimResult
+    leaseRules:
+      - An unexpired lease remains owned by its current coordinator.
+      - A lease is claimable when absent or leaseExpiresAt is less than or equal to nowMs.
+      - Only the lease owner may advance coordinator-managed state.
+
+  - name: scheduleCycleRetry
+    description: Move the current cycle to retry_wait with capped exponential backoff.
+    input: ScheduleAutonomousCycleRetryInput
+    output: AutonomousCycleRetryResult
+
+  - name: recordAttemptUsage
+    description: Add turn and estimated-cost usage exactly once per usage event.
+    input: RecordAutonomousAttemptUsageInput
+    output: AutonomousCampaignAttempt
+    idempotency:
+      key: usageEventId
+      behavior: Replayed evidence does not change counters.
+
+  - name: resetAutonomousCampaignStore
+    description: Delete autonomous campaign data only; preserve legacy workstreams and tasks.
+    input: none
+    output: void
+    availability: test-only
+
+errors:
+  CAMPAIGN_CONFLICT:
+    description: A uniqueness, active-cycle, or state precondition was violated.
+  CAMPAIGN_NOT_FOUND:
+    description: The requested campaign does not exist.
+  CAMPAIGN_CYCLE_NOT_FOUND:
+    description: The requested cycle does not exist.
+  CAMPAIGN_ATTEMPT_NOT_FOUND:
+    description: The requested attempt does not exist.
+
+scenarioMappings:
+  - scenario: Campaign state survives a control-plane restart
+    operations: [createCampaign, createCycle, createAttempt, getCampaign, getCurrentCycle, listAttempts]
+  - scenario: Only one coordinator owns an unexpired campaign lease
+    operations: [claimCampaignLease]
+  - scenario: Another coordinator takes over an expired campaign lease
+    operations: [claimCampaignLease]
+  - scenario: A second active campaign for the same repository branch is rejected
+    operations: [createCampaign]
+  - scenario: A stopped campaign does not block a replacement campaign
+    operations: [transitionCampaign, createCampaign]
+  - scenario: A campaign cannot own two active feature cycles
+    operations: [createCycle, getCurrentCycle]
+  - scenario: Replaying a successful transition does not duplicate state
+    operations: [createAttempt, listAttempts]
+  - scenario: A transition from a stale expected state is rejected
+    operations: [transitionCampaign, getCampaign]
+  - scenario: Retry scheduling never exceeds the configured backoff cap
+    operations: [scheduleCycleRetry, getCurrentCycle]
+  - scenario: Replayed usage evidence is counted once
+    operations: [recordAttemptUsage]
+  - scenario: Existing manual tasks remain readable after campaign storage is added
+    operations: [resetAutonomousCampaignStore]
+
+deferredHttpSurface:
+  increment: ext-001
+  routes:
+    - POST /api/autonomous-campaigns
+    - GET /api/autonomous-campaigns
+    - GET /api/autonomous-campaigns/:id
+    - POST /api/autonomous-campaigns/:id/start
+    - POST /api/autonomous-campaigns/:id/pause
+    - POST /api/autonomous-campaigns/:id/resume
+    - POST /api/autonomous-campaigns/:id/stop

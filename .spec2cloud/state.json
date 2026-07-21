@@ -99,7 +99,7 @@
   "increments": {
     "ext-pre-001": {
       "type": "extension-prerequisite",
-      "status": "contracts",
+      "status": "implementation",
       "featureFiles": [
         "specs/features/autonomous-workstream-campaigns.feature"
       ],
@@ -155,6 +155,22 @@
             "verifiedAt": "2026-07-21T22:10:30Z"
           },
           "approvedAt": "2026-07-21T22:19:27Z"
+        },
+        "contracts": {
+          "status": "done",
+          "apiContracts": [
+            "specs/contracts/api/autonomous-campaign-state.yaml"
+          ],
+          "sharedTypes": [
+            "src/shared/types/autonomous-campaign-state.ts"
+          ],
+          "infraContract": "specs/contracts/infra/resources.yaml",
+          "infraUpdated": false,
+          "newResources": [],
+          "newEnvironmentVariables": [],
+          "apiBuild": "pass",
+          "webBuild": "pass",
+          "completedAt": "2026-07-21T22:24:13Z"
         }
       }
     },
@@ -218,7 +234,8 @@
       "cucumberDryRun": "pass",
       "redBaseline": "confirmed",
       "existingRegression": "pass",
-      "testCodeApproval": "approved"
+      "testCodeApproval": "approved",
+      "contracts": "pass"
     }
   },
   "extensions": {
@@ -303,5 +320,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-21T22:19:27Z"
+  "lastUpdated": "2026-07-21T22:24:13Z"
 }

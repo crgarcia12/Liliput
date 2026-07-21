@@ -1,0 +1,88 @@
+version: "1.0"
+increment: ext-pre-001
+target: azure-kubernetes-service
+description: >
+  Durable autonomous campaign state reuses Liliput's existing single-writer
+  SQLite database and Azure Disk PVC. This increment adds no Azure resource,
+  Kubernetes workload, secret, environment variable, or network route.
+
+newResources: []
+newEnvironmentVariables: []
+newSecrets: []
+bicepChangesRequired: false
+kubernetesManifestChangesRequired: false
+
+resources:
+  - name: aks-cluster
+    type: Microsoft.ContainerService/managedClusters
+    lifecycle: existing
+    description: Hosts the Liliput API, Web, gateway, and persistent volumes.
+    sku:
+      name: existing
+      justification: Campaign persistence does not change cluster capacity requirements.
+
+  - name: container-registry
+    type: Microsoft.ContainerRegistry/registries
+    lifecycle: existing
+    description: Stores the existing Liliput API and Web images.
+    sku:
+      name: existing
+      justification: This increment introduces no new image or retention requirement.
+
+  - name: liliput-api
+    type: Kubernetes/apps/v1/Deployment
+    lifecycle: existing
+    description: Runs the Express API and the single SQLite writer.
+    sku:
+      name: single-replica
+      justification: >
+        The existing ReadWriteOnce Azure Disk and SQLite architecture require
+        one API replica. Renewable campaign leases protect restart recovery and
+        coordinator ownership; they do not enable multi-writer scale-out.
+    scaling:
+      minReplicas: 1
+      maxReplicas: 1
+    resources:
+      requests:
+        cpu: 10m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 2560Mi
+    ingress:
+      external: false
+      servicePort: 8080
+      healthPath: /api/health
+    env:
+      - name: DB_PATH
+        value: /data/liliput.db
+
+  - name: liliput-data
+    type: Kubernetes/v1/PersistentVolumeClaim
+    lifecycle: existing
+    description: Persists SQLite state and workspaces across API and AKS restarts.
+    sku:
+      name: managed-csi
+      justification: Existing 20Gi ReadWriteOnce Azure Disk is sufficient.
+    storage:
+      accessModes: [ReadWriteOnce]
+      requested: 20Gi
+      mountPath: /data
+
+dependencies:
+  - from: liliput-api
+    to: liliput-data
+    reason: Campaign, cycle, attempt, lease, transition, and usage rows persist in SQLite.
+  - from: liliput-api
+    to: aks-cluster
+    reason: The API deployment runs on the existing AKS cluster.
+  - from: liliput-api
+    to: container-registry
+    reason: The existing API image is pulled from ACR.
+
+constraints:
+  - Campaign schema changes must be additive and backward compatible.
+  - Existing task and workstream tables must remain readable without backfill loss.
+  - The API deployment must retain Recreate strategy while using the ReadWriteOnce volume.
+
+gaps: []
