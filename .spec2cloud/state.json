@@ -44,13 +44,13 @@
       "id": "ext-pre-001",
       "type": "extension-prerequisite",
       "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
-      "status": "in-progress"
+      "status": "done"
     },
     {
       "id": "ext-pre-002",
       "type": "extension-prerequisite",
       "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
-      "status": "planned"
+      "status": "in-progress"
     },
     {
       "id": "ext-001",
@@ -95,11 +95,11 @@
       "status": "planned"
     }
   ],
-  "currentIncrement": "ext-pre-001",
+  "currentIncrement": "ext-pre-002",
   "increments": {
     "ext-pre-001": {
       "type": "extension-prerequisite",
-      "status": "verification",
+      "status": "done",
       "featureFiles": [
         "specs/features/autonomous-workstream-campaigns.feature"
       ],
@@ -246,12 +246,51 @@
             "skippedTests": 0
           },
           "completedAt": "2026-07-21T22:48:20Z"
+        },
+        "verification": {
+          "status": "done",
+          "deployment": {
+            "status": "pass",
+            "platform": "aks",
+            "workflowRun": "https://github.com/crgarcia12/Liliput/actions/runs/29876331468",
+            "commitSha": "74b3e69785cd6e9ba2125162c5dac96a8b23953c",
+            "apiImage": "crgarliliputacr.azurecr.io/liliput-api:74b3e69785cd6e9ba2125162c5dac96a8b23953c",
+            "webImage": "crgarliliputacr.azurecr.io/liliput-web:74b3e69785cd6e9ba2125162c5dac96a8b23953c",
+            "completedAt": "2026-07-21T23:19:41Z"
+          },
+          "migration": {
+            "status": "pass",
+            "tables": 6,
+            "indexes": 6,
+            "databasePath": "/data/liliput.db"
+          },
+          "smokeTests": {
+            "status": "pass",
+            "health": 200,
+            "apiHealth": 200,
+            "frontend": 200,
+            "playwrightPassed": 2,
+            "playwrightFailed": 0
+          },
+          "cluster": {
+            "powerState": "Running",
+            "provisioningState": "Succeeded",
+            "readyNodes": 4,
+            "readyDeployments": 3
+          },
+          "logs": {
+            "status": "pass",
+            "applicationStartupErrors": 0,
+            "transientGatewayErrorsDuringRollout": 1,
+            "gatewayRecovered": true
+          },
+          "verifiedAt": "2026-07-21T23:21:32Z"
         }
       }
     },
     "ext-pre-002": {
       "type": "extension-prerequisite",
-      "status": "planned"
+      "status": "in-progress"
     },
     "ext-001": {
       "type": "extension",
@@ -295,7 +334,8 @@
     "extension-autonomous-workstream-campaigns-approved": true,
     "ext-pre-001-gherkin-approved": true,
     "ext-pre-001-tests-approved": true,
-    "ext-pre-001-implementation-approved": true
+    "ext-pre-001-implementation-approved": true,
+    "ext-pre-001-deployment-approved": true
   },
   "testsStatus": {
     "reviewerConfigAndCliAuth": {
@@ -314,6 +354,7 @@
       "contracts": "pass",
       "implementation": "pass",
       "implementationApproval": "approved",
+      "deployment": "pass",
       "apiTests": "410-pass",
       "cucumber": "12-scenarios-53-steps-pass",
       "playwright": "2-pass"
@@ -367,10 +408,11 @@
     "clusterVerifiedAt": "2026-07-21T21:10:17Z",
     "namespace": "liliput",
     "url": "https://liliput.crgarcia.com.ar",
-    "commitSha": "96213c7b56e4c5c8cd0b66d318a65367119739de",
-    "apiImage": "crgarliliputacr.azurecr.io/liliput-api:96213c7b56e4c5c8cd0b66d318a65367119739de",
-    "webImage": "crgarliliputacr.azurecr.io/liliput-web:96213c7b56e4c5c8cd0b66d318a65367119739de",
-    "deployedAt": "2026-07-16T09:58:09.6533293Z",
+    "commitSha": "74b3e69785cd6e9ba2125162c5dac96a8b23953c",
+    "apiImage": "crgarliliputacr.azurecr.io/liliput-api:74b3e69785cd6e9ba2125162c5dac96a8b23953c",
+    "webImage": "crgarliliputacr.azurecr.io/liliput-web:74b3e69785cd6e9ba2125162c5dac96a8b23953c",
+    "deployedAt": "2026-07-21T23:19:41Z",
+    "verifiedAt": "2026-07-21T23:21:32Z",
     "aiFoundry": {
       "account": "crgar-liliput-ai",
       "resourceGroup": "crgar-ai-rg",
@@ -401,5 +443,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-21T23:08:22Z"
+  "lastUpdated": "2026-07-21T23:21:32Z"
 }

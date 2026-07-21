@@ -64,3 +64,9 @@
 [2026-07-21T22:48:20Z] increment=ext-pre-001 step=implementation action=full-regression result=pass api=410 cucumber=12-scenarios-53-steps playwright=4 skipped=0
 [2026-07-21T22:57:16Z] increment=ext-pre-001 step=implementation action=clean-base-regression result=pass api=410 cucumber=12-scenarios-53-steps playwright=2 skipped=0 correctedPreviousPlaywrightCount=4
 [2026-07-21T23:08:22Z] increment=ext-pre-001 gate=implementation-pr-review decision=approve result=approved pr=97 nextStep=verification
+[2026-07-21T23:19:41Z] increment=ext-pre-001 step=deploy action=github-actions-deploy result=success workflow=29876331468 sha=74b3e69785cd6e9ba2125162c5dac96a8b23953c
+[2026-07-21T23:21:32Z] increment=ext-pre-001 step=deploy action=database-migration result=pass tables=6 indexes=6 database=/data/liliput.db
+[2026-07-21T23:21:32Z] increment=ext-pre-001 step=deploy action=smoke-tests result=pass health=200 apiHealth=200 frontend=200 playwright=2
+[2026-07-21T23:21:32Z] increment=ext-pre-001 step=deploy action=workload-verification result=pass cluster=Running nodes=4 deployments=3 applicationStartupErrors=0 transientGatewayErrors=1 recovered=true
+[2026-07-21T23:21:32Z] increment=ext-pre-001 step=deploy action=human-gate result=approved gate=deployment-verification approvalSource=explicit-unattended-continuation
+[2026-07-21T23:21:32Z] increment=ext-pre-001 action=increment-delivered result=transition-to-ext-pre-002
