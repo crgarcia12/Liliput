@@ -13,6 +13,9 @@
     "sourceMap": true,
     "outDir": "./dist"
   },
+  "ts-node": {
+    "experimentalResolver": true
+  },
   "include": ["tests/**/*.ts", "e2e/**/*.ts"],
   "exclude": ["node_modules", "src"]
 }

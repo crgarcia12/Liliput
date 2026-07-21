@@ -1,6 +1,6 @@
 {
   "mode": "pending",
-  "currentPhase": "setup",
+  "currentPhase": "increment-delivery",
   "productDiscovery": {
     "specRefinement": { "status": "pending" },
     "uiuxDesign": { "status": "pending" },
@@ -18,15 +18,179 @@
     "prdGenerator": { "status": "pending" },
     "frdGenerator": { "status": "pending" }
   },
-  "activePaths": [],
+  "activePaths": ["extend"],
   "assessment": {},
   "adrs": {
-    "nextNumber": 1,
-    "records": []
+    "nextNumber": 3,
+    "records": [
+      {
+        "number": "ADR-001",
+        "title": "Use a SQLite-backed serial campaign coordinator",
+        "status": "accepted",
+        "date": "2026-07-21",
+        "path": "specs/adrs/adr-001-use-sqlite-backed-serial-campaign-coordinator.md"
+      },
+      {
+        "number": "ADR-002",
+        "title": "Allow unrestricted campaign auto-merge after evidence gates",
+        "status": "accepted",
+        "date": "2026-07-21",
+        "path": "specs/adrs/adr-002-allow-unrestricted-campaign-auto-merge.md"
+      }
+    ]
   },
-  "incrementPlan": [],
-  "currentIncrement": null,
-  "increments": {},
+  "incrementPlan": [
+    {
+      "id": "ext-pre-001",
+      "type": "extension-prerequisite",
+      "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
+      "status": "in-progress"
+    },
+    {
+      "id": "ext-pre-002",
+      "type": "extension-prerequisite",
+      "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
+      "status": "planned"
+    },
+    {
+      "id": "ext-001",
+      "type": "extension",
+      "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
+      "status": "planned"
+    },
+    {
+      "id": "ext-002",
+      "type": "extension",
+      "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
+      "status": "planned"
+    },
+    {
+      "id": "ext-003",
+      "type": "extension",
+      "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
+      "status": "planned"
+    },
+    {
+      "id": "ext-004",
+      "type": "extension",
+      "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
+      "status": "planned"
+    },
+    {
+      "id": "ext-005",
+      "type": "extension",
+      "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
+      "status": "planned"
+    },
+    {
+      "id": "ext-006",
+      "type": "extension",
+      "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
+      "status": "planned"
+    },
+    {
+      "id": "ext-007",
+      "type": "extension",
+      "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
+      "status": "planned"
+    }
+  ],
+  "currentIncrement": "ext-pre-001",
+  "increments": {
+    "ext-pre-001": {
+      "type": "extension-prerequisite",
+      "status": "contracts",
+      "featureFiles": [
+        "specs/features/autonomous-workstream-campaigns.feature"
+      ],
+      "scenarioCount": 11,
+      "steps": {
+        "tests": {
+          "status": "approved",
+          "gherkinFiles": [
+            "specs/features/autonomous-workstream-campaigns.feature"
+          ],
+          "cucumberSteps": [
+            "tests/features/step-definitions/autonomous-workstream-campaigns.steps.ts"
+          ],
+          "vitestFiles": [
+            "src/api/tests/unit/autonomous-campaign-primitives.test.ts",
+            "src/api/tests/integration/autonomous-campaign-store.test.ts"
+          ],
+          "redBaseline": {
+            "apiBuild": "pass",
+            "cucumberDryRun": {
+              "status": "pass",
+              "scenarios": 11,
+              "steps": 49
+            },
+            "cucumber": {
+              "status": "expected-failure",
+              "scenariosFailed": 11,
+              "scenariosPassed": 0,
+              "stepsFailed": 11,
+              "stepsSkipped": 38
+            },
+            "vitest": {
+              "status": "expected-failure",
+              "filesFailed": 2,
+              "testsFailed": 18,
+              "testsPassed": 0
+            },
+            "existingApiRegression": {
+              "status": "pass",
+              "filesPassed": 36,
+              "testsPassed": 392
+            },
+            "existingCucumberRegression": {
+              "status": "pass",
+              "scenariosPassed": 1,
+              "stepsPassed": 4
+            },
+            "playwrightDiscovery": {
+              "status": "pass",
+              "files": 2,
+              "tests": 4
+            },
+            "verifiedAt": "2026-07-21T22:10:30Z"
+          },
+          "approvedAt": "2026-07-21T22:19:27Z"
+        }
+      }
+    },
+    "ext-pre-002": {
+      "type": "extension-prerequisite",
+      "status": "planned"
+    },
+    "ext-001": {
+      "type": "extension",
+      "status": "planned"
+    },
+    "ext-002": {
+      "type": "extension",
+      "status": "planned"
+    },
+    "ext-003": {
+      "type": "extension",
+      "status": "planned"
+    },
+    "ext-004": {
+      "type": "extension",
+      "status": "planned"
+    },
+    "ext-005": {
+      "type": "extension",
+      "status": "planned"
+    },
+    "ext-006": {
+      "type": "extension",
+      "status": "planned"
+    },
+    "ext-007": {
+      "type": "extension",
+      "status": "planned"
+    }
+  },
   "humanGates": {
     "phase0-approved": false,
     "discovery-specs-approved": false,
@@ -36,7 +200,10 @@
     "brownfield-specs-approved": false,
     "paths-selected": false,
     "assessment-approved": false,
-    "plan-approved": false
+    "plan-approved": true,
+    "extension-autonomous-workstream-campaigns-approved": true,
+    "ext-pre-001-gherkin-approved": true,
+    "ext-pre-001-tests-approved": true
   },
   "testsStatus": {
     "reviewerConfigAndCliAuth": {
@@ -45,7 +212,96 @@
       "cliBuild": "pass",
       "cliTests": "pass",
       "targetedApiTests": "pass"
+    },
+    "autonomousCampaignState": {
+      "apiBuild": "pass",
+      "cucumberDryRun": "pass",
+      "redBaseline": "confirmed",
+      "existingRegression": "pass",
+      "testCodeApproval": "approved"
     }
   },
-  "lastUpdated": "2026-05-27T21:52:55Z"
+  "extensions": {
+    "autonomousWorkstreamCampaigns": {
+      "status": "approved",
+      "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
+      "incrementPlan": "specs/increment-plan.md",
+      "decisionRecords": [
+        "specs/adrs/adr-001-use-sqlite-backed-serial-campaign-coordinator.md",
+        "specs/adrs/adr-002-allow-unrestricted-campaign-auto-merge.md"
+      ],
+      "coordinatorArchitecture": "internal-sqlite",
+      "operatingContract": {
+        "targetScope": "selected-repository",
+        "serialCycles": true,
+        "releasePolicy": "auto-merge-after-gates",
+        "mergeAuthority": "campaign-coordinator-only",
+        "sensitiveChangePolicy": "unrestricted-after-standard-gates",
+        "ideaSources": ["specs", "code", "issues", "telemetry", "ideation"],
+        "failurePolicy": "retry-same-feature-until-success-or-operator-stop",
+        "maxTurnsPerAttempt": 500,
+        "maxMinutesPerAttempt": 240,
+        "maxCostUsdPerAttempt": 250,
+        "retryBackoffCapMinutes": 60,
+        "successCooldownMinutes": 5,
+        "failedAttemptAlertThreshold": 3,
+        "cumulativeCostAlertUsd": 50,
+        "alertsPauseCampaign": false,
+        "requireEffectiveModelPricing": true
+      },
+      "research": {
+        "durabilityPattern": "Persist campaign state and remote checkpoints; use idempotent transitions and renewable leases.",
+        "sdkSessionPolicy": "Treat Copilot SDK sessions as ephemeral workers, not durable campaign state.",
+        "releasePattern": "Campaign-marked PRs bypass RM webhook/polling dispatch; success requires explicit merge and base-SHA confirmation.",
+        "acceptedRisk": "No sensitive-path denylist or mandatory human approval; tests and LLM review gate all campaign diffs.",
+        "newInfrastructure": "none",
+        "newDependencies": []
+      }
+    }
+  },
+  "deployment": {
+    "status": "verified",
+    "environment": "production",
+    "platform": "aks",
+    "resourceGroup": "crgar-liliput-rg",
+    "cluster": "crgar-liliput-aks",
+    "clusterPowerState": "Running",
+    "clusterVerifiedAt": "2026-07-21T21:10:17Z",
+    "namespace": "liliput",
+    "url": "https://liliput.crgarcia.com.ar",
+    "commitSha": "96213c7b56e4c5c8cd0b66d318a65367119739de",
+    "apiImage": "crgarliliputacr.azurecr.io/liliput-api:96213c7b56e4c5c8cd0b66d318a65367119739de",
+    "webImage": "crgarliliputacr.azurecr.io/liliput-web:96213c7b56e4c5c8cd0b66d318a65367119739de",
+    "deployedAt": "2026-07-16T09:58:09.6533293Z",
+    "aiFoundry": {
+      "account": "crgar-liliput-ai",
+      "resourceGroup": "crgar-ai-rg",
+      "location": "eastus2",
+      "deployments": [
+        {
+          "name": "gpt-5_6-sol",
+          "model": "gpt-5.6-sol",
+          "version": "2026-07-09",
+          "sku": "GlobalStandard",
+          "capacity": 10
+        },
+        {
+          "name": "gpt-5_6-terra",
+          "model": "gpt-5.6-terra",
+          "version": "2026-07-09",
+          "sku": "GlobalStandard",
+          "capacity": 10
+        },
+        {
+          "name": "gpt-5_6-luna",
+          "model": "gpt-5.6-luna",
+          "version": "2026-07-09",
+          "sku": "GlobalStandard",
+          "capacity": 10
+        }
+      ],
+      "verifiedAt": "2026-07-19T13:34:19.0791901Z"
+    }
+  },
+  "lastUpdated": "2026-07-21T22:19:27Z"
 }

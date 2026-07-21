@@ -15,3 +15,45 @@
 [2026-02-13T10:51:00Z] phase=4 action=human-gate result=approved
 [2026-02-13T10:51:00Z] phase=5 action=phase-start result=beginning-deployment
 [2026-05-27T21:52:55Z] phase=implementation action=reviewer-config-cli-auth result=success description="Prepared reviewer/checking config snapshots, mobile config parity, and CLI authentication for commit and dev deployment"
+[2026-07-16T09:33:08.5169487Z] phase=deployment action=aks-start-request result=accepted cluster=crgar-liliput-aks resourceGroup=crgar-liliput-rg
+[2026-07-16T09:35:03.9077578Z] phase=deployment action=local-regression result=error message="Aspire API failed to start before test execution"
+[2026-07-16T09:48:44.0193866Z] phase=deployment action=acr-build-web result=error sha=96213c7b56e4c5c8cd0b66d318a65367119739de message="ACR Web image build failed"
+[2026-07-16T09:50:08.3709142Z] phase=deployment action=acr-build-api result=success sha=96213c7b56e4c5c8cd0b66d318a65367119739de
+[2026-07-16T09:52:45.3280382Z] phase=deployment action=kubectl-rollout result=success sha=96213c7b56e4c5c8cd0b66d318a65367119739de namespace=liliput
+[2026-07-16T09:57:51.4583048Z] phase=deployment action=production-e2e result=success pass=4 fail=0 url=https://liliput.crgarcia.com.ar
+[2026-07-16T09:58:09.6533293Z] phase=deployment action=local-regression result=success apiTests=392 cucumberScenarios=1 cucumberSteps=4 e2eTests=4
+[2026-07-16T09:58:09.6533293Z] phase=deployment action=acr-build-web result=success sha=96213c7b56e4c5c8cd0b66d318a65367119739de runId=dtt9 note="remote build completed; local Unicode log streaming failed"
+[2026-07-16T09:58:09.6533293Z] phase=deployment action=production-health result=success homeStatus=200 apiHealthStatus=200 tls=valid certificateNotAfter=2026-10-05T09:50:31Z
+[2026-07-16T09:58:09.6533293Z] phase=deployment action=aks-status result=success powerState=Running provisioningState=Succeeded nodesReady=4 workloadsReady=3
+[2026-07-19T02:40:05.3900391Z] phase=deployment action=aks-start result=started cluster=crgar-liliput-aks readyNodes=4
+[2026-07-19T02:49:15.5496656Z] phase=deployment action=log-diagnostics result=error message="Transient 502/503 outage while repo-group purge replaced the single liliput-gateway pod; service recovered"
+[2026-07-19T10:22:55.6329254Z] phase=deployment action=ensure-podcast-azure-sp result=error message="Azure app registration ensure failed" namespace=devx-crgarcia12-azure-podcast-generator-liliput-069d6fd4
+[2026-07-19T10:24:21.2982185Z] phase=deployment action=retry-podcast-azure-sp result=success namespace=devx-crgarcia12-azure-podcast-generator-liliput-069d6fd4 deployment=app
+[2026-07-19T10:25:54.7469112Z] phase=deployment action=podcast-foundry-repair result=success namespace=devx-crgarcia12-azure-podcast-generator-liliput-069d6fd4 roles=5 foundryInference=200 appOpenAIInference=200
+[2026-07-19T13:33:28.5437978Z] phase=deployment action=deploy-foundry-model result=success deployment=gpt-5_6-sol model=gpt-5.6-sol version=2026-07-09 capacity=10
+[2026-07-19T13:33:32.8357006Z] phase=deployment action=deploy-foundry-model result=success deployment=gpt-5_6-terra model=gpt-5.6-terra version=2026-07-09 capacity=10
+[2026-07-19T13:33:37.2895055Z] phase=deployment action=deploy-foundry-model result=success deployment=gpt-5_6-luna model=gpt-5.6-luna version=2026-07-09 capacity=10
+[2026-07-19T13:34:00.1253481Z] phase=deployment action=verify-foundry-models result=success deployments=gpt-5_6-sol,gpt-5_6-terra,gpt-5_6-luna
+[2026-07-19T16:50:42.8769035Z] phase=deployment action=aks-readiness result=already-running cluster=crgar-liliput-aks readyNodes=4 readyDeployments=3 health=200
+[2026-07-20T07:29:17.5941354Z] phase=deployment action=aks-start-for-podcast result=started cluster=crgar-liliput-aks readyNodes=4
+[2026-07-20T07:31:56.3455675Z] phase=deployment action=recover-podcast-route result=error message="Local PowerShell manifest construction failed before Kubernetes apply" namespace=devx-crgarcia12-azure-podcast-generator-liliput-069d6fd4
+[2026-07-20T07:32:08.3107901Z] phase=deployment action=recover-podcast-route result=success namespace=devx-crgarcia12-azure-podcast-generator-liliput-069d6fd4 pageStatus=200 apiStatus=200
+[2026-07-20T07:32:33.9699871Z] phase=deployment action=podcast-recovery result=success cause=cluster-stopped-and-orphaned-route namespace=devx-crgarcia12-azure-podcast-generator-liliput-069d6fd4 pageStatus=200 apiStatus=200 aiInference=200
+[2026-07-20T14:54:45.5710841Z] phase=deployment action=turn-on-liliput result=already-running cluster=crgar-liliput-aks readyNodes=4 readyDeployments=3 health=200
+[2026-07-20T14:57:38.5465806Z] phase=deployment action=recheck-aks result=success cluster=crgar-liliput-aks readyNodes=4 readyDeployments=3 health=200
+[2026-07-20T15:46:35Z] phase=launch action=rewrite-readme result=success artifact=README.md
+[2026-07-20T15:46:36Z] phase=launch action=create-launch-assets result=success artifacts=docs/assets/liliput-pipeline.svg,docs/launch-posts.md xCharacters=268
+[2026-07-20T15:46:37Z] phase=launch action=update-repository-metadata result=success homepage=https://liliput.crgarcia.com.ar topics=11
+[2026-07-21T06:29:17Z] phase=deployment action=check-aks-status result=stopped cluster=crgar-liliput-aks provisioningState=Succeeded
+[2026-07-21T21:43:30Z] phase=deployment action=aks-start result=success cluster=crgar-liliput-aks readyNodes=4 readyDeployments=3 health=200
+[2026-07-21T21:43:31Z] phase=extension-planning action=human-gate result=approved targetScope=selected-repository releasePolicy=auto-merge failurePolicy=retry-forever coordinator=internal-sqlite
+[2026-07-21T21:43:32Z] phase=extension-planning action=research-autonomous-coordinator result=done architecture=internal-sqlite newInfrastructure=none
+[2026-07-21T21:43:33Z] phase=extension-planning action=adrs-generated result=done count=2
+[2026-07-21T21:43:34Z] phase=extension-planning action=frds-generated result=done count=1
+[2026-07-21T21:43:35Z] phase=extension-planning action=increments-generated result=done count=9
+[2026-07-21T21:43:36Z] phase=extension-planning action=plan-review result=done corrected=merge-authority,reviewer-signal,pricing,state-machine,alerts
+[2026-07-21T21:46:38Z] phase=extension-planning action=human-gate result=approved artifact=autonomous-workstream-campaigns nextIncrement=ext-pre-001
+[2026-07-21T21:48:48Z] increment=ext-pre-001 action=gherkin-generated result=done scenarios=11 feature=specs/features/autonomous-workstream-campaigns.feature
+[2026-07-21T21:51:51Z] increment=ext-pre-001 action=human-gate result=approved artifact=gherkin scenarios=11
+[2026-07-21T22:10:30Z] increment=ext-pre-001 step=tests action=red-baseline result=confirmed vitest=18-failed-0-passed cucumber=11-failed-0-passed existingApi=392-passed existingCucumber=1-passed playwrightDiscovered=4
+[2026-07-21T22:19:27Z] increment=ext-pre-001 step=tests action=human-gate result=approved artifacts=cucumber-steps,vitest-tests nextStep=contracts
