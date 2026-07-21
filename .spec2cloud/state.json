@@ -290,7 +290,54 @@
     },
     "ext-pre-002": {
       "type": "extension-prerequisite",
-      "status": "in-progress"
+      "status": "in-progress",
+      "featureFiles": [
+        "specs/features/autonomous-workstream-campaign-pricing.feature"
+      ],
+      "scenarioCount": 3,
+      "steps": {
+        "tests": {
+          "status": "approved",
+          "gherkinFiles": [
+            "specs/features/autonomous-workstream-campaign-pricing.feature"
+          ],
+          "cucumberSteps": [
+            "tests/features/step-definitions/autonomous-workstream-campaign-pricing.steps.ts"
+          ],
+          "vitestFiles": [
+            "src/api/tests/unit/autonomous-campaign-pricing.test.ts"
+          ],
+          "redBaseline": {
+            "apiBuild": "pass",
+            "cucumber": {
+              "status": "expected-failure",
+              "scenariosFailed": 3,
+              "scenariosPassed": 0,
+              "stepsFailed": 3,
+              "stepsSkipped": 13
+            },
+            "vitest": {
+              "status": "expected-failure",
+              "filesFailed": 1,
+              "testsFailed": 4,
+              "testsPassed": 0
+            },
+            "existingRegression": {
+              "status": "pass",
+              "filesPassed": 3,
+              "testsPassed": 28
+            },
+            "playwrightDiscovery": {
+              "status": "pass",
+              "files": 1,
+              "tests": 2
+            },
+            "verifiedAt": "2026-07-21T23:28:39Z"
+          },
+          "approvedAt": "2026-07-21T23:28:39Z",
+          "approvalSource": "explicit-unattended-continuation"
+        }
+      }
     },
     "ext-001": {
       "type": "extension",
@@ -335,7 +382,9 @@
     "ext-pre-001-gherkin-approved": true,
     "ext-pre-001-tests-approved": true,
     "ext-pre-001-implementation-approved": true,
-    "ext-pre-001-deployment-approved": true
+    "ext-pre-001-deployment-approved": true,
+    "ext-pre-002-gherkin-approved": true,
+    "ext-pre-002-tests-approved": true
   },
   "testsStatus": {
     "reviewerConfigAndCliAuth": {
@@ -358,6 +407,15 @@
       "apiTests": "410-pass",
       "cucumber": "12-scenarios-53-steps-pass",
       "playwright": "2-pass"
+    },
+    "autonomousCampaignPricing": {
+      "apiBuild": "pass",
+      "redBaseline": "confirmed",
+      "existingRegression": "28-pass",
+      "testCodeApproval": "approved",
+      "vitest": "4-expected-failures",
+      "cucumber": "3-expected-failures",
+      "playwrightDiscovery": "2-tests"
     }
   },
   "extensions": {
@@ -443,5 +501,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-21T23:21:32Z"
+  "lastUpdated": "2026-07-21T23:28:39Z"
 }

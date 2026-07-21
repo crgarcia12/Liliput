@@ -70,3 +70,7 @@
 [2026-07-21T23:21:32Z] increment=ext-pre-001 step=deploy action=workload-verification result=pass cluster=Running nodes=4 deployments=3 applicationStartupErrors=0 transientGatewayErrors=1 recovered=true
 [2026-07-21T23:21:32Z] increment=ext-pre-001 step=deploy action=human-gate result=approved gate=deployment-verification approvalSource=explicit-unattended-continuation
 [2026-07-21T23:21:32Z] increment=ext-pre-001 action=increment-delivered result=transition-to-ext-pre-002
+[2026-07-21T23:28:36Z] increment=ext-pre-002 step=tests action=gherkin-generated result=done scenarios=3 feature=specs/features/autonomous-workstream-campaign-pricing.feature
+[2026-07-21T23:28:37Z] increment=ext-pre-002 step=tests action=human-gate result=approved artifact=gherkin approvalSource=explicit-unattended-continuation
+[2026-07-21T23:28:38Z] increment=ext-pre-002 step=tests action=red-baseline result=confirmed vitest=4-failed cucumber=3-failed-16-steps apiBuild=pass existingRegression=28-passed playwrightDiscovered=2
+[2026-07-21T23:28:39Z] increment=ext-pre-002 step=tests action=human-gate result=approved artifacts=cucumber-steps,vitest-tests approvalSource=explicit-unattended-continuation nextStep=contracts
