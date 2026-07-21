@@ -149,8 +149,8 @@
             },
             "playwrightDiscovery": {
               "status": "pass",
-              "files": 2,
-              "tests": 4
+              "files": 1,
+              "tests": 2
             },
             "verifiedAt": "2026-07-21T22:10:30Z"
           },
@@ -232,7 +232,7 @@
             },
             "playwright": {
               "status": "pass",
-              "tests": 4
+              "tests": 2
             },
             "apiBuild": "pass",
             "apiLint": "pass",
@@ -310,7 +310,7 @@
       "implementation": "pass",
       "apiTests": "410-pass",
       "cucumber": "12-scenarios-53-steps-pass",
-      "playwright": "4-pass"
+      "playwright": "2-pass"
     }
   },
   "extensions": {
@@ -395,5 +395,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-21T22:48:20Z"
+  "lastUpdated": "2026-07-21T22:57:16Z"
 }
