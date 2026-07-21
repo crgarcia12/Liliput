@@ -156,6 +156,8 @@ export interface CreateAutonomousCampaignCycleInput {
   proposal?: AutonomousCampaignJsonObject;
   proposalFingerprint?: string;
   baseSha?: string;
+  leaseOwner?: string;
+  nowMs?: number;
 }
 
 export interface CreateAutonomousCampaignAttemptInput {
@@ -163,6 +165,8 @@ export interface CreateAutonomousCampaignAttemptInput {
   attemptNumber: number;
   status?: AutonomousCampaignAttemptStatus;
   idempotencyKey: string;
+  leaseOwner?: string;
+  nowMs?: number;
 }
 
 export interface TransitionAutonomousCampaignInput {
@@ -170,6 +174,8 @@ export interface TransitionAutonomousCampaignInput {
   expectedStatus: AutonomousCampaignStatus;
   nextStatus: AutonomousCampaignStatus;
   idempotencyKey: string;
+  leaseOwner?: string;
+  nowMs?: number;
 }
 
 export interface AutonomousCampaignTransitionResult {
@@ -193,6 +199,8 @@ export interface ScheduleAutonomousCycleRetryInput {
   cycleId: string;
   previousDelayMinutes: number;
   capMinutes: number;
+  leaseOwner?: string;
+  nowMs?: number;
 }
 
 export interface AutonomousCycleRetryResult {
@@ -226,6 +234,17 @@ export type AutonomousCampaignActionDecision =
   | { allowed: false; reason: AutonomousCampaignBudgetReason };
 
 export const AUTONOMOUS_CAMPAIGN_CONFLICT_CODE = 'CAMPAIGN_CONFLICT';
+export const AUTONOMOUS_CAMPAIGN_NOT_FOUND_CODE = 'CAMPAIGN_NOT_FOUND';
+export const AUTONOMOUS_CAMPAIGN_CYCLE_NOT_FOUND_CODE =
+  'CAMPAIGN_CYCLE_NOT_FOUND';
+export const AUTONOMOUS_CAMPAIGN_ATTEMPT_NOT_FOUND_CODE =
+  'CAMPAIGN_ATTEMPT_NOT_FOUND';
+
+export type AutonomousCampaignStoreErrorCode =
+  | typeof AUTONOMOUS_CAMPAIGN_CONFLICT_CODE
+  | typeof AUTONOMOUS_CAMPAIGN_NOT_FOUND_CODE
+  | typeof AUTONOMOUS_CAMPAIGN_CYCLE_NOT_FOUND_CODE
+  | typeof AUTONOMOUS_CAMPAIGN_ATTEMPT_NOT_FOUND_CODE;
 
 export const AUTONOMOUS_CAMPAIGN_DEFAULTS = {
   releasePolicy: 'auto-merge-after-gates',

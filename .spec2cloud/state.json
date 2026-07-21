@@ -99,7 +99,7 @@
   "increments": {
     "ext-pre-001": {
       "type": "extension-prerequisite",
-      "status": "implementation",
+      "status": "implementation-review",
       "featureFiles": [
         "specs/features/autonomous-workstream-campaigns.feature"
       ],
@@ -171,6 +171,76 @@
           "apiBuild": "pass",
           "webBuild": "pass",
           "completedAt": "2026-07-21T22:24:13Z"
+        },
+        "implementation": {
+          "status": "awaiting-human-approval",
+          "research": {
+            "sqliteTransactions": "Use synchronous better-sqlite3 transactions with BEGIN IMMEDIATE for compare-and-set mutations and automatic rollback on exceptions.",
+            "partialIndexes": "Use SQLite unique partial indexes to enforce one active campaign per repository/base branch and one active cycle per campaign.",
+            "conflictHandling": "Use SQLite ABORT semantics and translate constraint failures to typed campaign conflicts; do not use REPLACE.",
+            "sources": [
+              "https://github.com/WiseLibs/better-sqlite3/blob/master/docs/api.md",
+              "https://www.sqlite.org/lang_transaction.html",
+              "https://www.sqlite.org/partialindex.html",
+              "https://www.sqlite.org/lang_conflict.html"
+            ],
+            "packageUpdates": []
+          },
+          "slices": {
+            "api": {
+              "status": "done",
+              "modifiedFiles": [
+                "src/api/src/engine/autonomous-campaign-primitives.ts",
+                "src/api/src/stores/autonomous-campaign-store.ts",
+                "src/api/src/stores/db.ts",
+                "src/shared/types/autonomous-campaign-state.ts",
+                "specs/contracts/api/autonomous-campaign-state.yaml"
+              ],
+              "failingTests": [],
+              "lastTestRun": "2026-07-21T22:48:20Z",
+              "iteration": 2
+            },
+            "web": {
+              "status": "not-applicable",
+              "reason": "This prerequisite increment has no HTTP or portal surface."
+            },
+            "integration": {
+              "status": "done",
+              "modifiedFiles": [],
+              "failingTests": [],
+              "lastTestRun": "2026-07-21T22:48:20Z",
+              "iteration": 1
+            }
+          },
+          "review": {
+            "status": "pass",
+            "leaseEnforcement": "implemented",
+            "typedNotFoundErrors": "implemented",
+            "idempotencyMismatchProtection": "implemented",
+            "deterministicRetryClock": "implemented"
+          },
+          "regression": {
+            "api": {
+              "status": "pass",
+              "files": 38,
+              "tests": 410
+            },
+            "cucumber": {
+              "status": "pass",
+              "scenarios": 12,
+              "steps": 53
+            },
+            "playwright": {
+              "status": "pass",
+              "tests": 4
+            },
+            "apiBuild": "pass",
+            "apiLint": "pass",
+            "webBuild": "pass",
+            "webLint": "pass",
+            "skippedTests": 0
+          },
+          "completedAt": "2026-07-21T22:48:20Z"
         }
       }
     },
@@ -219,7 +289,8 @@
     "plan-approved": true,
     "extension-autonomous-workstream-campaigns-approved": true,
     "ext-pre-001-gherkin-approved": true,
-    "ext-pre-001-tests-approved": true
+    "ext-pre-001-tests-approved": true,
+    "ext-pre-001-implementation-approved": false
   },
   "testsStatus": {
     "reviewerConfigAndCliAuth": {
@@ -235,7 +306,11 @@
       "redBaseline": "confirmed",
       "existingRegression": "pass",
       "testCodeApproval": "approved",
-      "contracts": "pass"
+      "contracts": "pass",
+      "implementation": "pass",
+      "apiTests": "410-pass",
+      "cucumber": "12-scenarios-53-steps-pass",
+      "playwright": "4-pass"
     }
   },
   "extensions": {
@@ -320,5 +395,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-21T22:24:13Z"
+  "lastUpdated": "2026-07-21T22:48:20Z"
 }
