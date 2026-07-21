@@ -71,7 +71,8 @@ internalOperations:
     leaseRules:
       - An unexpired lease remains owned by its current coordinator.
       - A lease is claimable when absent or leaseExpiresAt is less than or equal to nowMs.
-      - Only the lease owner may advance coordinator-managed state.
+      - Mutating coordinator operations accept leaseOwner and nowMs context.
+      - Only the current lease owner may transition, create attempts or cycles, or schedule retries while a lease is unexpired.
 
   - name: scheduleCycleRetry
     description: Move the current cycle to retry_wait with capped exponential backoff.

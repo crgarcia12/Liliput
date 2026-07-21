@@ -252,6 +252,120 @@ CREATE TABLE IF NOT EXISTS user_agent_defaults (
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_user_agent_defaults_user ON user_agent_defaults(user_id);
+
+CREATE TABLE IF NOT EXISTS autonomous_campaigns (
+  id                             TEXT PRIMARY KEY,
+  repository                     TEXT NOT NULL,
+  base_branch                    TEXT NOT NULL,
+  status                         TEXT NOT NULL,
+  release_policy                 TEXT NOT NULL,
+  idea_sources_json              TEXT NOT NULL,
+  model_config_json              TEXT NOT NULL,
+  max_turns_per_attempt          INTEGER NOT NULL,
+  max_minutes_per_attempt        INTEGER NOT NULL,
+  max_cost_usd_per_attempt       REAL NOT NULL,
+  retry_backoff_cap_minutes      INTEGER NOT NULL,
+  success_cooldown_minutes       INTEGER NOT NULL,
+  failed_attempt_alert_threshold INTEGER NOT NULL,
+  cumulative_cost_alert_usd      REAL NOT NULL,
+  cumulative_cost_usd            REAL NOT NULL DEFAULT 0,
+  next_sequence                  INTEGER NOT NULL DEFAULT 1,
+  current_cycle_id               TEXT,
+  lease_owner                    TEXT,
+  lease_expires_at               INTEGER,
+  pause_requested_at             TEXT,
+  stop_requested_at              TEXT,
+  created_by                     TEXT NOT NULL,
+  created_at                     TEXT NOT NULL,
+  updated_at                     TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_autonomous_campaigns_active_target
+  ON autonomous_campaigns(repository, base_branch)
+  WHERE status <> 'stopped';
+CREATE INDEX IF NOT EXISTS idx_autonomous_campaigns_status
+  ON autonomous_campaigns(status);
+CREATE INDEX IF NOT EXISTS idx_autonomous_campaigns_lease
+  ON autonomous_campaigns(lease_expires_at);
+
+CREATE TABLE IF NOT EXISTS autonomous_cycles (
+  id                    TEXT PRIMARY KEY,
+  campaign_id           TEXT NOT NULL,
+  sequence              INTEGER NOT NULL,
+  title                 TEXT NOT NULL,
+  status                TEXT NOT NULL,
+  proposal_json         TEXT,
+  proposal_fingerprint  TEXT,
+  base_sha              TEXT,
+  workstream_id         TEXT,
+  task_id               TEXT,
+  branch_name           TEXT,
+  pull_request_url      TEXT,
+  review_decision_json  TEXT,
+  release_gates_json    TEXT,
+  merge_sha             TEXT,
+  next_retry_at         TEXT,
+  retry_delay_minutes   INTEGER,
+  started_at            TEXT NOT NULL,
+  completed_at          TEXT,
+  last_error            TEXT,
+  created_at            TEXT NOT NULL,
+  updated_at            TEXT NOT NULL,
+  UNIQUE(campaign_id, sequence),
+  FOREIGN KEY (campaign_id) REFERENCES autonomous_campaigns(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_autonomous_cycles_one_active
+  ON autonomous_cycles(campaign_id)
+  WHERE status NOT IN ('succeeded', 'stopped');
+CREATE INDEX IF NOT EXISTS idx_autonomous_cycles_status
+  ON autonomous_cycles(status);
+
+CREATE TABLE IF NOT EXISTS autonomous_attempts (
+  id                  TEXT PRIMARY KEY,
+  cycle_id            TEXT NOT NULL,
+  attempt_number      INTEGER NOT NULL,
+  status              TEXT NOT NULL,
+  turns_used          INTEGER NOT NULL DEFAULT 0,
+  elapsed_ms          INTEGER NOT NULL DEFAULT 0,
+  estimated_cost_usd  REAL NOT NULL DEFAULT 0,
+  started_at          TEXT NOT NULL,
+  completed_at        TEXT,
+  failure_stage       TEXT,
+  failure_message     TEXT,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL,
+  UNIQUE(cycle_id, attempt_number),
+  FOREIGN KEY (cycle_id) REFERENCES autonomous_cycles(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_autonomous_attempts_cycle
+  ON autonomous_attempts(cycle_id, attempt_number);
+
+CREATE TABLE IF NOT EXISTS autonomous_attempt_idempotency (
+  idempotency_key  TEXT PRIMARY KEY,
+  attempt_id       TEXT NOT NULL,
+  created_at       TEXT NOT NULL,
+  FOREIGN KEY (attempt_id) REFERENCES autonomous_attempts(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS autonomous_campaign_transitions (
+  idempotency_key  TEXT PRIMARY KEY,
+  campaign_id      TEXT NOT NULL,
+  expected_status  TEXT NOT NULL,
+  next_status      TEXT NOT NULL,
+  applied          INTEGER NOT NULL,
+  result_json      TEXT NOT NULL,
+  created_at       TEXT NOT NULL,
+  FOREIGN KEY (campaign_id) REFERENCES autonomous_campaigns(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS autonomous_attempt_usage_events (
+  attempt_id          TEXT NOT NULL,
+  usage_event_id      TEXT NOT NULL,
+  turns               INTEGER NOT NULL,
+  estimated_cost_usd  REAL NOT NULL,
+  created_at          TEXT NOT NULL,
+  PRIMARY KEY (attempt_id, usage_event_id),
+  FOREIGN KEY (attempt_id) REFERENCES autonomous_attempts(id) ON DELETE CASCADE
+);
 `;
 
 export function getDb(): Database.Database {
@@ -481,6 +595,12 @@ export function getDb(): Database.Database {
 export function resetDb(): void {
   const db = getDb();
   db.exec(`
+    DELETE FROM autonomous_attempt_usage_events;
+    DELETE FROM autonomous_attempt_idempotency;
+    DELETE FROM autonomous_campaign_transitions;
+    DELETE FROM autonomous_attempts;
+    DELETE FROM autonomous_cycles;
+    DELETE FROM autonomous_campaigns;
     DELETE FROM agent_logs;
     DELETE FROM agents;
     DELETE FROM chat_messages;
