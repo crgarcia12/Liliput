@@ -1,0 +1,111 @@
+feature: autonomous-campaign-pricing
+increment: ext-pre-002
+version: "1.0"
+basePath: /api
+exposure: existing-http-and-internal-coordinator
+description: >
+  Autonomous campaign model selection is bounded by verified, effective USD
+  pricing. Existing manual tasks retain their current unpriced-usage behavior.
+  Public campaign controls remain deferred to ext-001.
+
+endpoints:
+  - method: GET
+    path: /api/pricing
+    operationId: listModelPrices
+    authentication: existing-session
+    query:
+      model:
+        type: string
+        required: false
+    responses:
+      200:
+        body: ModelPriceListResponse
+
+  - method: POST
+    path: /api/pricing
+    operationId: upsertModelPrice
+    authentication: existing-session
+    request:
+      body: UpsertModelPriceRequest
+      required:
+        - model
+        - inputPerMtok
+        - outputPerMtok
+        - effectiveFrom
+    responses:
+      201:
+        body: ModelPrice
+      400:
+        body: PricingValidationError
+      500:
+        body: PricingMutationError
+
+  - method: DELETE
+    path: /api/pricing/:id
+    operationId: deleteModelPrice
+    authentication: existing-session
+    parameters:
+      id:
+        type: string
+        required: true
+    responses:
+      204:
+        body: none
+      404:
+        body: PricingNotFoundError
+
+internalOperations:
+  - name: createPricedCampaign
+    description: >
+      Validate every configured campaign model against effective pricing before
+      persisting a draft campaign.
+    input:
+      campaign: CreateAutonomousCampaignInput
+      options: AutonomousCampaignPricingOptions
+    output: AutonomousCampaign
+    errors:
+      - code: CAMPAIGN_MODEL_UNPRICED
+        status: 400
+        when: One or more selected models lack an effective pricing row.
+        details: unpricedModels
+
+  - name: reconcileCampaignModelPricing
+    description: >
+      Re-check configured models before the next model turn. Missing pricing
+      moves the current cycle to waiting_for_external. Restored pricing returns
+      that same cycle to its previous runnable status.
+    input: ReconcileAutonomousCampaignPricingInput
+    output: ReconcileAutonomousCampaignPricingResult
+    sideEffects:
+      - Does not create an attempt or increment turn/cost usage while waiting.
+      - Stores a pricing-specific wait marker so unrelated external waits are not resumed.
+
+pricingRules:
+  currency: USD
+  eligibilityLookup:
+    effectiveFrom: less-than-or-equal-to occurredAt
+    minInputTokens: 0
+    rationale: >
+      A campaign model must have a default price that applies before the input
+      size of a future model call is known.
+  historicalCost:
+    lookupTime: usage-event occurredAt
+    unknownPriceBehavior: counted-as-unpriced-never-assumed-zero
+  manualTaskCompatibility:
+    campaignEligibilityApplied: false
+    unpricedUsageReported: true
+
+scenarioMappings:
+  - scenario: Unpriced model cannot start an autonomous campaign
+    operations: [createPricedCampaign]
+  - scenario: Restored model pricing resumes a waiting campaign
+    operations: [reconcileCampaignModelPricing, upsertModelPrice]
+  - scenario: Manual tasks may continue using an unpriced model
+    operations: [existing-manual-task-creation, existing-cost-rollup]
+
+deferredHttpSurface:
+  increment: ext-001
+  routes:
+    - POST /api/autonomous-campaigns
+    - GET /api/autonomous-campaigns
+    - GET /api/autonomous-campaigns/:id

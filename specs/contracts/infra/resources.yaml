@@ -1,10 +1,11 @@
-version: "1.0"
-increment: ext-pre-001
+version: "1.1"
+increments: [ext-pre-001, ext-pre-002]
 target: azure-kubernetes-service
 description: >
   Durable autonomous campaign state reuses Liliput's existing single-writer
-  SQLite database and Azure Disk PVC. This increment adds no Azure resource,
-  Kubernetes workload, secret, environment variable, or network route.
+  SQLite database, model_pricing table, and Azure Disk PVC. Campaign pricing
+  eligibility adds no Azure resource, Kubernetes workload, secret, environment
+  variable, or network route.
 
 newResources: []
 newEnvironmentVariables: []
@@ -19,7 +20,7 @@ resources:
     description: Hosts the Liliput API, Web, gateway, and persistent volumes.
     sku:
       name: existing
-      justification: Campaign persistence does not change cluster capacity requirements.
+      justification: Campaign persistence and pricing checks do not change cluster capacity requirements.
 
   - name: container-registry
     type: Microsoft.ContainerRegistry/registries
@@ -27,7 +28,7 @@ resources:
     description: Stores the existing Liliput API and Web images.
     sku:
       name: existing
-      justification: This increment introduces no new image or retention requirement.
+      justification: These prerequisites introduce no new image or retention requirement.
 
   - name: liliput-api
     type: Kubernetes/apps/v1/Deployment
@@ -82,6 +83,9 @@ dependencies:
 
 constraints:
   - Campaign schema changes must be additive and backward compatible.
+  - Campaign model eligibility must use verified model_pricing rows effective at the check time.
+  - Missing campaign pricing must never be interpreted as zero cost.
+  - Existing manual tasks may continue to record explicitly unpriced usage.
   - Existing task and workstream tables must remain readable without backfill loss.
   - The API deployment must retain Recreate strategy while using the ReadWriteOnce volume.
 

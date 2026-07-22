@@ -336,6 +336,22 @@
           },
           "approvedAt": "2026-07-21T23:28:39Z",
           "approvalSource": "explicit-unattended-continuation"
+        },
+        "contracts": {
+          "status": "done",
+          "apiContracts": [
+            "specs/contracts/api/autonomous-campaign-pricing.yaml"
+          ],
+          "sharedTypes": [
+            "src/shared/types/autonomous-campaign-pricing.ts"
+          ],
+          "infraContract": "specs/contracts/infra/resources.yaml",
+          "infraUpdated": false,
+          "newResources": [],
+          "newEnvironmentVariables": [],
+          "apiBuild": "pass",
+          "webBuild": "pass",
+          "completedAt": "2026-07-22T00:55:54Z"
         }
       }
     },
@@ -413,6 +429,7 @@
       "redBaseline": "confirmed",
       "existingRegression": "28-pass",
       "testCodeApproval": "approved",
+      "contracts": "pass",
       "vitest": "4-expected-failures",
       "cucumber": "3-expected-failures",
       "playwrightDiscovery": "2-tests"
@@ -501,5 +518,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-21T23:28:39Z"
+  "lastUpdated": "2026-07-22T00:55:54Z"
 }

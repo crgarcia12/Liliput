@@ -1,6 +1,7 @@
 // Liliput Shared Types — used by both API and Web
 
 export * from './autonomous-campaign-state.js';
+export * from './autonomous-campaign-pricing.js';
 
 // ─── Workstream (groups Tasks for a repo) ─────────────────────
 
