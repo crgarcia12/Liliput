@@ -55,7 +55,7 @@ jobs:
       - name: Start web
         run: |
           cd src/web
-          NEXT_PUBLIC_API_URL=http://localhost:5001 npm run dev > ../../web.log 2>&1 &
+          npm run dev > ../../web.log 2>&1 &
           echo $! > ../../web.pid
 
       - name: Wait for services
