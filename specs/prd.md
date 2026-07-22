@@ -137,3 +137,35 @@ A minimal full-stack web application with user authentication. Users can registe
 - **Auth:** JWT (jsonwebtoken), bcrypt
 - **Storage:** In-memory JavaScript Map
 - **Deployment:** Azure Container Apps via AZD
+
+## Implementation Diagram
+
+```mermaid
+sequenceDiagram
+    participant Coordinator
+    participant Evidence as Evidence Engine
+    participant GitHub
+    participant Runtime as Liliput Runtime Stores
+    participant SQLite
+
+    Coordinator->>Evidence: captureCampaignEvidence(campaign, cycle)
+    Evidence->>SQLite: Read cycle and existing snapshot
+    alt Snapshot already exists
+        SQLite-->>Evidence: Persisted immutable snapshot
+        Evidence-->>Coordinator: Return snapshot without external reads
+    else First capture
+        Evidence->>GitHub: Resolve base branch once
+        GitHub-->>Evidence: Exact base SHA
+        par Repository evidence
+            Evidence->>GitHub: Read tree and files at exact SHA
+        and GitHub feedback
+            Evidence->>GitHub: Read issues, PRs, and comments
+        and Runtime evidence
+            Evidence->>Runtime: Read bounded tasks, activity, turns, and verdicts
+        end
+        Evidence->>Evidence: Redact secrets, bound content, delimit untrusted text
+        Evidence->>SQLite: Immediate transaction writes base_sha + snapshot JSON
+        SQLite-->>Evidence: Persisted snapshot
+        Evidence-->>Coordinator: Captured evidence snapshot
+    end
+```

@@ -461,7 +461,7 @@ export async function listIssueComments(
 
 export interface ListIssuesByLabelOptions {
   repo: string;
-  labels: string[];           // e.g. ['pm:ready']
+  labels?: string[];           // e.g. ['pm:ready']; omitted means no label filter
   state?: 'open' | 'closed' | 'all';
   fetchImpl?: FetchImpl;
 }
@@ -484,10 +484,13 @@ export async function listIssuesByLabel(
   opts: ListIssuesByLabelOptions,
 ): Promise<IssueSummary[]> {
   const f = opts.fetchImpl ?? fetch;
-  const labels = encodeURIComponent(opts.labels.join(','));
   const state = opts.state ?? 'open';
+  const labels =
+    opts.labels && opts.labels.length > 0
+      ? `&labels=${encodeURIComponent(opts.labels.join(','))}`
+      : '';
   const res = await f(
-    `${API}/repos/${opts.repo}/issues?state=${state}&labels=${labels}&per_page=100`,
+    `${API}/repos/${opts.repo}/issues?state=${state}${labels}&per_page=100`,
     { headers: authHeaders() },
   );
   if (!res.ok) {
@@ -526,4 +529,179 @@ export async function listPulls(opts: ListPullsOptions): Promise<PullSummary[]> 
     throw new GitHubApiError(res.status, 'GET /pulls', await res.text());
   }
   return (await res.json()) as PullSummary[];
+}
+
+export interface GetRepositoryBranchShaOptions {
+  repo: string;
+  branch: string;
+  fetchImpl?: FetchImpl;
+}
+
+export async function getRepositoryBranchSha(
+  opts: GetRepositoryBranchShaOptions,
+): Promise<string> {
+  const f = opts.fetchImpl ?? fetch;
+  const branch = encodeURIComponent(opts.branch);
+  const res = await f(`${API}/repos/${opts.repo}/branches/${branch}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    throw new GitHubApiError(
+      res.status,
+      `GET /branches/${opts.branch}`,
+      await res.text(),
+    );
+  }
+  const body = (await res.json()) as { commit?: { sha?: string } };
+  if (!body.commit?.sha) {
+    throw new Error(
+      `GitHub branch ${opts.repo}:${opts.branch} did not include a commit SHA`,
+    );
+  }
+  return body.commit.sha;
+}
+
+export interface RepositoryTreeEntry {
+  path: string;
+  mode: string;
+  type: 'blob' | 'tree' | 'commit';
+  sha: string;
+  size?: number;
+}
+
+export interface GetRepositoryTreeOptions {
+  repo: string;
+  commitSha: string;
+  fetchImpl?: FetchImpl;
+}
+
+export async function getRepositoryTreeAtCommit(
+  opts: GetRepositoryTreeOptions,
+): Promise<{ entries: RepositoryTreeEntry[]; truncated: boolean }> {
+  const f = opts.fetchImpl ?? fetch;
+  const commitRes = await f(
+    `${API}/repos/${opts.repo}/git/commits/${encodeURIComponent(opts.commitSha)}`,
+    { headers: authHeaders() },
+  );
+  if (!commitRes.ok) {
+    throw new GitHubApiError(
+      commitRes.status,
+      `GET /git/commits/${opts.commitSha}`,
+      await commitRes.text(),
+    );
+  }
+  const commit = (await commitRes.json()) as { tree?: { sha?: string } };
+  if (!commit.tree?.sha) {
+    throw new Error(
+      `GitHub commit ${opts.repo}@${opts.commitSha} did not include a tree SHA`,
+    );
+  }
+
+  const treeRes = await f(
+    `${API}/repos/${opts.repo}/git/trees/${encodeURIComponent(commit.tree.sha)}?recursive=1`,
+    { headers: authHeaders() },
+  );
+  if (!treeRes.ok) {
+    throw new GitHubApiError(
+      treeRes.status,
+      `GET /git/trees/${commit.tree.sha}`,
+      await treeRes.text(),
+    );
+  }
+  const tree = (await treeRes.json()) as {
+    tree?: RepositoryTreeEntry[];
+    truncated?: boolean;
+  };
+  return {
+    entries: tree.tree ?? [],
+    truncated: tree.truncated === true,
+  };
+}
+
+export interface GetRepositoryFileOptions {
+  repo: string;
+  path: string;
+  ref: string;
+  fetchImpl?: FetchImpl;
+}
+
+export async function getRepositoryFileAtRef(
+  opts: GetRepositoryFileOptions,
+): Promise<{ content: string; sha: string; size: number; htmlUrl?: string }> {
+  const f = opts.fetchImpl ?? fetch;
+  const encodedPath = opts.path
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+  const res = await f(
+    `${API}/repos/${opts.repo}/contents/${encodedPath}?ref=${encodeURIComponent(opts.ref)}`,
+    { headers: authHeaders() },
+  );
+  if (!res.ok) {
+    throw new GitHubApiError(
+      res.status,
+      `GET /contents/${opts.path}`,
+      await res.text(),
+    );
+  }
+  const body = (await res.json()) as {
+    type?: string;
+    content?: string;
+    encoding?: string;
+    sha?: string;
+    size?: number;
+    html_url?: string;
+  };
+  if (
+    body.type !== 'file' ||
+    body.encoding !== 'base64' ||
+    !body.content ||
+    !body.sha
+  ) {
+    throw new Error(
+      `GitHub content ${opts.repo}:${opts.path}@${opts.ref} is not a readable file`,
+    );
+  }
+  return {
+    content: Buffer.from(body.content.replace(/\s/g, ''), 'base64').toString(
+      'utf8',
+    ),
+    sha: body.sha,
+    size: body.size ?? 0,
+    ...(body.html_url ? { htmlUrl: body.html_url } : {}),
+  };
+}
+
+export interface PullReviewComment {
+  id: number;
+  body: string;
+  path: string;
+  line: number | null;
+  user: { login: string } | null;
+  created_at: string;
+  html_url: string;
+}
+
+export interface ListPullReviewCommentsOptions {
+  repo: string;
+  pullNumber: number;
+  fetchImpl?: FetchImpl;
+}
+
+export async function listPullReviewComments(
+  opts: ListPullReviewCommentsOptions,
+): Promise<PullReviewComment[]> {
+  const f = opts.fetchImpl ?? fetch;
+  const res = await f(
+    `${API}/repos/${opts.repo}/pulls/${opts.pullNumber}/comments?per_page=100`,
+    { headers: authHeaders() },
+  );
+  if (!res.ok) {
+    throw new GitHubApiError(
+      res.status,
+      `GET /pulls/${opts.pullNumber}/comments`,
+      await res.text(),
+    );
+  }
+  return (await res.json()) as PullReviewComment[];
 }

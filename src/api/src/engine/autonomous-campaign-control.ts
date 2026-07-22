@@ -15,6 +15,7 @@ import {
   transitionCampaign,
 } from '../stores/autonomous-campaign-store.js';
 import { getDb } from '../stores/db.js';
+import { getCampaignEvidenceSnapshot } from './autonomous-campaign-evidence.js';
 
 const PAUSED_FROM_PREFIX = 'campaign-control:paused-from:';
 
@@ -98,6 +99,9 @@ export function getCampaignDetail(
     },
     cycle,
     attempts,
+    evidenceSnapshot: cycle
+      ? (getCampaignEvidenceSnapshot(cycle.id) ?? null)
+      : null,
     allowedActions: allowedActions(campaign.status),
   };
 }

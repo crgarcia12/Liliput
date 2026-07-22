@@ -1,11 +1,12 @@
-version: "1.2"
-increments: [ext-pre-001, ext-pre-002, ext-001]
+version: "1.3"
+increments: [ext-pre-001, ext-pre-002, ext-001, ext-002]
 target: azure-kubernetes-service
 description: >
-  Durable autonomous campaign state and admin controls reuse Liliput's existing
-  API, Web, Socket.IO server, single-writer SQLite database, model_pricing table,
-  gateway route, and Azure Disk PVC. ext-001 adds no Azure resource, Kubernetes
-  workload, secret, environment variable, or external network route.
+  Durable autonomous campaign state, admin controls, and redacted evidence
+  snapshots reuse Liliput's existing API, Web, Socket.IO server, single-writer
+  SQLite database, model_pricing table, gateway route, and Azure Disk PVC.
+  ext-002 adds no Azure resource, Kubernetes workload, secret, environment
+  variable, or external network route.
 
 newResources: []
 newEnvironmentVariables: []
@@ -104,7 +105,7 @@ resources:
 dependencies:
   - from: liliput-api
     to: liliput-data
-    reason: Campaign, cycle, attempt, lease, transition, and usage rows persist in SQLite.
+    reason: Campaign, cycle, evidence snapshot, attempt, lease, transition, and usage data persist in SQLite.
   - from: liliput-api
     to: aks-cluster
     reason: The API deployment runs on the existing AKS cluster.
@@ -127,6 +128,10 @@ constraints:
   - Missing campaign pricing must never be interpreted as zero cost.
   - Existing manual tasks may continue to record explicitly unpriced usage.
   - Existing task and workstream tables must remain readable without backfill loss.
+  - Evidence snapshot schema changes must be additive and stored on the existing cycle row.
+  - Every enabled evidence source must persist an explicit success, empty, or error result.
+  - Repository, GitHub, runtime, and ideation text must be redacted and delimited as untrusted before persistence.
+  - Every source adapter must read repository content from the single base SHA resolved at capture start.
   - The API deployment must retain Recreate strategy while using the ReadWriteOnce volume.
   - All campaign control routes require authenticated ADMIN role.
   - Starting a campaign in ext-001 must not invoke an LLM or create an attempt.
