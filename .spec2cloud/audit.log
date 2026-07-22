@@ -83,3 +83,8 @@
 [2026-07-22T06:36:35Z] increment=ext-pre-002 step=implementation action=full-regression result=pass api=414 cucumber=15-scenarios-69-steps playwright=2 skipped=0
 [2026-07-22T06:36:36Z] increment=ext-pre-002 step=implementation action=review result=pass checks=atomic-creation,lease-enforcement,wait-recovery,manual-compatibility
 [2026-07-22T06:37:42Z] increment=ext-pre-002 gate=implementation-pr-review decision=approve result=approved pr=98 approvalSource=explicit-unattended-continuation nextStep=verification
+[2026-07-22T06:47:41Z] increment=ext-pre-002 step=deploy action=github-actions-deploy result=success workflow=29897501678 sha=50840bf6ef0544319a8dab9287b1cc46cf7bdd93
+[2026-07-22T06:48:30Z] increment=ext-pre-002 step=deploy action=smoke-tests result=pass apiHealth=200 frontend=200 playwright=2 pricingModuleExports=3
+[2026-07-22T06:48:30Z] increment=ext-pre-002 step=deploy action=workload-verification result=pass cluster=Running nodes=4 deployments=3 applicationStartupErrors=0 stableGatewayErrors=0
+[2026-07-22T06:48:30Z] increment=ext-pre-002 step=deploy action=human-gate result=approved gate=deployment-verification approvalSource=explicit-unattended-continuation
+[2026-07-22T06:48:30Z] increment=ext-pre-002 action=increment-delivered result=transition-to-ext-001

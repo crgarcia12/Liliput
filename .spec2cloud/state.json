@@ -50,13 +50,13 @@
       "id": "ext-pre-002",
       "type": "extension-prerequisite",
       "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
-      "status": "in-progress"
+      "status": "done"
     },
     {
       "id": "ext-001",
       "type": "extension",
       "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
-      "status": "planned"
+      "status": "in-progress"
     },
     {
       "id": "ext-002",
@@ -95,7 +95,7 @@
       "status": "planned"
     }
   ],
-  "currentIncrement": "ext-pre-002",
+  "currentIncrement": "ext-001",
   "increments": {
     "ext-pre-001": {
       "type": "extension-prerequisite",
@@ -290,7 +290,7 @@
     },
     "ext-pre-002": {
       "type": "extension-prerequisite",
-      "status": "verification",
+      "status": "done",
       "featureFiles": [
         "specs/features/autonomous-workstream-campaign-pricing.feature"
       ],
@@ -424,12 +424,44 @@
             "skippedTests": 0
           },
           "completedAt": "2026-07-22T06:36:36Z"
+        },
+        "verification": {
+          "status": "done",
+          "deployment": {
+            "status": "pass",
+            "platform": "aks",
+            "workflowRun": "https://github.com/crgarcia12/Liliput/actions/runs/29897501678",
+            "commitSha": "50840bf6ef0544319a8dab9287b1cc46cf7bdd93",
+            "apiImage": "crgarliliputacr.azurecr.io/liliput-api:50840bf6ef0544319a8dab9287b1cc46cf7bdd93",
+            "webImage": "crgarliliputacr.azurecr.io/liliput-web:50840bf6ef0544319a8dab9287b1cc46cf7bdd93",
+            "completedAt": "2026-07-22T06:47:41Z"
+          },
+          "smokeTests": {
+            "status": "pass",
+            "apiHealth": 200,
+            "frontend": 200,
+            "playwrightPassed": 2,
+            "playwrightFailed": 0,
+            "pricingModuleExports": 3
+          },
+          "cluster": {
+            "powerState": "Running",
+            "provisioningState": "Succeeded",
+            "readyNodes": 4,
+            "readyDeployments": 3
+          },
+          "logs": {
+            "status": "pass",
+            "applicationStartupErrors": 0,
+            "stableGatewayErrors": 0
+          },
+          "verifiedAt": "2026-07-22T06:48:30Z"
         }
       }
     },
     "ext-001": {
       "type": "extension",
-      "status": "planned"
+      "status": "in-progress"
     },
     "ext-002": {
       "type": "extension",
@@ -473,7 +505,8 @@
     "ext-pre-001-deployment-approved": true,
     "ext-pre-002-gherkin-approved": true,
     "ext-pre-002-tests-approved": true,
-    "ext-pre-002-implementation-approved": true
+    "ext-pre-002-implementation-approved": true,
+    "ext-pre-002-deployment-approved": true
   },
   "testsStatus": {
     "reviewerConfigAndCliAuth": {
@@ -492,6 +525,7 @@
       "contracts": "pass",
       "implementation": "pass",
       "implementationApproval": "approved",
+      "deployment": "pass",
       "implementationApproval": "approved",
       "deployment": "pass",
       "apiTests": "410-pass",
@@ -558,11 +592,11 @@
     "clusterVerifiedAt": "2026-07-21T21:10:17Z",
     "namespace": "liliput",
     "url": "https://liliput.crgarcia.com.ar",
-    "commitSha": "74b3e69785cd6e9ba2125162c5dac96a8b23953c",
-    "apiImage": "crgarliliputacr.azurecr.io/liliput-api:74b3e69785cd6e9ba2125162c5dac96a8b23953c",
-    "webImage": "crgarliliputacr.azurecr.io/liliput-web:74b3e69785cd6e9ba2125162c5dac96a8b23953c",
-    "deployedAt": "2026-07-21T23:19:41Z",
-    "verifiedAt": "2026-07-21T23:21:32Z",
+    "commitSha": "50840bf6ef0544319a8dab9287b1cc46cf7bdd93",
+    "apiImage": "crgarliliputacr.azurecr.io/liliput-api:50840bf6ef0544319a8dab9287b1cc46cf7bdd93",
+    "webImage": "crgarliliputacr.azurecr.io/liliput-web:50840bf6ef0544319a8dab9287b1cc46cf7bdd93",
+    "deployedAt": "2026-07-22T06:47:41Z",
+    "verifiedAt": "2026-07-22T06:48:30Z",
     "aiFoundry": {
       "account": "crgar-liliput-ai",
       "resourceGroup": "crgar-ai-rg",
@@ -593,5 +627,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-22T06:37:42Z"
+  "lastUpdated": "2026-07-22T06:48:30Z"
 }
