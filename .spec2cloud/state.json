@@ -56,13 +56,13 @@
       "id": "ext-001",
       "type": "extension",
       "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
-      "status": "in-progress"
+      "status": "done"
     },
     {
       "id": "ext-002",
       "type": "extension",
       "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
-      "status": "planned"
+      "status": "in-progress"
     },
     {
       "id": "ext-003",
@@ -95,7 +95,7 @@
       "status": "planned"
     }
   ],
-  "currentIncrement": "ext-001",
+  "currentIncrement": "ext-002",
   "increments": {
     "ext-pre-001": {
       "type": "extension-prerequisite",
@@ -461,7 +461,7 @@
     },
     "ext-001": {
       "type": "extension",
-      "status": "in-progress",
+      "status": "done",
       "featureFiles": [
         "specs/features/autonomous-workstream-campaign-controls.feature"
       ],
@@ -627,7 +627,7 @@
           "completedAt": "2026-07-22T07:47:39Z"
         },
         "verification": {
-          "status": "retrying",
+          "status": "done",
           "attempts": [
             {
               "attempt": 1,
@@ -657,12 +657,57 @@
                 "apiHealth": 200
               },
               "issue": "https://github.com/crgarcia12/Liliput/issues/100"
+            },
+            {
+              "attempt": 2,
+              "commitSha": "ec3f6c70c48ab3718d27df3f5fafbd39aa66b02c",
+              "workflowRun": "https://github.com/crgarcia12/Liliput/actions/runs/29903897273",
+              "trigger": "workflow_dispatch",
+              "rollout": "pass",
+              "images": {
+                "api": "crgarliliputacr.azurecr.io/liliput-api:ec3f6c70c48ab3718d27df3f5fafbd39aa66b02c",
+                "web": "crgarliliputacr.azurecr.io/liliput-web:ec3f6c70c48ab3718d27df3f5fafbd39aa66b02c"
+              },
+              "cluster": {
+                "powerState": "Running",
+                "provisioningState": "Succeeded",
+                "readyNodes": 4,
+                "apiReplicas": "1/1",
+                "webReplicas": "1/1",
+                "gatewayReplicas": "1/1"
+              },
+              "smokeTests": {
+                "status": "pass",
+                "root": 200,
+                "apiHealth": 200,
+                "autonomy": 302
+              },
+              "persistence": {
+                "status": "pass",
+                "tables": [
+                  "autonomous_campaign_transitions",
+                  "autonomous_campaigns"
+                ]
+              },
+              "logs": {
+                "status": "pass",
+                "startupErrors": 0
+              },
+              "playwright": {
+                "status": "pass",
+                "passed": 4,
+                "failed": 0
+              },
+              "completedAt": "2026-07-22T08:33:51Z"
             }
           ],
           "remediation": {
-            "status": "validated",
+            "status": "done",
             "branch": "liliput/fix-autonomy-admin-error",
             "pullRequest": "https://github.com/crgarcia12/Liliput/pull/101",
+            "mergeCommit": "ec3f6c70c48ab3718d27df3f5fafbd39aa66b02c",
+            "mergedAt": "2026-07-22T08:24:06Z",
+            "ciRun": "https://github.com/crgarcia12/Liliput/actions/runs/29903683658",
             "research": {
               "finding": "Fetch Response.statusText can be empty for HTTP/2 responses; error classification must use the numeric Response.status.",
               "sources": [
@@ -688,13 +733,23 @@
               },
               "completedAt": "2026-07-22T08:19:55Z"
             }
-          }
+          },
+          "issue": {
+            "url": "https://github.com/crgarcia12/Liliput/issues/100",
+            "status": "closed"
+          },
+          "humanApproval": {
+            "status": "approved",
+            "approvedAt": "2026-07-22T08:33:51Z",
+            "approvalSource": "explicit-unattended-continuation"
+          },
+          "completedAt": "2026-07-22T08:33:51Z"
         }
       }
     },
     "ext-002": {
       "type": "extension",
-      "status": "planned"
+      "status": "in-progress"
     },
     "ext-003": {
       "type": "extension",
@@ -738,7 +793,8 @@
     "ext-pre-002-deployment-approved": true,
     "ext-001-gherkin-approved": true,
     "ext-001-tests-approved": true,
-    "ext-001-implementation-approved": true
+    "ext-001-implementation-approved": true,
+    "ext-001-deployment-approved": true
   },
   "testsStatus": {
     "reviewerConfigAndCliAuth": {
@@ -783,9 +839,11 @@
       "contracts": "pass",
       "implementation": "pass",
       "implementationApproval": "approved",
+      "deployment": "pass",
       "apiTests": "424-pass",
       "cucumber": "25-scenarios-151-steps-pass",
-      "playwright": "4-pass"
+      "playwright": "4-pass",
+      "productionPlaywright": "4-pass"
     }
   },
   "extensions": {
@@ -833,14 +891,14 @@
     "resourceGroup": "crgar-liliput-rg",
     "cluster": "crgar-liliput-aks",
     "clusterPowerState": "Running",
-    "clusterVerifiedAt": "2026-07-21T21:10:17Z",
+    "clusterVerifiedAt": "2026-07-22T08:33:51Z",
     "namespace": "liliput",
     "url": "https://liliput.crgarcia.com.ar",
-    "commitSha": "50840bf6ef0544319a8dab9287b1cc46cf7bdd93",
-    "apiImage": "crgarliliputacr.azurecr.io/liliput-api:50840bf6ef0544319a8dab9287b1cc46cf7bdd93",
-    "webImage": "crgarliliputacr.azurecr.io/liliput-web:50840bf6ef0544319a8dab9287b1cc46cf7bdd93",
-    "deployedAt": "2026-07-22T06:47:41Z",
-    "verifiedAt": "2026-07-22T06:48:30Z",
+    "commitSha": "ec3f6c70c48ab3718d27df3f5fafbd39aa66b02c",
+    "apiImage": "crgarliliputacr.azurecr.io/liliput-api:ec3f6c70c48ab3718d27df3f5fafbd39aa66b02c",
+    "webImage": "crgarliliputacr.azurecr.io/liliput-web:ec3f6c70c48ab3718d27df3f5fafbd39aa66b02c",
+    "deployedAt": "2026-07-22T08:32:37Z",
+    "verifiedAt": "2026-07-22T08:33:51Z",
     "aiFoundry": {
       "account": "crgar-liliput-ai",
       "resourceGroup": "crgar-ai-rg",
