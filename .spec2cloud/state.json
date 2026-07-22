@@ -1070,6 +1070,82 @@
           "webBuild": "pass",
           "yamlValidation": "pass",
           "completedAt": "2026-07-22T10:25:13Z"
+        },
+        "implementation": {
+          "status": "approved",
+          "research": {
+            "copilotSdk": "The installed @github/copilot-sdk 0.3.0 supports raw JSON Schema custom tools but not response-schema output; use one restricted submission tool per isolated generator or critic session and validate again in-process.",
+            "copilotSdkUpgrade": "The registry reports 1.0.7-preview.3, but upgrading is unnecessary for ext-003 and would introduce unrelated preview breaking changes.",
+            "sqliteTransactions": "Use synchronous better-sqlite3 transactions with the immediate variant so state revalidation and proposal/history compare-and-set writes share one write lock.",
+            "fingerprinting": "Use Node crypto SHA-256 over canonical JSON after lowercase, trim, whitespace collapse, and lexicographic scope sorting.",
+            "sources": [
+              "https://docs.github.com/en/copilot/how-tos/copilot-sdk",
+              "https://github.com/github/copilot-sdk/blob/main/nodejs/README.md",
+              "https://github.com/WiseLibs/better-sqlite3/blob/master/docs/api.md",
+              "https://nodejs.org/api/crypto.html"
+            ],
+            "packageUpdates": []
+          },
+          "slices": {
+            "api": {
+              "status": "done",
+              "modifiedFiles": [
+                "src/api/src/engine/autonomous-campaign-proposal.ts",
+                "src/api/src/stores/db.ts"
+              ],
+              "failingTests": [],
+              "lastTestRun": "2026-07-22T10:58:27Z",
+              "iteration": 2
+            },
+            "web": {
+              "status": "not-applicable",
+              "reason": "ext-003 adds no operator UI or browser flow.",
+              "modifiedFiles": []
+            },
+            "integration": {
+              "status": "done",
+              "modifiedFiles": [
+                "specs/prd.md"
+              ],
+              "failingTests": [],
+              "lastTestRun": "2026-07-22T10:58:27Z",
+              "iteration": 1
+            }
+          },
+          "review": {
+            "status": "pass",
+            "structuredToolSchema": "hardened-with-nonempty-critic-output",
+            "persistedHistoryValidation": "field-level-validation-added",
+            "atomicPersistence": "begin-immediate-and-guarded-update",
+            "idempotentReplay": "accepted-proposal-replay-skips-agents",
+            "humanApproval": {
+              "status": "approved",
+              "approvedAt": "2026-07-22T10:58:27Z",
+              "approvalSource": "explicit-unattended-continuation"
+            }
+          },
+          "regression": {
+            "api": {
+              "status": "pass",
+              "files": 42,
+              "tests": 452
+            },
+            "cucumber": {
+              "status": "pass",
+              "scenarios": 48,
+              "steps": 338
+            },
+            "playwright": {
+              "status": "pass",
+              "tests": 4
+            },
+            "apiBuild": "pass",
+            "apiLint": "pass",
+            "webBuild": "pass",
+            "webLint": "pass",
+            "skippedTests": 0
+          },
+          "completedAt": "2026-07-22T10:58:27Z"
         }
       }
     },
@@ -1118,7 +1194,8 @@
     "ext-002-implementation-approved": true,
     "ext-002-deployment-approved": true,
     "ext-003-gherkin-approved": true,
-    "ext-003-tests-approved": true
+    "ext-003-tests-approved": true,
+    "ext-003-implementation-approved": true
   },
   "testsStatus": {
     "reviewerConfigAndCliAuth": {
@@ -1193,7 +1270,12 @@
       "vitest": "20-expected-failures",
       "cucumber": "16-expected-failures",
       "playwrightDiscovery": "4-tests",
-      "testCodeApproval": "approved"
+      "testCodeApproval": "approved",
+      "implementation": "pass",
+      "implementationApproval": "approved",
+      "apiTests": "452-pass",
+      "cucumberGreen": "48-scenarios-338-steps-pass",
+      "playwright": "4-pass"
     }
   },
   "extensions": {
@@ -1279,5 +1361,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-22T10:25:13Z"
+  "lastUpdated": "2026-07-22T10:58:27Z"
 }
