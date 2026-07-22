@@ -5,6 +5,7 @@ export * from './autonomous-campaign-pricing.js';
 export * from './autonomous-campaign-controls.js';
 export * from './autonomous-campaign-evidence.js';
 export * from './autonomous-campaign-proposal.js';
+export * from './autonomous-campaign-delivery.js';
 
 // ─── Workstream (groups Tasks for a repo) ─────────────────────
 
@@ -13,6 +14,7 @@ export interface Workstream {
   repository: string;          // Owner/repo this workstream belongs to
   name: string;                // Short label (e.g. "auth", "billing")
   description?: string;
+  campaignCycleId?: string;     // Present only for autonomous campaign workstreams
   /** GitHub label applied to every issue/PR that belongs to this workstream
    *  on the target repo (e.g. `workstream:billing`). Set by the PM flow once
    *  the label has been ensured on GitHub. */
@@ -98,6 +100,7 @@ export interface Task {
   title: string;
   description: string;
   status: TaskStatus;
+  campaignCycleId?: string;     // Present only for autonomous campaign tasks
   workstreamId?: string;      // Parent workstream (auto-assigned if missing)
   featureId?: string;         // Parent feature (set when fan-out spawns this task)
   /** User who created the task. Used to resolve per-user agent-model defaults

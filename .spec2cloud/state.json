@@ -1268,6 +1268,29 @@
           },
           "approvedAt": "2026-07-22T13:53:07Z",
           "approvalSource": "explicit-unattended-continuation"
+        },
+        "contracts": {
+          "status": "done",
+          "apiContracts": [
+            "specs/contracts/api/autonomous-campaign-workstream-handoff.yaml"
+          ],
+          "sharedTypes": [
+            "src/shared/types/autonomous-campaign-delivery.ts",
+            "src/shared/types/autonomous-campaign-state.ts",
+            "src/shared/types/index.ts"
+          ],
+          "infraContract": "specs/contracts/infra/resources.yaml",
+          "infraUpdated": true,
+          "newResources": [],
+          "newEnvironmentVariables": [],
+          "newSecrets": [],
+          "newModelDeployments": [],
+          "bicepChangesRequired": false,
+          "kubernetesManifestChangesRequired": false,
+          "apiBuild": "pass",
+          "webBuild": "pass",
+          "yamlValidation": "pass",
+          "completedAt": "2026-07-22T13:59:06Z"
         }
       }
     },
