@@ -243,14 +243,7 @@
             "apiLint": "pass",
             "webBuild": "pass",
             "webLint": "pass",
-            "skippedTests": 0,
-            "ci": {
-              "status": "fix-validated",
-              "attempt": 1,
-              "run": "https://github.com/crgarcia12/Liliput/actions/runs/29901674475",
-              "failure": "Cucumber UI scenario timed out because the CI web client used a cross-origin API URL with credentialed requests instead of the existing same-origin Next.js API proxy.",
-              "localValidation": "Campaign controls UI scenario passed through the same-origin proxy: 1 scenario, 7 steps."
-            }
+            "skippedTests": 0
           },
           "completedAt": "2026-07-21T22:48:20Z"
         },
@@ -617,7 +610,14 @@
             "apiLint": "pass",
             "webBuild": "pass",
             "webLint": "pass",
-            "skippedTests": 0
+            "skippedTests": 0,
+            "ci": {
+              "status": "fix-validated",
+              "attempt": 1,
+              "run": "https://github.com/crgarcia12/Liliput/actions/runs/29901674475",
+              "failure": "Cucumber UI scenario timed out because the CI web client used a cross-origin API URL with credentialed requests instead of the existing same-origin Next.js API proxy.",
+              "localValidation": "Campaign controls UI scenario passed through the same-origin proxy: 1 scenario, 7 steps."
+            }
           },
           "completedAt": "2026-07-22T07:47:39Z"
         },
