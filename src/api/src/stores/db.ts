@@ -299,6 +299,7 @@ CREATE TABLE IF NOT EXISTS autonomous_cycles (
   proposal_fingerprint  TEXT,
   base_sha              TEXT,
   evidence_snapshot_json TEXT,
+  proposal_history_json TEXT,
   workstream_id         TEXT,
   task_id               TEXT,
   branch_name           TEXT,
@@ -462,6 +463,15 @@ export function getDb(): Database.Database {
       logger.info(
         {},
         'Migrated: added evidence_snapshot_json column to autonomous_cycles',
+      );
+    }
+    if (!cycleCols.some((c) => c.name === 'proposal_history_json')) {
+      _db.exec(
+        `ALTER TABLE autonomous_cycles ADD COLUMN proposal_history_json TEXT`,
+      );
+      logger.info(
+        {},
+        'Migrated: added proposal_history_json column to autonomous_cycles',
       );
     }
 

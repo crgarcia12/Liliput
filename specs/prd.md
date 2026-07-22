@@ -144,6 +144,9 @@ A minimal full-stack web application with user authentication. Users can registe
 sequenceDiagram
     participant Coordinator
     participant Evidence as Evidence Engine
+    participant Proposal as Proposal Engine
+    participant Generator as Meta-Agent
+    participant Critic
     participant GitHub
     participant Runtime as Liliput Runtime Stores
     participant SQLite
@@ -167,5 +170,23 @@ sequenceDiagram
         Evidence->>SQLite: Immediate transaction writes base_sha + snapshot JSON
         SQLite-->>Evidence: Persisted snapshot
         Evidence-->>Coordinator: Captured evidence snapshot
+    end
+
+    Coordinator->>Proposal: generateAndCritiqueCampaignProposal(campaign, cycle)
+    Proposal->>SQLite: Read proposing cycle, exact SHA, snapshot, and history
+    alt Accepted proposal already exists
+        SQLite-->>Proposal: Persisted accepted proposal
+        Proposal-->>Coordinator: Replay without agent calls
+    else New proposal decision
+        Proposal->>Generator: Structured candidate tool with exact snapshot + model config
+        Generator-->>Proposal: Schema-valid feature candidates
+        Proposal->>Proposal: Normalize fingerprints and enforce mandatory policy
+        Proposal->>Critic: Separate structured critique with candidates + evidence
+        Critic-->>Proposal: Select one candidate or reject all
+        Proposal->>Proposal: Validate selection, size, testability, reversibility, and duplicates
+        Proposal->>SQLite: Immediate transaction writes proposal/fingerprint/history
+        Note over Proposal,SQLite: No workstream or task is created in ext-003
+        SQLite-->>Proposal: Immutable proposal decision
+        Proposal-->>Coordinator: Accepted, rejected, or replayed result
     end
 ```

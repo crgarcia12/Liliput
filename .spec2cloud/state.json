@@ -986,7 +986,168 @@
     },
     "ext-003": {
       "type": "extension",
-      "status": "in-progress"
+      "status": "in-progress",
+      "featureFiles": [
+        "specs/features/autonomous-campaign-feature-proposal.feature"
+      ],
+      "scenarioCount": 16,
+      "steps": {
+        "tests": {
+          "status": "approved",
+          "e2e": {
+            "status": "done",
+            "flowCount": 0,
+            "newSpecFiles": [],
+            "newPageObjects": [],
+            "reason": "Proposal generation is an internal campaign-cycle capability with no new operator UI journey.",
+            "existingPlaywrightSuite": "4-discovered"
+          },
+          "gherkin": {
+            "status": "approved",
+            "featureFiles": [
+              "specs/features/autonomous-campaign-feature-proposal.feature"
+            ],
+            "scenarioCount": 16,
+            "approvedAt": "2026-07-22T10:19:10Z",
+            "approvalSource": "explicit-unattended-continuation"
+          },
+          "cucumberSteps": [
+            "tests/features/step-definitions/autonomous-campaign-feature-proposal.steps.ts"
+          ],
+          "vitestFiles": [
+            "src/api/tests/unit/autonomous-campaign-feature-proposal.test.ts"
+          ],
+          "redBaseline": {
+            "apiBuild": "pass",
+            "cucumberDryRun": {
+              "status": "pass",
+              "scenarios": 16,
+              "steps": 135,
+              "undefined": 0,
+              "ambiguous": 0
+            },
+            "cucumber": {
+              "status": "expected-failure",
+              "scenariosFailed": 16,
+              "scenariosPassed": 0,
+              "stepsFailed": 16,
+              "reason": "The autonomous campaign proposal module does not exist yet."
+            },
+            "vitest": {
+              "status": "expected-failure",
+              "filesFailed": 1,
+              "testsFailed": 20,
+              "testsPassed": 0,
+              "reason": "The autonomous campaign proposal module does not exist yet."
+            },
+            "playwrightDiscovery": {
+              "status": "pass",
+              "files": 2,
+              "tests": 4
+            },
+            "verifiedAt": "2026-07-22T10:19:10Z"
+          },
+          "approvedAt": "2026-07-22T10:19:10Z",
+          "approvalSource": "explicit-unattended-continuation"
+        },
+        "contracts": {
+          "status": "done",
+          "apiContracts": [
+            "specs/contracts/api/autonomous-campaign-feature-proposal.yaml"
+          ],
+          "sharedTypes": [
+            "src/shared/types/autonomous-campaign-proposal.ts"
+          ],
+          "infraContract": "specs/contracts/infra/resources.yaml",
+          "infraUpdated": true,
+          "newResources": [],
+          "newEnvironmentVariables": [],
+          "newSecrets": [],
+          "newModelDeployments": [],
+          "bicepChangesRequired": false,
+          "kubernetesManifestChangesRequired": false,
+          "apiBuild": "pass",
+          "webBuild": "pass",
+          "yamlValidation": "pass",
+          "completedAt": "2026-07-22T10:25:13Z"
+        },
+        "implementation": {
+          "status": "approved",
+          "research": {
+            "copilotSdk": "The installed @github/copilot-sdk 0.3.0 supports raw JSON Schema custom tools but not response-schema output; use one restricted submission tool per isolated generator or critic session and validate again in-process.",
+            "copilotSdkUpgrade": "The registry reports 1.0.7-preview.3, but upgrading is unnecessary for ext-003 and would introduce unrelated preview breaking changes.",
+            "sqliteTransactions": "Use synchronous better-sqlite3 transactions with the immediate variant so state revalidation and proposal/history compare-and-set writes share one write lock.",
+            "fingerprinting": "Use Node crypto SHA-256 over canonical JSON after lowercase, trim, whitespace collapse, and lexicographic scope sorting.",
+            "sources": [
+              "https://docs.github.com/en/copilot/how-tos/copilot-sdk",
+              "https://github.com/github/copilot-sdk/blob/main/nodejs/README.md",
+              "https://github.com/WiseLibs/better-sqlite3/blob/master/docs/api.md",
+              "https://nodejs.org/api/crypto.html"
+            ],
+            "packageUpdates": []
+          },
+          "slices": {
+            "api": {
+              "status": "done",
+              "modifiedFiles": [
+                "src/api/src/engine/autonomous-campaign-proposal.ts",
+                "src/api/src/stores/db.ts"
+              ],
+              "failingTests": [],
+              "lastTestRun": "2026-07-22T10:58:27Z",
+              "iteration": 2
+            },
+            "web": {
+              "status": "not-applicable",
+              "reason": "ext-003 adds no operator UI or browser flow.",
+              "modifiedFiles": []
+            },
+            "integration": {
+              "status": "done",
+              "modifiedFiles": [
+                "specs/prd.md"
+              ],
+              "failingTests": [],
+              "lastTestRun": "2026-07-22T10:58:27Z",
+              "iteration": 1
+            }
+          },
+          "review": {
+            "status": "pass",
+            "structuredToolSchema": "hardened-with-nonempty-critic-output",
+            "persistedHistoryValidation": "field-level-validation-added",
+            "atomicPersistence": "begin-immediate-and-guarded-update",
+            "idempotentReplay": "accepted-proposal-replay-skips-agents",
+            "humanApproval": {
+              "status": "approved",
+              "approvedAt": "2026-07-22T10:58:27Z",
+              "approvalSource": "explicit-unattended-continuation"
+            }
+          },
+          "regression": {
+            "api": {
+              "status": "pass",
+              "files": 42,
+              "tests": 452
+            },
+            "cucumber": {
+              "status": "pass",
+              "scenarios": 48,
+              "steps": 338
+            },
+            "playwright": {
+              "status": "pass",
+              "tests": 4
+            },
+            "apiBuild": "pass",
+            "apiLint": "pass",
+            "webBuild": "pass",
+            "webLint": "pass",
+            "skippedTests": 0
+          },
+          "completedAt": "2026-07-22T10:58:27Z"
+        }
+      }
     },
     "ext-004": {
       "type": "extension",
@@ -1031,7 +1192,10 @@
     "ext-002-gherkin-approved": true,
     "ext-002-tests-approved": true,
     "ext-002-implementation-approved": true,
-    "ext-002-deployment-approved": true
+    "ext-002-deployment-approved": true,
+    "ext-003-gherkin-approved": true,
+    "ext-003-tests-approved": true,
+    "ext-003-implementation-approved": true
   },
   "testsStatus": {
     "reviewerConfigAndCliAuth": {
@@ -1098,6 +1262,20 @@
       "playwright": "4-pass",
       "deployment": "pass",
       "productionPlaywright": "4-pass"
+    },
+    "autonomousCampaignProposal": {
+      "apiBuild": "pass",
+      "cucumberDryRun": "pass",
+      "redBaseline": "confirmed",
+      "vitest": "20-expected-failures",
+      "cucumber": "16-expected-failures",
+      "playwrightDiscovery": "4-tests",
+      "testCodeApproval": "approved",
+      "implementation": "pass",
+      "implementationApproval": "approved",
+      "apiTests": "452-pass",
+      "cucumberGreen": "48-scenarios-338-steps-pass",
+      "playwright": "4-pass"
     }
   },
   "extensions": {
@@ -1183,5 +1361,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-22T09:48:14Z"
+  "lastUpdated": "2026-07-22T10:58:27Z"
 }
