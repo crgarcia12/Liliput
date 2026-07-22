@@ -12,6 +12,7 @@ import { createFeaturesRouter } from './routes/features.js';
 import { createProjectsRouter } from './routes/projects.js';
 import { createProfileRouter } from './routes/profile.js';
 import { createTitleSuggestRouter } from './routes/title-suggest.js';
+import { createAutonomousCampaignsRouter } from './routes/autonomous-campaigns.js';
 import { createGitHubWebhookRouter } from './routes/github-webhook.js';
 import { createWebhookDispatcher } from './engine/webhook-dispatcher.js';
 import { authMiddleware } from './middleware/auth-middleware.js';
@@ -70,6 +71,7 @@ export function createApp(io: SocketServer, options: AppOptions = {}): express.E
   app.use(createProjectsRouter());
   app.use(createProfileRouter());
   app.use(createTitleSuggestRouter());
+  app.use(createAutonomousCampaignsRouter(io));
   app.use(createTasksRouter(io, options.specGenerator));
 
   return app;

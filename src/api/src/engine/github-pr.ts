@@ -205,6 +205,81 @@ export async function verifyRepositoryAccess(
   }
 }
 
+export async function verifyRepositoryBranchAccess(
+  ownerRepo: string,
+  branch: string,
+  timeoutMs = 8000,
+): Promise<
+  | { ok: true }
+  | { ok: false; status: number; reason: string }
+> {
+  const repository = ownerRepo
+    .trim()
+    .replace(/^https?:\/\/github\.com\//i, '')
+    .replace(/\.git$/i, '')
+    .replace(/\/+$/, '');
+  const normalizedBranch = branch.trim();
+  if (!normalizedBranch) {
+    return { ok: false, status: 400, reason: 'Base branch is required.' };
+  }
+
+  const repositoryAccess = await verifyRepositoryAccess(repository, timeoutMs);
+  if (!repositoryAccess.ok) return repositoryAccess;
+
+  let token: string;
+  try {
+    token = getToken();
+  } catch {
+    return { ok: false, status: 401, reason: 'No GitHub token configured on the server.' };
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(
+      `https://api.github.com/repos/${repository}/branches/${encodeURIComponent(normalizedBranch)}`,
+      {
+        headers: {
+          Authorization: ['Bearer', token].join(' '),
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+        },
+        signal: controller.signal,
+      },
+    );
+    if (response.status === 200) return { ok: true };
+    if (response.status === 404) {
+      return {
+        ok: false,
+        status: 404,
+        reason: `Branch "${normalizedBranch}" was not found in "${repository}".`,
+      };
+    }
+    if (response.status === 401 || response.status === 403) {
+      return {
+        ok: false,
+        status: response.status,
+        reason: `GitHub denied access to branch "${normalizedBranch}" in "${repository}" (HTTP ${response.status}).`,
+      };
+    }
+    const text = await response.text().catch(() => '');
+    return {
+      ok: false,
+      status: response.status,
+      reason: `GitHub returned HTTP ${response.status} for branch "${normalizedBranch}" in "${repository}": ${text.slice(0, 200)}`,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      status: 502,
+      reason: `Could not reach GitHub to verify branch "${normalizedBranch}" in "${repository}": ${message}`,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function openPullRequest(
   options: OpenPullRequestOptions,
 ): Promise<PullRequest> {

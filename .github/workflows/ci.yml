@@ -47,8 +47,10 @@ jobs:
       - name: Start API
         run: |
           cd src/api
-          JWT_SECRET=ci-jwt-secret COOKIE_SECURE=false REGISTRATION_ENABLED=true npm run dev > ../../api.log 2>&1 &
+          JWT_SECRET=ci-jwt-secret GITHUB_TOKEN="${GITHUB_TOKEN}" COOKIE_SECURE=false REGISTRATION_ENABLED=true npm run dev > ../../api.log 2>&1 &
           echo $! > ../../api.pid
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Start web
         run: |
@@ -80,12 +82,14 @@ jobs:
         env:
           API_URL: http://localhost:5001
           WEB_URL: http://localhost:3000
+          BDD_JWT_SECRET: ci-jwt-secret
 
       - name: Run Playwright tests
         run: npx playwright test --config=e2e/playwright.config.ts
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:3000
           PLAYWRIGHT_API_BASE_URL: http://localhost:5001
+          PLAYWRIGHT_JWT_SECRET: ci-jwt-secret
 
       - name: Upload test artifacts
         uses: actions/upload-artifact@v4

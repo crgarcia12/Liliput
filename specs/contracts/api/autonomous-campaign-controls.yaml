@@ -1,0 +1,214 @@
+feature: autonomous-campaign-controls
+increment: ext-001
+version: "1.0"
+basePath: /api/autonomous-campaigns
+exposure: authenticated-admin-http-and-socket
+description: >
+  Administrative HTTP and portal controls for configuring, inspecting, and
+  controlling durable autonomous campaigns. Starting a campaign creates its
+  first proposing cycle but never invokes an agent in this increment.
+
+authorization:
+  authentication: jwt-session
+  requiredRole: ADMIN
+  deniedResponse:
+    status: 403
+    body: AutonomousCampaignApiError
+    code: ADMIN_REQUIRED
+
+endpoints:
+  - method: GET
+    path: /api/autonomous-campaigns
+    operationId: listAutonomousCampaigns
+    responses:
+      200:
+        body: AutonomousCampaignListResponse
+      403:
+        body: AutonomousCampaignApiError
+
+  - method: POST
+    path: /api/autonomous-campaigns
+    operationId: createAutonomousCampaign
+    request:
+      body: CreateAutonomousCampaignRequest
+      required:
+        - repository
+        - baseBranch
+      validation:
+        repository: owner/repository
+        baseBranch: non-empty Git branch name accessible through configured GitHub credentials
+        ideaSources: non-empty subset of specs, code, issues, telemetry, ideation
+        modelConfig: at least one configured role; every model requires effective verified USD pricing
+        maxTurnsPerAttempt: positive integer, default 500
+        maxMinutesPerAttempt: positive integer, default 240
+        maxCostUsdPerAttempt: positive number, default 250
+    atomicity:
+      - Repository and branch validation completes before persistence.
+      - Model pricing validation and draft persistence occur atomically.
+    responses:
+      201:
+        body: CreateAutonomousCampaignResponse
+      400:
+        body: AutonomousCampaignApiError
+        codes:
+          - CAMPAIGN_VALIDATION_FAILED
+          - CAMPAIGN_BRANCH_INACCESSIBLE
+      403:
+        body: AutonomousCampaignApiError
+      409:
+        body: AutonomousCampaignApiError
+        code: ACTIVE_CAMPAIGN_EXISTS
+      422:
+        body: AutonomousCampaignApiError
+        code: CAMPAIGN_MODEL_UNPRICED
+
+  - method: GET
+    path: /api/autonomous-campaigns/:id
+    operationId: getAutonomousCampaign
+    parameters:
+      id:
+        type: string
+        format: uuid
+        required: true
+    responses:
+      200:
+        body: AutonomousCampaignDetailResponse
+      403:
+        body: AutonomousCampaignApiError
+      404:
+        body: AutonomousCampaignApiError
+        code: CAMPAIGN_NOT_FOUND
+
+  - method: POST
+    path: /api/autonomous-campaigns/:id/start
+    operationId: startAutonomousCampaign
+    precondition: campaign.status == draft
+    sideEffects:
+      - campaign status becomes running
+      - first cycle is created with sequence 1 and status proposing
+      - no attempt is created
+      - no model or external agent is invoked
+    responses:
+      200:
+        body: AutonomousCampaignDetailResponse
+      403:
+        body: AutonomousCampaignApiError
+      404:
+        body: AutonomousCampaignApiError
+      409:
+        body: AutonomousCampaignApiError
+        code: INVALID_CAMPAIGN_ACTION
+
+  - method: POST
+    path: /api/autonomous-campaigns/:id/pause
+    operationId: pauseAutonomousCampaign
+    precondition: campaign.status == running
+    sideEffects:
+      - campaign status becomes paused
+      - current cycle status becomes paused
+      - current cycle identity and usage counters are preserved
+    responses:
+      200:
+        body: AutonomousCampaignDetailResponse
+      403:
+        body: AutonomousCampaignApiError
+      404:
+        body: AutonomousCampaignApiError
+      409:
+        body: AutonomousCampaignApiError
+
+  - method: POST
+    path: /api/autonomous-campaigns/:id/resume
+    operationId: resumeAutonomousCampaign
+    precondition: campaign.status == paused
+    sideEffects:
+      - campaign status becomes running
+      - same paused cycle returns to its prior runnable status
+      - current cycle identity and usage counters are preserved
+    responses:
+      200:
+        body: AutonomousCampaignDetailResponse
+      403:
+        body: AutonomousCampaignApiError
+      404:
+        body: AutonomousCampaignApiError
+      409:
+        body: AutonomousCampaignApiError
+
+  - method: POST
+    path: /api/autonomous-campaigns/:id/stop
+    operationId: stopAutonomousCampaign
+    precondition: campaign.status != stopped
+    sideEffects:
+      - campaign status becomes stopped
+      - current non-terminal cycle becomes stopped
+      - start and resume are permanently unavailable for this campaign
+    responses:
+      200:
+        body: AutonomousCampaignDetailResponse
+      403:
+        body: AutonomousCampaignApiError
+      404:
+        body: AutonomousCampaignApiError
+      409:
+        body: AutonomousCampaignApiError
+
+socketEvents:
+  - name: autonomous-campaign:updated
+    payload: AutonomousCampaignEvent
+    actions:
+      - created
+      - started
+      - paused
+      - resumed
+      - stopped
+      - cycle-transitioned
+      - budget-updated
+      - attempt-updated
+      - waiting-reason-updated
+    delivery: broadcast from the existing API Socket.IO server
+
+errors:
+  ADMIN_REQUIRED:
+    status: 403
+    description: Authenticated user is not an administrator.
+  CAMPAIGN_VALIDATION_FAILED:
+    status: 400
+    description: Request input is missing, malformed, or outside allowed limits.
+  CAMPAIGN_BRANCH_INACCESSIBLE:
+    status: 400
+    description: Repository or base branch is missing or inaccessible.
+  CAMPAIGN_MODEL_UNPRICED:
+    status: 422
+    description: One or more configured models lacks effective verified pricing.
+  ACTIVE_CAMPAIGN_EXISTS:
+    status: 409
+    description: A non-stopped campaign already targets the repository and base branch.
+  CAMPAIGN_NOT_FOUND:
+    status: 404
+    description: Campaign id does not exist.
+  INVALID_CAMPAIGN_ACTION:
+    status: 409
+    description: Requested action is not valid for the persisted campaign state.
+
+scenarioMappings:
+  - scenario: Administrator creates a draft campaign with explicit limits
+    operations: [createAutonomousCampaign]
+  - scenario: Administrator starts a draft campaign without invoking an agent
+    operations: [startAutonomousCampaign, getAutonomousCampaign]
+  - scenario: Administrator pauses and resumes the same campaign cycle
+    operations: [pauseAutonomousCampaign, resumeAutonomousCampaign]
+  - scenario: Administrator permanently stops a running campaign
+    operations: [stopAutonomousCampaign]
+  - scenario: Administrator lists campaigns and opens campaign details
+    operations: [listAutonomousCampaigns, getAutonomousCampaign]
+  - scenario: Non-administrator cannot access campaign controls
+    operations: [listAutonomousCampaigns, createAutonomousCampaign]
+  - scenario: Campaign creation rejects an inaccessible branch
+    operations: [createAutonomousCampaign]
+  - scenario: Campaign creation rejects a model without effective pricing
+    operations: [createAutonomousCampaign]
+  - scenario: Only one active campaign can target a repository branch
+    operations: [createAutonomousCampaign]
+  - scenario: Campaign controls expose accessible labels and valid actions
+    operations: [getAutonomousCampaign]

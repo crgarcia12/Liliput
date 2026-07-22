@@ -53,6 +53,21 @@ export function authMiddleware(req: AuthRequest, res: Response, next: NextFuncti
   next();
 }
 
+export function requireAdmin(
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+): void {
+  if (req.user?.role !== 'ADMIN') {
+    res.status(403).json({
+      error: 'Administrator access is required.',
+      code: 'ADMIN_REQUIRED',
+    });
+    return;
+  }
+  next();
+}
+
 /** Optional auth middleware — doesn't fail if no token, but attaches user if present */
 export function optionalAuthMiddleware(
   req: AuthRequest,
