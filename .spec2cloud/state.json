@@ -290,7 +290,7 @@
     },
     "ext-pre-002": {
       "type": "extension-prerequisite",
-      "status": "in-progress",
+      "status": "implementation-review",
       "featureFiles": [
         "specs/features/autonomous-workstream-campaign-pricing.feature"
       ],
@@ -352,6 +352,72 @@
           "apiBuild": "pass",
           "webBuild": "pass",
           "completedAt": "2026-07-22T00:55:54Z"
+        },
+        "implementation": {
+          "status": "awaiting-human-approval",
+          "research": {
+            "effectivePricingLookup": "Resolve pricing synchronously at campaign creation and immediately before model turns using the price effective at the check time.",
+            "transactionPattern": "Use better-sqlite3 transaction.immediate() so pricing validation and campaign creation are one atomic write decision.",
+            "waitStatePattern": "Persist a pricing-specific waiting_for_external marker and restore only the same cycle's prior runnable status.",
+            "unknownPricePolicy": "Reject autonomous campaign models without pricing while preserving manual-task unpriced usage reporting.",
+            "sources": [
+              "https://github.com/WiseLibs/better-sqlite3/blob/master/docs/api.md",
+              "https://www.sqlite.org/lang_transaction.html",
+              "https://www.sqlite.org/lang_conflict.html"
+            ],
+            "packageUpdates": []
+          },
+          "slices": {
+            "api": {
+              "status": "done",
+              "modifiedFiles": [
+                "src/api/src/engine/autonomous-campaign-pricing.ts"
+              ],
+              "failingTests": [],
+              "lastTestRun": "2026-07-22T06:36:36Z",
+              "iteration": 2
+            },
+            "web": {
+              "status": "not-applicable",
+              "reason": "Campaign portal model selectors are scoped to ext-001."
+            },
+            "integration": {
+              "status": "done",
+              "modifiedFiles": [],
+              "failingTests": [],
+              "lastTestRun": "2026-07-22T06:36:36Z",
+              "iteration": 2
+            }
+          },
+          "review": {
+            "status": "pass",
+            "atomicCreationValidation": "implemented",
+            "leaseEnforcement": "implemented",
+            "pricingSpecificWaitRecovery": "implemented",
+            "manualTaskCompatibility": "preserved"
+          },
+          "regression": {
+            "api": {
+              "status": "pass",
+              "files": 39,
+              "tests": 414
+            },
+            "cucumber": {
+              "status": "pass",
+              "scenarios": 15,
+              "steps": 69
+            },
+            "playwright": {
+              "status": "pass",
+              "tests": 2
+            },
+            "apiBuild": "pass",
+            "apiLint": "pass",
+            "webBuild": "pass",
+            "webLint": "pass",
+            "skippedTests": 0
+          },
+          "completedAt": "2026-07-22T06:36:36Z"
         }
       }
     },
@@ -430,6 +496,7 @@
       "existingRegression": "28-pass",
       "testCodeApproval": "approved",
       "contracts": "pass",
+      "implementation": "pass",
       "vitest": "4-expected-failures",
       "cucumber": "3-expected-failures",
       "playwrightDiscovery": "2-tests"
@@ -518,5 +585,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-22T00:55:54Z"
+  "lastUpdated": "2026-07-22T06:36:36Z"
 }
