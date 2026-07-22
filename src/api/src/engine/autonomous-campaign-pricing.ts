@@ -128,7 +128,7 @@ export function createPricedCampaign(
     if (missingModels.length > 0) {
       throw new AutonomousCampaignPricingError(missingModels);
     }
-    return createCampaign(input);
+    return createCampaign(input, { occurredAt });
   });
   return create.immediate();
 }

@@ -15,6 +15,8 @@ import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
 import { logger } from '../logger.js';
+import { seedDefaultPricing } from './pricing-seed.js';
+import { backfillUsageCalls } from './usage-backfill.js';
 
 let _db: Database.Database | null = null;
 
@@ -558,12 +560,6 @@ export function getDb(): Database.Database {
     // cost rollup can price historical traffic. Idempotent on subsequent
     // boots (the WHERE clause filters out already-backfilled turns).
     try {
-      // Lazy import to avoid a circular dep at module init time
-      // (usage-backfill → logger → ... eventually → db).
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { backfillUsageCalls } = require('./usage-backfill.js') as {
-        backfillUsageCalls: (db: Database.Database) => { synthesised: number; skipped: number };
-      };
       backfillUsageCalls(_db);
     } catch (e) {
       logger.warn({ err: e }, 'turn_usage_call backfill failed (non-fatal)');
@@ -572,10 +568,6 @@ export function getDb(): Database.Database {
     // Seed the default GitHub Copilot price book if rows are missing. The
     // seed is idempotent — re-runs only matter if SEED_ROWS itself changes.
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { seedDefaultPricing } = require('./pricing-seed.js') as {
-        seedDefaultPricing: () => { inserted: number; models: number };
-      };
       const seedResult = seedDefaultPricing();
       logger.info(seedResult, 'Seeded default model_pricing rows');
     } catch (e) {

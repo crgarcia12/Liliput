@@ -1,11 +1,11 @@
-version: "1.1"
-increments: [ext-pre-001, ext-pre-002]
+version: "1.2"
+increments: [ext-pre-001, ext-pre-002, ext-001]
 target: azure-kubernetes-service
 description: >
-  Durable autonomous campaign state reuses Liliput's existing single-writer
-  SQLite database, model_pricing table, and Azure Disk PVC. Campaign pricing
-  eligibility adds no Azure resource, Kubernetes workload, secret, environment
-  variable, or network route.
+  Durable autonomous campaign state and admin controls reuse Liliput's existing
+  API, Web, Socket.IO server, single-writer SQLite database, model_pricing table,
+  gateway route, and Azure Disk PVC. ext-001 adds no Azure resource, Kubernetes
+  workload, secret, environment variable, or external network route.
 
 newResources: []
 newEnvironmentVariables: []
@@ -58,6 +58,37 @@ resources:
       - name: DB_PATH
         value: /data/liliput.db
 
+  - name: liliput-web
+    type: Kubernetes/apps/v1/Deployment
+    lifecycle: existing
+    description: Serves the authenticated /autonomy portal through the existing gateway.
+    sku:
+      name: existing-single-replica
+      justification: The campaign portal adds a lightweight client page and no new capacity requirement.
+    scaling:
+      minReplicas: 1
+      maxReplicas: 1
+    ingress:
+      external: false
+      servicePort: 3000
+
+  - name: liliput-gateway
+    type: Kubernetes/apps/v1/Deployment
+    lifecycle: existing
+    description: Routes /api and Socket.IO traffic to the API and portal traffic to Web.
+    sku:
+      name: existing-single-replica
+      justification: Campaign controls reuse existing HTTP and WebSocket paths.
+    ingress:
+      external: true
+      routes:
+        - path: /api/autonomous-campaigns
+          target: liliput-api
+        - path: /socket.io
+          target: liliput-api
+        - path: /autonomy
+          target: liliput-web
+
   - name: liliput-data
     type: Kubernetes/v1/PersistentVolumeClaim
     lifecycle: existing
@@ -80,6 +111,15 @@ dependencies:
   - from: liliput-api
     to: container-registry
     reason: The existing API image is pulled from ACR.
+  - from: liliput-web
+    to: liliput-api
+    reason: The Autonomy portal reads and mutates campaign state through authenticated API routes.
+  - from: liliput-gateway
+    to: liliput-api
+    reason: Existing API and Socket.IO routing carries campaign controls and live updates.
+  - from: liliput-gateway
+    to: liliput-web
+    reason: Existing portal routing serves the /autonomy page.
 
 constraints:
   - Campaign schema changes must be additive and backward compatible.
@@ -88,5 +128,7 @@ constraints:
   - Existing manual tasks may continue to record explicitly unpriced usage.
   - Existing task and workstream tables must remain readable without backfill loss.
   - The API deployment must retain Recreate strategy while using the ReadWriteOnce volume.
+  - All campaign control routes require authenticated ADMIN role.
+  - Starting a campaign in ext-001 must not invoke an LLM or create an attempt.
 
 gaps: []

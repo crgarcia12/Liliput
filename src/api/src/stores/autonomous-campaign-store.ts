@@ -291,9 +291,10 @@ function requireAttemptRow(attemptId: string): AttemptRow {
 
 export function createCampaign(
   input: CreateAutonomousCampaignInput,
+  options: { occurredAt?: string } = {},
 ): AutonomousCampaign {
   const db = getDb();
-  const ts = now();
+  const ts = options.occurredAt ?? now();
   const campaign: AutonomousCampaign = {
     id: uuid(),
     repository: input.repository.trim(),
@@ -372,11 +373,22 @@ export function getCampaign(id: string): AutonomousCampaign | undefined {
   return row ? hydrateCampaign(row) : undefined;
 }
 
+export function listCampaigns(): AutonomousCampaign[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT *
+         FROM autonomous_campaigns
+        ORDER BY created_at DESC, id DESC`,
+    )
+    .all() as CampaignRow[];
+  return rows.map(hydrateCampaign);
+}
+
 export function createCycle(
   input: CreateAutonomousCampaignCycleInput,
 ): AutonomousCampaignCycle {
   const db = getDb();
-  const ts = now();
+  const ts = new Date(input.nowMs ?? Date.now()).toISOString();
   const cycle: AutonomousCampaignCycle = {
     id: uuid(),
     campaignId: input.campaignId,
@@ -481,7 +493,7 @@ export function createAttempt(
     const cycle = requireCycleRow(input.cycleId);
     const campaign = requireCampaignRow(cycle.campaign_id);
     assertLeaseOwner(campaign, input.leaseOwner, input.nowMs);
-    const ts = now();
+    const ts = new Date(input.nowMs ?? Date.now()).toISOString();
     const attempt: AutonomousCampaignAttempt = {
       id: uuid(),
       cycleId: input.cycleId,
@@ -584,7 +596,7 @@ export function transitionCampaign(
     if (current.status !== input.expectedStatus) {
       result = { applied: false, campaign: current };
     } else {
-      const ts = now();
+      const ts = new Date(input.nowMs ?? Date.now()).toISOString();
       const clearLease = input.nextStatus === 'stopped';
       db.prepare(
         `UPDATE autonomous_campaigns

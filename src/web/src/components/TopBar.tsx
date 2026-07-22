@@ -27,6 +27,7 @@ const NAV: Array<{ href: string; label: string; icon: string }> = [
   { href: '/dashboard', label: 'Workstreams', icon: '📋' },
   { href: '/now', label: 'Now', icon: '⏱' },
   { href: '/dev-environments', label: 'Dev envs', icon: '☁️' },
+  { href: '/autonomy', label: 'Autonomy', icon: '🤖' },
   { href: '/verdicts', label: 'Verdicts', icon: '⚖️' },
   { href: '/tool-wishes', label: 'Tool wishes', icon: '🛠' },
   { href: '/profile/agents', label: 'Profile', icon: '⚙️' },

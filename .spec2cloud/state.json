@@ -461,7 +461,170 @@
     },
     "ext-001": {
       "type": "extension",
-      "status": "in-progress"
+      "status": "in-progress",
+      "featureFiles": [
+        "specs/features/autonomous-workstream-campaign-controls.feature"
+      ],
+      "scenarioCount": 10,
+      "steps": {
+        "tests": {
+          "status": "approved",
+          "e2eFiles": [
+            "e2e/autonomy.spec.ts",
+            "e2e/pages/autonomy.page.ts"
+          ],
+          "gherkinFiles": [
+            "specs/features/autonomous-workstream-campaign-controls.feature"
+          ],
+          "cucumberSteps": [
+            "tests/features/step-definitions/autonomous-workstream-campaign-controls.steps.ts"
+          ],
+          "vitestFiles": [
+            "src/api/tests/integration/autonomous-campaign-controls.test.ts"
+          ],
+          "redBaseline": {
+            "apiBuild": "pass",
+            "cucumberDryRun": {
+              "status": "pass",
+              "scenarios": 25,
+              "steps": 151
+            },
+            "vitest": {
+              "status": "expected-failure",
+              "filesFailed": 1,
+              "testsFailed": 10,
+              "testsPassed": 0
+            },
+            "playwrightDiscovery": {
+              "status": "pass",
+              "files": 2,
+              "tests": 4
+            },
+            "verifiedAt": "2026-07-22T07:07:20Z"
+          },
+          "approvedAt": "2026-07-22T07:07:20Z",
+          "approvalSource": "explicit-unattended-continuation"
+        },
+        "contracts": {
+          "status": "done",
+          "apiContracts": [
+            "specs/contracts/api/autonomous-campaign-controls.yaml"
+          ],
+          "sharedTypes": [
+            "src/shared/types/autonomous-campaign-controls.ts"
+          ],
+          "infraContract": "specs/contracts/infra/resources.yaml",
+          "infraUpdated": true,
+          "newResources": [],
+          "newEnvironmentVariables": [],
+          "bicepChangesRequired": false,
+          "kubernetesManifestChangesRequired": false,
+          "apiBuild": "pass",
+          "webBuild": "pass",
+          "completedAt": "2026-07-22T07:12:00Z"
+        },
+        "implementation": {
+          "status": "approved",
+          "research": {
+            "authorizationPattern": "Mount router-level ADMIN middleware across the complete campaign control surface.",
+            "repositoryValidation": "Use the GitHub branch endpoint with configured credentials before campaign persistence.",
+            "socketPattern": "Broadcast serializable campaign detail events through the existing Socket.IO server.",
+            "webPattern": "Use a Next.js Client Component for interactive controls, browser authentication, and live Socket.IO refreshes.",
+            "sources": [
+              "https://expressjs.com/en/guide/using-middleware/",
+              "https://socket.io/docs/v4/emitting-events/",
+              "https://docs.github.com/en/rest/branches/branches#get-a-branch",
+              "https://nextjs.org/docs/app/getting-started/server-and-client-components"
+            ],
+            "packageUpdates": []
+          },
+          "slices": {
+            "api": {
+              "status": "done",
+              "modifiedFiles": [
+                "src/api/src/routes/autonomous-campaigns.ts",
+                "src/api/src/engine/autonomous-campaign-control.ts",
+                "src/api/src/engine/github-pr.ts",
+                "src/api/src/middleware/auth-middleware.ts",
+                "src/api/src/stores/autonomous-campaign-store.ts",
+                "src/api/src/stores/db.ts",
+                "src/api/src/app.ts"
+              ],
+              "failingTests": [],
+              "lastTestRun": "2026-07-22T07:44:57Z",
+              "iteration": 4
+            },
+            "web": {
+              "status": "done",
+              "modifiedFiles": [
+                "src/web/src/app/autonomy/page.tsx",
+                "src/web/src/components/TopBar.tsx"
+              ],
+              "failingTests": [],
+              "lastTestRun": "2026-07-22T07:36:00Z",
+              "iteration": 1
+            },
+            "integration": {
+              "status": "done",
+              "modifiedFiles": [
+                ".github/workflows/ci.yml",
+                "e2e/autonomy.spec.ts",
+                "e2e/pages/autonomy.page.ts",
+                "tests/features/step-definitions/autonomous-workstream-campaign-controls.steps.ts"
+              ],
+              "failingTests": [],
+              "lastTestRun": "2026-07-22T07:46:18Z",
+              "iteration": 3
+            }
+          },
+          "review": {
+            "status": "pass",
+            "pullRequest": "https://github.com/crgarcia12/Liliput/pull/99",
+            "adminAuthorization": "implemented",
+            "validationBeforePersistence": "implemented",
+            "startWithoutAgentInvocation": "implemented",
+            "sameCyclePauseResume": "implemented",
+            "terminalStop": "implemented",
+            "humanApproval": {
+              "status": "approved",
+              "approvedAt": "2026-07-22T07:47:39Z",
+              "approvalSource": "explicit-unattended-continuation"
+            }
+          },
+          "regression": {
+            "api": {
+              "status": "pass",
+              "files": 40,
+              "tests": 424
+            },
+            "cucumber": {
+              "status": "pass",
+              "scenarios": 25,
+              "steps": 151
+            },
+            "playwright": {
+              "status": "pass",
+              "tests": 4
+            },
+            "apiBuild": "pass",
+            "apiLint": "pass",
+            "webBuild": "pass",
+            "webLint": "pass",
+            "skippedTests": 0,
+            "ci": {
+              "status": "fix-validated",
+              "attempt": 1,
+              "run": "https://github.com/crgarcia12/Liliput/actions/runs/29901674475",
+              "failure": "Cucumber UI scenario timed out because the CI web client used a cross-origin API URL with credentialed requests instead of the existing same-origin Next.js API proxy.",
+              "localValidation": "Campaign controls UI scenario passed through the same-origin proxy: 1 scenario, 7 steps."
+            }
+          },
+          "completedAt": "2026-07-22T07:47:39Z"
+        },
+        "verification": {
+          "status": "pending"
+        }
+      }
     },
     "ext-002": {
       "type": "extension",
@@ -506,7 +669,10 @@
     "ext-pre-002-gherkin-approved": true,
     "ext-pre-002-tests-approved": true,
     "ext-pre-002-implementation-approved": true,
-    "ext-pre-002-deployment-approved": true
+    "ext-pre-002-deployment-approved": true,
+    "ext-001-gherkin-approved": true,
+    "ext-001-tests-approved": true,
+    "ext-001-implementation-approved": true
   },
   "testsStatus": {
     "reviewerConfigAndCliAuth": {
@@ -542,6 +708,18 @@
       "vitest": "4-expected-failures",
       "cucumber": "3-expected-failures",
       "playwrightDiscovery": "2-tests"
+    },
+    "autonomousCampaignControls": {
+      "apiBuild": "pass",
+      "cucumberDryRun": "pass",
+      "redBaseline": "confirmed",
+      "testCodeApproval": "approved",
+      "contracts": "pass",
+      "implementation": "pass",
+      "implementationApproval": "approved",
+      "apiTests": "424-pass",
+      "cucumber": "25-scenarios-151-steps-pass",
+      "playwright": "4-pass"
     }
   },
   "extensions": {
