@@ -612,17 +612,83 @@
             "webLint": "pass",
             "skippedTests": 0,
             "ci": {
-              "status": "fix-validated",
-              "attempt": 1,
-              "run": "https://github.com/crgarcia12/Liliput/actions/runs/29901674475",
-              "failure": "Cucumber UI scenario timed out because the CI web client used a cross-origin API URL with credentialed requests instead of the existing same-origin Next.js API proxy.",
+              "status": "pass",
+              "attempts": 2,
+              "successfulRun": "https://github.com/crgarcia12/Liliput/actions/runs/29902361138",
+              "failedRuns": [
+                {
+                  "run": "https://github.com/crgarcia12/Liliput/actions/runs/29901674475",
+                  "failure": "Cucumber UI scenario timed out because the CI web client used a cross-origin API URL with credentialed requests instead of the existing same-origin Next.js API proxy."
+                }
+              ],
               "localValidation": "Campaign controls UI scenario passed through the same-origin proxy: 1 scenario, 7 steps."
             }
           },
           "completedAt": "2026-07-22T07:47:39Z"
         },
         "verification": {
-          "status": "pending"
+          "status": "retrying",
+          "attempts": [
+            {
+              "attempt": 1,
+              "commitSha": "4cf4789f9397d27b5d4d7e92ef72e5ad6d8c020a",
+              "workflowRun": "https://github.com/crgarcia12/Liliput/actions/runs/29902517931",
+              "rollout": "pass",
+              "cluster": {
+                "powerState": "Running",
+                "provisioningState": "Succeeded",
+                "readyNodes": 4
+              },
+              "smokeTests": {
+                "status": "pass",
+                "root": 200,
+                "apiHealth": 200,
+                "autonomy": 302
+              },
+              "playwright": {
+                "status": "fail",
+                "passed": 3,
+                "failed": 1,
+                "failure": "The production HTTP/2 response had an empty statusText, so the non-admin portal displayed a generic API error instead of Admin access required."
+              },
+              "rollback": {
+                "status": "pass",
+                "commitSha": "50840bf6ef0544319a8dab9287b1cc46cf7bdd93",
+                "apiHealth": 200
+              },
+              "issue": "https://github.com/crgarcia12/Liliput/issues/100"
+            }
+          ],
+          "remediation": {
+            "status": "validated",
+            "branch": "liliput/fix-autonomy-admin-error",
+            "pullRequest": "https://github.com/crgarcia12/Liliput/pull/101",
+            "research": {
+              "finding": "Fetch Response.statusText can be empty for HTTP/2 responses; error classification must use the numeric Response.status.",
+              "sources": [
+                "https://developer.mozilla.org/en-US/docs/Web/API/Response/status",
+                "https://developer.mozilla.org/en-US/docs/Web/API/Response/statusText",
+                "https://fetch.spec.whatwg.org/"
+              ],
+              "packageUpdates": []
+            },
+            "implementation": {
+              "status": "done",
+              "files": [
+                "src/web/src/lib/api-client.ts"
+              ],
+              "behavior": "All generic API client failures now include the numeric HTTP status and optional status text.",
+              "validation": {
+                "webBuild": "pass",
+                "webLint": "pass",
+                "playwright": {
+                  "status": "pass",
+                  "tests": 4
+                }
+              },
+              "completedAt": "2026-07-22T08:19:55Z"
+            }
+          }
         }
       }
     },
