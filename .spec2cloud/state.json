@@ -1209,7 +1209,67 @@
     },
     "ext-004": {
       "type": "extension",
-      "status": "in-progress"
+      "status": "in-progress",
+      "steps": {
+        "tests": {
+          "status": "approved",
+          "e2e": {
+            "status": "done",
+            "flowCount": 0,
+            "newSpecFiles": [],
+            "newPageObjects": [],
+            "reason": "Workstream handoff and pipeline completion detection are internal coordinator capabilities with no new operator UI journey.",
+            "existingPlaywrightSuite": "4-discovered"
+          },
+          "gherkin": {
+            "status": "approved",
+            "featureFiles": [
+              "specs/features/autonomous-campaign-workstream-handoff.feature"
+            ],
+            "scenarioCount": 12,
+            "approvedAt": "2026-07-22T11:30:27Z",
+            "approvalSource": "explicit-unattended-continuation"
+          },
+          "cucumberSteps": [
+            "tests/features/step-definitions/autonomous-campaign-workstream-handoff.steps.ts"
+          ],
+          "vitestFiles": [
+            "src/api/tests/unit/autonomous-campaign-workstream-handoff.test.ts"
+          ],
+          "redBaseline": {
+            "apiBuild": "pass",
+            "cucumberDryRun": {
+              "status": "pass",
+              "scenarios": 12,
+              "steps": 84,
+              "undefined": 0,
+              "ambiguous": 0
+            },
+            "cucumber": {
+              "status": "expected-failure",
+              "scenariosFailed": 12,
+              "scenariosPassed": 0,
+              "stepsFailed": 12,
+              "reason": "The autonomous campaign coordinator module does not exist yet."
+            },
+            "vitest": {
+              "status": "expected-failure",
+              "filesFailed": 1,
+              "testsFailed": 13,
+              "testsPassed": 0,
+              "reason": "The autonomous campaign coordinator module does not exist yet."
+            },
+            "playwrightDiscovery": {
+              "status": "pass",
+              "files": 2,
+              "tests": 4
+            },
+            "verifiedAt": "2026-07-22T13:53:07Z"
+          },
+          "approvedAt": "2026-07-22T13:53:07Z",
+          "approvalSource": "explicit-unattended-continuation"
+        }
+      }
     },
     "ext-005": {
       "type": "extension",
@@ -1254,7 +1314,9 @@
     "ext-003-gherkin-approved": true,
     "ext-003-tests-approved": true,
     "ext-003-implementation-approved": true,
-    "ext-003-deployment-approved": true
+    "ext-003-deployment-approved": true,
+    "ext-004-gherkin-approved": true,
+    "ext-004-tests-approved": true
   },
   "testsStatus": {
     "reviewerConfigAndCliAuth": {
