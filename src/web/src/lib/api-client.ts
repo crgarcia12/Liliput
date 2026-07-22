@@ -18,6 +18,13 @@ interface FetchOptions extends RequestInit {
   includeAuth?: boolean;
 }
 
+function requestError(method: string, endpoint: string, response: Response): Error {
+  const status = response.statusText
+    ? `${response.status} ${response.statusText}`
+    : String(response.status);
+  return new Error(`${method} ${endpoint} failed: ${status}`);
+}
+
 /** Get JWT token from localStorage */
 function getToken(): string | null {
   if (typeof window === 'undefined') return null;
@@ -112,7 +119,7 @@ export function logout(): void {
 export async function get<T>(endpoint: string): Promise<T> {
   const response = await apiFetch(endpoint);
   if (!response.ok) {
-    throw new Error(`GET ${endpoint} failed: ${response.statusText}`);
+    throw requestError('GET', endpoint, response);
   }
   return response.json() as Promise<T>;
 }
@@ -128,7 +135,7 @@ export async function post<T>(
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   if (!response.ok) {
-    throw new Error(`POST ${endpoint} failed: ${response.statusText}`);
+    throw requestError('POST', endpoint, response);
   }
   return response.json() as Promise<T>;
 }
@@ -182,7 +189,7 @@ export async function put<T>(
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   if (!response.ok) {
-    throw new Error(`PUT ${endpoint} failed: ${response.statusText}`);
+    throw requestError('PUT', endpoint, response);
   }
   return response.json() as Promise<T>;
 }
@@ -191,7 +198,7 @@ export async function put<T>(
 export async function del<T>(endpoint: string): Promise<T> {
   const response = await apiFetch(endpoint, { method: 'DELETE' });
   if (!response.ok) {
-    throw new Error(`DELETE ${endpoint} failed: ${response.statusText}`);
+    throw requestError('DELETE', endpoint, response);
   }
   return response.json() as Promise<T>;
 }
