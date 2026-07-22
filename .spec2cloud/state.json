@@ -290,7 +290,142 @@
     },
     "ext-pre-002": {
       "type": "extension-prerequisite",
-      "status": "in-progress"
+      "status": "verification",
+      "featureFiles": [
+        "specs/features/autonomous-workstream-campaign-pricing.feature"
+      ],
+      "scenarioCount": 3,
+      "steps": {
+        "tests": {
+          "status": "approved",
+          "gherkinFiles": [
+            "specs/features/autonomous-workstream-campaign-pricing.feature"
+          ],
+          "cucumberSteps": [
+            "tests/features/step-definitions/autonomous-workstream-campaign-pricing.steps.ts"
+          ],
+          "vitestFiles": [
+            "src/api/tests/unit/autonomous-campaign-pricing.test.ts"
+          ],
+          "redBaseline": {
+            "apiBuild": "pass",
+            "cucumber": {
+              "status": "expected-failure",
+              "scenariosFailed": 3,
+              "scenariosPassed": 0,
+              "stepsFailed": 3,
+              "stepsSkipped": 13
+            },
+            "vitest": {
+              "status": "expected-failure",
+              "filesFailed": 1,
+              "testsFailed": 4,
+              "testsPassed": 0
+            },
+            "existingRegression": {
+              "status": "pass",
+              "filesPassed": 3,
+              "testsPassed": 28
+            },
+            "playwrightDiscovery": {
+              "status": "pass",
+              "files": 1,
+              "tests": 2
+            },
+            "verifiedAt": "2026-07-21T23:28:39Z"
+          },
+          "approvedAt": "2026-07-21T23:28:39Z",
+          "approvalSource": "explicit-unattended-continuation"
+        },
+        "contracts": {
+          "status": "done",
+          "apiContracts": [
+            "specs/contracts/api/autonomous-campaign-pricing.yaml"
+          ],
+          "sharedTypes": [
+            "src/shared/types/autonomous-campaign-pricing.ts"
+          ],
+          "infraContract": "specs/contracts/infra/resources.yaml",
+          "infraUpdated": false,
+          "newResources": [],
+          "newEnvironmentVariables": [],
+          "apiBuild": "pass",
+          "webBuild": "pass",
+          "completedAt": "2026-07-22T00:55:54Z"
+        },
+        "implementation": {
+          "status": "approved",
+          "research": {
+            "effectivePricingLookup": "Resolve pricing synchronously at campaign creation and immediately before model turns using the price effective at the check time.",
+            "transactionPattern": "Use better-sqlite3 transaction.immediate() so pricing validation and campaign creation are one atomic write decision.",
+            "waitStatePattern": "Persist a pricing-specific waiting_for_external marker and restore only the same cycle's prior runnable status.",
+            "unknownPricePolicy": "Reject autonomous campaign models without pricing while preserving manual-task unpriced usage reporting.",
+            "sources": [
+              "https://github.com/WiseLibs/better-sqlite3/blob/master/docs/api.md",
+              "https://www.sqlite.org/lang_transaction.html",
+              "https://www.sqlite.org/lang_conflict.html"
+            ],
+            "packageUpdates": []
+          },
+          "slices": {
+            "api": {
+              "status": "done",
+              "modifiedFiles": [
+                "src/api/src/engine/autonomous-campaign-pricing.ts"
+              ],
+              "failingTests": [],
+              "lastTestRun": "2026-07-22T06:36:36Z",
+              "iteration": 2
+            },
+            "web": {
+              "status": "not-applicable",
+              "reason": "Campaign portal model selectors are scoped to ext-001."
+            },
+            "integration": {
+              "status": "done",
+              "modifiedFiles": [],
+              "failingTests": [],
+              "lastTestRun": "2026-07-22T06:36:36Z",
+              "iteration": 2
+            }
+          },
+          "review": {
+            "status": "pass",
+            "atomicCreationValidation": "implemented",
+            "leaseEnforcement": "implemented",
+            "pricingSpecificWaitRecovery": "implemented",
+            "manualTaskCompatibility": "preserved",
+            "humanApproval": {
+              "status": "approved",
+              "approvedAt": "2026-07-22T06:37:42Z",
+              "approvalSource": "explicit-unattended-continuation",
+              "pullRequest": "https://github.com/crgarcia12/Liliput/pull/98"
+            }
+          },
+          "regression": {
+            "api": {
+              "status": "pass",
+              "files": 39,
+              "tests": 414
+            },
+            "cucumber": {
+              "status": "pass",
+              "scenarios": 15,
+              "steps": 69
+            },
+            "playwright": {
+              "status": "pass",
+              "tests": 2
+            },
+            "apiBuild": "pass",
+            "apiLint": "pass",
+            "webBuild": "pass",
+            "webLint": "pass",
+            "skippedTests": 0
+          },
+          "completedAt": "2026-07-22T06:36:36Z"
+        }
+      }
     },
     "ext-001": {
       "type": "extension",
@@ -335,7 +470,10 @@
     "ext-pre-001-gherkin-approved": true,
     "ext-pre-001-tests-approved": true,
     "ext-pre-001-implementation-approved": true,
-    "ext-pre-001-deployment-approved": true
+    "ext-pre-001-deployment-approved": true,
+    "ext-pre-002-gherkin-approved": true,
+    "ext-pre-002-tests-approved": true,
+    "ext-pre-002-implementation-approved": true
   },
   "testsStatus": {
     "reviewerConfigAndCliAuth": {
@@ -354,10 +492,22 @@
       "contracts": "pass",
       "implementation": "pass",
       "implementationApproval": "approved",
+      "implementationApproval": "approved",
       "deployment": "pass",
       "apiTests": "410-pass",
       "cucumber": "12-scenarios-53-steps-pass",
       "playwright": "2-pass"
+    },
+    "autonomousCampaignPricing": {
+      "apiBuild": "pass",
+      "redBaseline": "confirmed",
+      "existingRegression": "28-pass",
+      "testCodeApproval": "approved",
+      "contracts": "pass",
+      "implementation": "pass",
+      "vitest": "4-expected-failures",
+      "cucumber": "3-expected-failures",
+      "playwrightDiscovery": "2-tests"
     }
   },
   "extensions": {
@@ -443,5 +593,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-21T23:21:32Z"
+  "lastUpdated": "2026-07-22T06:37:42Z"
 }
