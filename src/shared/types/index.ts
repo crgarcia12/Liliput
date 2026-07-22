@@ -4,6 +4,7 @@ export * from './autonomous-campaign-state.js';
 export * from './autonomous-campaign-pricing.js';
 export * from './autonomous-campaign-controls.js';
 export * from './autonomous-campaign-evidence.js';
+export * from './autonomous-campaign-proposal.js';
 
 // ─── Workstream (groups Tasks for a repo) ─────────────────────
 

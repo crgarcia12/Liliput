@@ -1049,6 +1049,27 @@
           },
           "approvedAt": "2026-07-22T10:19:10Z",
           "approvalSource": "explicit-unattended-continuation"
+        },
+        "contracts": {
+          "status": "done",
+          "apiContracts": [
+            "specs/contracts/api/autonomous-campaign-feature-proposal.yaml"
+          ],
+          "sharedTypes": [
+            "src/shared/types/autonomous-campaign-proposal.ts"
+          ],
+          "infraContract": "specs/contracts/infra/resources.yaml",
+          "infraUpdated": true,
+          "newResources": [],
+          "newEnvironmentVariables": [],
+          "newSecrets": [],
+          "newModelDeployments": [],
+          "bicepChangesRequired": false,
+          "kubernetesManifestChangesRequired": false,
+          "apiBuild": "pass",
+          "webBuild": "pass",
+          "yamlValidation": "pass",
+          "completedAt": "2026-07-22T10:25:13Z"
         }
       }
     },
@@ -1258,5 +1279,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-22T10:19:10Z"
+  "lastUpdated": "2026-07-22T10:25:13Z"
 }

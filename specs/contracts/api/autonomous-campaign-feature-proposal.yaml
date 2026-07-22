@@ -1,0 +1,219 @@
+feature: autonomous-campaign-feature-proposal
+increment: ext-003
+version: "1.0"
+basePath: /api/autonomous-campaigns
+exposure: internal-only
+description: >
+  Generates structured feature candidates from one persisted evidence snapshot,
+  obtains an independent critic decision, and atomically persists either one
+  accepted medium-or-smaller proposal or the rejected-candidate history. This
+  increment does not add an HTTP route, workstream, task, branch, or deployment.
+
+endpoints: []
+
+internalOperations:
+  - operationId: generateAndCritiqueCampaignProposal
+    input: GenerateAndCritiqueCampaignProposalInput
+    output: CampaignProposalResult
+    preconditions:
+      - campaign exists and is running
+      - cycle exists, belongs to the campaign, and is proposing
+      - cycle has a persisted evidence snapshot and base SHA
+    idempotency:
+      key: cycleId
+      replayBehavior: >
+        Return the existing accepted proposal with status replayed without
+        invoking the candidate generator or critic and without creating a cycle.
+    agentFlow:
+      candidateGenerator:
+        input:
+          evidenceSnapshot: exact persisted AutonomousCampaignEvidenceSnapshot
+          baseSha: exact SHA stored with the evidence snapshot
+          modelConfig: exact AutonomousCampaignModelConfig supplied by the caller
+        output: CampaignFeatureCandidateSet
+      critic:
+        isolation: separate invocation from candidate generation
+        input:
+          candidates: schema-valid generated candidates
+          evidenceSnapshot: exact persisted AutonomousCampaignEvidenceSnapshot
+          fingerprints: deterministic fingerprint keyed by candidate ID
+        output: CampaignProposalCriticDecision
+    behavior:
+      - Validate the complete candidate set before invoking the critic.
+      - Calculate deterministic fingerprints before duplicate and critic checks.
+      - Apply mandatory policy rejection independently of critic selection.
+      - Accept at most one critic-selected small or medium candidate.
+      - Persist every rejected candidate with its rejection reason.
+      - Leave a fully rejected cycle in proposing status.
+      - Never create a workstream or task.
+
+  - operationId: calculateCampaignProposalFingerprint
+    input: CampaignProposalFingerprintInput
+    output:
+      type: string
+      format: lowercase-sha256-hex
+    canonicalization:
+      - lowercase title, problem, and scope entries
+      - trim leading and trailing whitespace
+      - collapse internal whitespace to one space
+      - sort normalized scope entries lexicographically
+      - hash canonical JSON containing title, problem, and scope
+
+  - operationId: getCampaignProposalHistory
+    input:
+      cycleId: uuid
+    output: CampaignProposalHistoryEntry[]
+    ordering: persisted decision order
+
+  - operationId: resetAutonomousCampaignProposalStore
+    input: none
+    output: void
+    availability: test-only
+
+validation:
+  CampaignFeatureCandidate:
+    required:
+      - id
+      - title
+      - problem
+      - evidence
+      - targetUsers
+      - userValue
+      - scope
+      - nonGoals
+      - acceptanceCriteria
+      - affectedComponents
+      - likelyTests
+      - risks
+      - rollback
+      - size
+    constraints:
+      - all string fields must be non-empty after trimming
+      - all required arrays must contain at least one non-empty string
+      - size must be small, medium, or large
+      - candidate IDs must be unique within one generated set
+  CampaignProposalCriticDecision:
+    constraints:
+      - selectedCandidateId must identify a generated candidate when present
+      - every rejection must identify a generated candidate
+      - a selected candidate cannot also be rejected
+      - every unselected candidate must have a rejection when no candidate is selected
+
+mandatoryRejections:
+  duplicate:
+    when: fingerprint is present in knownFingerprints
+  repository-deletion:
+    when: deletesRepository is true
+  secret-disclosure:
+    when: disclosesSecrets is true
+  security-weakening:
+    when: weakensSecurity is true
+  test-weakening:
+    when: weakensTests is true
+  irreversible-change:
+    when: reversible is false
+  untestable:
+    when: verifiable is false
+  oversized:
+    when: size is large
+  unsupported:
+    when: critic rejects a candidate for another evidence-based reason
+
+nonCategoryBlocks:
+  - authentication files
+  - workflow files
+  - permission files
+
+acceptedProposal:
+  type: AcceptedCampaignProposal
+  required:
+    - candidateId
+    - title
+    - problem
+    - evidence
+    - targetUsers
+    - userValue
+    - scope
+    - nonGoals
+    - acceptanceCriteria
+    - affectedComponents
+    - likelyTests
+    - risks
+    - rollback
+    - size
+    - fingerprint
+    - evidenceSnapshotId
+    - baseSha
+  size: [small, medium]
+
+persistence:
+  table: autonomous_cycles
+  existingColumns:
+    - name: proposal_json
+      type: TEXT
+      nullable: true
+    - name: proposal_fingerprint
+      type: TEXT
+      nullable: true
+    - name: base_sha
+      type: TEXT
+      nullable: true
+    - name: evidence_snapshot_json
+      type: TEXT
+      nullable: true
+  additiveColumns:
+    - name: proposal_history_json
+      type: TEXT
+      nullable: true
+      defaultSemantics: empty history
+  atomicAcceptedWrite:
+    - proposal_json
+    - proposal_fingerprint
+    - proposal_history_json
+    - updated_at
+  atomicRejectedWrite:
+    - proposal_history_json
+    - updated_at
+  writeGuard:
+    - campaign status is running
+    - cycle status is proposing
+    - evidence_snapshot_json is not null
+    - base_sha is not null
+    - proposal_json is null for a new decision
+  transaction: BEGIN IMMEDIATE
+
+errors:
+  evidence-required:
+    description: The proposing cycle has no persisted evidence snapshot or base SHA.
+  invalid-structured-output:
+    description: Candidate or critic output does not satisfy the structured contract.
+  campaign-not-running:
+    description: The campaign is not in running status.
+  cycle-not-proposing:
+    description: The cycle is not in proposing status.
+  campaign-cycle-mismatch:
+    description: The cycle does not belong to the requested campaign.
+  proposal-conflict:
+    description: Concurrent persistence won the cycle before this operation committed.
+
+scenarioMappings:
+  - scenario: Meta-agent evidence produces one accepted medium feature
+    operations: [generateAndCritiqueCampaignProposal]
+  - scenario: Critic selects one candidate from a structured candidate set
+    operations: [generateAndCritiqueCampaignProposal, getCampaignProposalHistory]
+  - scenario: Critic rejects prohibited or unverifiable work
+    operations: [generateAndCritiqueCampaignProposal, getCampaignProposalHistory]
+  - scenario: Sensitive files are not category-blocked
+    operations: [generateAndCritiqueCampaignProposal]
+  - scenario: Critic rejects a feature already delivered by the campaign
+    operations: [calculateCampaignProposalFingerprint, generateAndCritiqueCampaignProposal]
+  - scenario: Normalized proposal fingerprints are deterministic
+    operations: [calculateCampaignProposalFingerprint]
+  - scenario: All rejected candidates remain inspectable without starting delivery
+    operations: [generateAndCritiqueCampaignProposal, getCampaignProposalHistory]
+  - scenario: Replaying accepted proposal generation is idempotent
+    operations: [generateAndCritiqueCampaignProposal]
+  - scenario: Proposal generation requires persisted evidence
+    operations: [generateAndCritiqueCampaignProposal]
+  - scenario: Invalid structured agent output cannot mutate the cycle
+    operations: [generateAndCritiqueCampaignProposal]

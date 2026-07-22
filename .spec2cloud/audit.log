@@ -148,3 +148,4 @@
 [2026-07-22T10:19:10Z] increment=ext-003 step=tests action=test-generation result=done cucumberSteps=1 vitestFiles=1
 [2026-07-22T10:19:10Z] increment=ext-003 step=tests action=red-baseline result=confirmed apiBuild=pass cucumberDryRun=16-scenarios-135-steps cucumber=16-failed vitest=20-failed playwrightDiscovered=4
 [2026-07-22T10:19:10Z] increment=ext-003 step=tests action=human-gate result=approved artifacts=gherkin,cucumber-steps,vitest-tests approvalSource=explicit-unattended-continuation nextStep=contracts
+[2026-07-22T10:25:13Z] increment=ext-003 step=contracts action=contracts-generated result=done apiContracts=1 sharedTypes=1 infraResources=existing-only newEnvironmentVariables=0 apiBuild=pass webBuild=pass yamlValidation=pass
