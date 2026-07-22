@@ -298,6 +298,7 @@ CREATE TABLE IF NOT EXISTS autonomous_cycles (
   proposal_json         TEXT,
   proposal_fingerprint  TEXT,
   base_sha              TEXT,
+  evidence_snapshot_json TEXT,
   workstream_id         TEXT,
   task_id               TEXT,
   branch_name           TEXT,
@@ -449,6 +450,19 @@ export function getDb(): Database.Database {
     if (!turnCols.some((c) => c.name === 'reviewer_reasoning_effort')) {
       _db.exec(`ALTER TABLE turns ADD COLUMN reviewer_reasoning_effort TEXT`);
       logger.info({}, 'Migrated: added reviewer_reasoning_effort column to turns');
+    }
+
+    const cycleCols = _db
+      .prepare(`PRAGMA table_info(autonomous_cycles)`)
+      .all() as Array<{ name: string }>;
+    if (!cycleCols.some((c) => c.name === 'evidence_snapshot_json')) {
+      _db.exec(
+        `ALTER TABLE autonomous_cycles ADD COLUMN evidence_snapshot_json TEXT`,
+      );
+      logger.info(
+        {},
+        'Migrated: added evidence_snapshot_json column to autonomous_cycles',
+      );
     }
 
     // ─── PM / Dev / RM agent loop — issue + webhook tracking ───────────────

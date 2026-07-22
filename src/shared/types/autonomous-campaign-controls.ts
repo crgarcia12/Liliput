@@ -4,6 +4,7 @@ import type {
   AutonomousCampaignCycle,
   CreateAutonomousCampaignInput,
 } from './autonomous-campaign-state.js';
+import type { AutonomousCampaignEvidenceSnapshot } from './autonomous-campaign-evidence.js';
 
 export type AutonomousCampaignAction = 'start' | 'pause' | 'resume' | 'stop';
 
@@ -47,6 +48,7 @@ export interface AutonomousCampaignDetailResponse {
   campaign: AutonomousCampaignWithUsage;
   cycle: AutonomousCampaignCycle | null;
   attempts: AutonomousCampaignAttempt[];
+  evidenceSnapshot?: AutonomousCampaignEvidenceSnapshot | null;
   allowedActions: AutonomousCampaignAction[];
 }
 
