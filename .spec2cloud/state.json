@@ -662,6 +662,7 @@
           "remediation": {
             "status": "validated",
             "branch": "liliput/fix-autonomy-admin-error",
+            "pullRequest": "https://github.com/crgarcia12/Liliput/pull/101",
             "research": {
               "finding": "Fetch Response.statusText can be empty for HTTP/2 responses; error classification must use the numeric Response.status.",
               "sources": [
