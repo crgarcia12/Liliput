@@ -137,3 +137,9 @@
 [2026-07-22T09:28:32Z] increment=ext-002 step=implementation action=focused-review result=pass delimiterAttributes=neutralized concurrentPersistence=immediate-transaction issueQuery=no-empty-label-filter
 [2026-07-22T09:28:32Z] increment=ext-002 step=implementation action=full-regression result=pass api=41-files-432-tests cucumber=32-scenarios-203-steps playwright=4 apiBuild=pass apiLint=pass webBuild=pass skipped=0
 [2026-07-22T09:28:32Z] increment=ext-002 step=implementation action=human-gate result=approved approvalSource=explicit-unattended-continuation nextStep=verification
+[2026-07-22T09:37:38Z] increment=ext-002 step=verification action=pull-request-merged result=success pr=https://github.com/crgarcia12/Liliput/pull/102 mergeCommit=9a1efb4c3f12de099c843f53a8b45618948a0f28 ci=https://github.com/crgarcia12/Liliput/actions/runs/29908547345
+[2026-07-22T09:44:44Z] increment=ext-002 step=verification action=aks-deploy result=success workflow=https://github.com/crgarcia12/Liliput/actions/runs/29908718191 url=https://liliput.crgarcia.com.ar apiImage=9a1efb4c3f12de099c843f53a8b45618948a0f28 webImage=9a1efb4c3f12de099c843f53a8b45618948a0f28
+[2026-07-22T09:48:14Z] increment=ext-002 step=verification action=production-smoke-tests result=pass:4/fail:0 root=200 apiHealth=200 autonomy=302 https=true
+[2026-07-22T09:48:14Z] increment=ext-002 step=verification action=cluster-verification result=pass powerState=Running provisioningState=Succeeded readyNodes=4 api=1/1 web=1/1 gateway=1/1 startupErrors=0 schemaMigration=pass
+[2026-07-22T09:48:14Z] increment=ext-002 step=verification action=human-gate result=approved approvalSource=explicit-unattended-continuation
+[2026-07-22T09:48:14Z] increment=ext-002 action=increment-delivered result=transition-to-ext-003

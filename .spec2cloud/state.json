@@ -62,13 +62,13 @@
       "id": "ext-002",
       "type": "extension",
       "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
-      "status": "in-progress"
+      "status": "done"
     },
     {
       "id": "ext-003",
       "type": "extension",
       "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
-      "status": "planned"
+      "status": "in-progress"
     },
     {
       "id": "ext-004",
@@ -95,7 +95,7 @@
       "status": "planned"
     }
   ],
-  "currentIncrement": "ext-002",
+  "currentIncrement": "ext-003",
   "increments": {
     "ext-pre-001": {
       "type": "extension-prerequisite",
@@ -749,7 +749,7 @@
     },
     "ext-002": {
       "type": "extension",
-      "status": "in-progress",
+      "status": "done",
       "featureFiles": [
         "specs/features/autonomous-campaign-evidence-snapshot.feature"
       ],
@@ -916,12 +916,77 @@
             "skippedTests": 0
           },
           "completedAt": "2026-07-22T09:28:32Z"
+        },
+        "verification": {
+          "status": "done",
+          "pullRequest": "https://github.com/crgarcia12/Liliput/pull/102",
+          "mergeCommit": "9a1efb4c3f12de099c843f53a8b45618948a0f28",
+          "ci": {
+            "status": "pass",
+            "run": "https://github.com/crgarcia12/Liliput/actions/runs/29908547345"
+          },
+          "deployment": {
+            "status": "pass",
+            "workflow": "https://github.com/crgarcia12/Liliput/actions/runs/29908718191",
+            "environment": "production-aks",
+            "url": "https://liliput.crgarcia.com.ar",
+            "images": {
+              "api": "crgarliliputacr.azurecr.io/liliput-api:9a1efb4c3f12de099c843f53a8b45618948a0f28",
+              "web": "crgarliliputacr.azurecr.io/liliput-web:9a1efb4c3f12de099c843f53a8b45618948a0f28"
+            },
+            "completedAt": "2026-07-22T09:44:44Z"
+          },
+          "cluster": {
+            "powerState": "Running",
+            "provisioningState": "Succeeded",
+            "kubernetesVersion": "1.34",
+            "readyNodes": 4,
+            "apiReplicas": "1/1",
+            "webReplicas": "1/1",
+            "gatewayReplicas": "1/1"
+          },
+          "schema": {
+            "status": "pass",
+            "database": "/data/liliput.db",
+            "column": "autonomous_cycles.evidence_snapshot_json",
+            "type": "TEXT"
+          },
+          "smokeTests": {
+            "status": "pass",
+            "root": 200,
+            "brandVisible": true,
+            "apiHealth": 200,
+            "autonomy": 302,
+            "autonomyLocation": "/login",
+            "https": true
+          },
+          "logs": {
+            "status": "pass",
+            "startupErrors": 0,
+            "migrationObserved": true
+          },
+          "playwright": {
+            "status": "pass",
+            "passed": 4,
+            "failed": 0
+          },
+          "warnings": [
+            "GITHUB_WEBHOOK_SECRET remains unset, so GitHub synchronization uses polling fallback.",
+            "Several GitHub Actions still target the deprecated Node.js 20 runtime.",
+            "Production API CORS currently returns Access-Control-Allow-Origin: *; this predates ext-002."
+          ],
+          "humanApproval": {
+            "status": "approved",
+            "approvedAt": "2026-07-22T09:48:14Z",
+            "approvalSource": "explicit-unattended-continuation"
+          },
+          "completedAt": "2026-07-22T09:48:14Z"
         }
       }
     },
     "ext-003": {
       "type": "extension",
-      "status": "planned"
+      "status": "in-progress"
     },
     "ext-004": {
       "type": "extension",
@@ -965,7 +1030,8 @@
     "ext-001-deployment-approved": true,
     "ext-002-gherkin-approved": true,
     "ext-002-tests-approved": true,
-    "ext-002-implementation-approved": true
+    "ext-002-implementation-approved": true,
+    "ext-002-deployment-approved": true
   },
   "testsStatus": {
     "reviewerConfigAndCliAuth": {
@@ -1029,7 +1095,9 @@
       "implementationApproval": "approved",
       "apiTests": "432-pass",
       "cucumber": "32-scenarios-203-steps-pass",
-      "playwright": "4-pass"
+      "playwright": "4-pass",
+      "deployment": "pass",
+      "productionPlaywright": "4-pass"
     }
   },
   "extensions": {
@@ -1115,5 +1183,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-22T09:28:32Z"
+  "lastUpdated": "2026-07-22T09:48:14Z"
 }
