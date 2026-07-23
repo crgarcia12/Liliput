@@ -189,3 +189,4 @@
 [2026-07-23T09:02:38Z] increment=ext-005 step=tests action=test-generation result=done cucumberSteps=tests/features/step-definitions/autonomous-campaign-attempt-bounds.steps.ts vitest=src/api/tests/unit/autonomous-campaign-attempt-bounds.test.ts
 [2026-07-23T09:02:38Z] increment=ext-005 step=tests action=red-baseline result=success cucumberFailed=15 cucumberPassed=0 vitestFailed=13 vitestPassed=0 existingApiPassed=465 existingCucumberPassed=60
 [2026-07-23T09:02:38Z] increment=ext-005 step=tests action=human-gate result=approved artifact=test-code approvalSource=explicit-unattended-continuation nextStep=contracts
+[2026-07-23T09:07:12Z] increment=ext-005 step=contracts action=contracts-generated result=done api=specs/contracts/api/autonomous-campaign-attempt-bounds.yaml sharedTypes=src/shared/types/autonomous-campaign-attempt-bounds.ts infra=specs/contracts/infra/resources.yaml newResources=0 newEnvironmentVariables=0

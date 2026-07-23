@@ -1522,6 +1522,28 @@
           },
           "approvedAt": "2026-07-23T09:02:38Z",
           "approvalSource": "explicit-unattended-continuation"
+        },
+        "contracts": {
+          "status": "done",
+          "apiContracts": [
+            "specs/contracts/api/autonomous-campaign-attempt-bounds.yaml"
+          ],
+          "sharedTypes": [
+            "src/shared/types/autonomous-campaign-attempt-bounds.ts",
+            "src/shared/types/index.ts"
+          ],
+          "infraContract": "specs/contracts/infra/resources.yaml",
+          "infraUpdated": true,
+          "newResources": [],
+          "newEnvironmentVariables": [],
+          "newSecrets": [],
+          "newModelDeployments": [],
+          "bicepChangesRequired": false,
+          "kubernetesManifestChangesRequired": false,
+          "apiBuild": "pass",
+          "webBuild": "pass",
+          "yamlValidation": "pass",
+          "completedAt": "2026-07-23T09:07:12Z"
         }
       }
     },
@@ -1750,5 +1772,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-23T09:02:38Z"
+  "lastUpdated": "2026-07-23T09:07:12Z"
 }
