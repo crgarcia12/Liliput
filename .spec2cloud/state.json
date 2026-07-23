@@ -1447,7 +1447,83 @@
     },
     "ext-005": {
       "type": "extension",
-      "status": "in-progress"
+      "status": "in-progress",
+      "featureFiles": [
+        "specs/features/autonomous-campaign-attempt-bounds.feature"
+      ],
+      "scenarioCount": 15,
+      "steps": {
+        "tests": {
+          "status": "approved",
+          "e2e": {
+            "status": "done",
+            "flowCount": 0,
+            "newSpecFiles": [],
+            "newPageObjects": [],
+            "reason": "Attempt accounting and safe-boundary interruption extend the existing campaign controls without adding a new operator UI journey.",
+            "existingPlaywrightSuite": "4-discovered"
+          },
+          "gherkin": {
+            "status": "approved",
+            "featureFiles": [
+              "specs/features/autonomous-campaign-attempt-bounds.feature"
+            ],
+            "scenarioCount": 15,
+            "approvedAt": "2026-07-23T09:02:38Z",
+            "approvalSource": "explicit-unattended-continuation"
+          },
+          "cucumberSteps": [
+            "tests/features/step-definitions/autonomous-campaign-attempt-bounds.steps.ts"
+          ],
+          "vitestFiles": [
+            "src/api/tests/unit/autonomous-campaign-attempt-bounds.test.ts"
+          ],
+          "redBaseline": {
+            "apiBuild": "pass",
+            "cucumberDryRun": {
+              "status": "pass",
+              "scenarios": 15,
+              "steps": 132,
+              "undefined": 0,
+              "ambiguous": 0
+            },
+            "cucumber": {
+              "status": "expected-failure",
+              "scenariosFailed": 15,
+              "scenariosPassed": 0,
+              "stepsFailed": 15,
+              "reason": "The autonomous campaign attempt manager module does not exist yet."
+            },
+            "vitest": {
+              "status": "expected-failure",
+              "filesFailed": 1,
+              "testsFailed": 13,
+              "testsPassed": 0,
+              "reason": "The autonomous campaign attempt manager module does not exist yet."
+            },
+            "existingRegression": {
+              "api": {
+                "status": "pass",
+                "files": 43,
+                "tests": 465
+              },
+              "cucumber": {
+                "status": "pass",
+                "scenarios": 60,
+                "steps": 422
+              }
+            },
+            "playwrightDiscovery": {
+              "status": "pass",
+              "files": 2,
+              "tests": 4
+            },
+            "verifiedAt": "2026-07-23T09:02:38Z"
+          },
+          "approvedAt": "2026-07-23T09:02:38Z",
+          "approvalSource": "explicit-unattended-continuation"
+        }
+      }
     },
     "ext-006": {
       "type": "extension",
@@ -1492,7 +1568,9 @@
     "ext-004-gherkin-approved": true,
     "ext-004-tests-approved": true,
     "ext-004-implementation-approved": true,
-    "ext-004-deployment-approved": true
+    "ext-004-deployment-approved": true,
+    "ext-005-gherkin-approved": true,
+    "ext-005-tests-approved": true
   },
   "testsStatus": {
     "reviewerConfigAndCliAuth": {
@@ -1672,5 +1750,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-23T08:32:23Z"
+  "lastUpdated": "2026-07-23T09:02:38Z"
 }
