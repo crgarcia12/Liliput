@@ -1,4 +1,8 @@
-import { approveAll, defineTool } from '@github/copilot-sdk';
+import {
+  approveAll,
+  defineTool,
+  type CopilotSession,
+} from '@github/copilot-sdk';
 import { createHash } from 'node:crypto';
 import type {
   AcceptedCampaignProposal,
@@ -30,6 +34,7 @@ import type {
 } from '../../../shared/types/autonomous-campaign-state.js';
 import { logger } from '../logger.js';
 import {
+  captureConfiguredCampaignEvidence,
   getCampaignEvidenceSnapshot,
   formatCampaignEvidenceForPrompt,
 } from './autonomous-campaign-evidence.js';
@@ -42,6 +47,17 @@ import { getDb } from '../stores/db.js';
 
 const DEFAULT_MODEL = process.env['COPILOT_MODEL'] ?? 'claude-sonnet-4.5';
 const PROPOSAL_AGENT_TIMEOUT_MS = 120_000;
+
+interface CampaignProposalExecution {
+  key: string;
+  cancelled: boolean;
+  sessions: Set<CopilotSession>;
+}
+
+const activeProposalExecutions = new Map<
+  string,
+  Set<CampaignProposalExecution>
+>();
 
 const rejectionReasons: CampaignProposalRejectionReason[] = [
   'duplicate',
@@ -80,6 +96,75 @@ export class AutonomousCampaignProposalError extends Error {
   ) {
     super(message);
     this.name = 'AutonomousCampaignProposalError';
+  }
+}
+
+class AutonomousCampaignProposalCancelledError extends Error {
+  constructor(key: string) {
+    super(`Autonomous campaign proposal ${key} was cancelled`);
+    this.name = 'AutonomousCampaignProposalCancelledError';
+  }
+}
+
+function proposalExecutionKey(campaignId: string, cycleId: string): string {
+  return `${campaignId}:${cycleId}`;
+}
+
+function beginProposalExecution(
+  campaignId: string,
+  cycleId: string,
+): CampaignProposalExecution {
+  const execution: CampaignProposalExecution = {
+    key: proposalExecutionKey(campaignId, cycleId),
+    cancelled: false,
+    sessions: new Set(),
+  };
+  const executions =
+    activeProposalExecutions.get(execution.key) ??
+    new Set<CampaignProposalExecution>();
+  executions.add(execution);
+  activeProposalExecutions.set(execution.key, executions);
+  return execution;
+}
+
+function finishProposalExecution(execution: CampaignProposalExecution): void {
+  const executions = activeProposalExecutions.get(execution.key);
+  if (!executions) return;
+  executions.delete(execution);
+  if (executions.size === 0) {
+    activeProposalExecutions.delete(execution.key);
+  }
+}
+
+function assertProposalExecutionActive(
+  execution: CampaignProposalExecution | undefined,
+): void {
+  if (execution?.cancelled) {
+    throw new AutonomousCampaignProposalCancelledError(execution.key);
+  }
+}
+
+export function cancelAutonomousCampaignProposal(
+  campaignId: string,
+  cycleId: string,
+): void {
+  const key = proposalExecutionKey(campaignId, cycleId);
+  const executions = activeProposalExecutions.get(key);
+  if (!executions) return;
+  for (const execution of executions) {
+    execution.cancelled = true;
+    for (const session of execution.sessions) {
+      void session.abort().catch((error: unknown) => {
+        logger.warn(
+          {
+            campaignId,
+            cycleId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          'Autonomous campaign proposal session abort failed',
+        );
+      });
+    }
   }
 }
 
@@ -769,6 +854,30 @@ export function getCampaignProposalHistory(
   return parseStoredHistory(row?.proposal_history_json ?? null, cycleId);
 }
 
+export function getCampaignProposalFingerprints(campaignId: string): string[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT id, proposal_fingerprint, proposal_history_json
+         FROM autonomous_cycles
+        WHERE campaign_id = ?`,
+    )
+    .all(campaignId) as Array<{
+    id: string;
+    proposal_fingerprint: string | null;
+    proposal_history_json: string | null;
+  }>;
+  const fingerprints = new Set<string>();
+  for (const row of rows) {
+    if (row.proposal_fingerprint) {
+      fingerprints.add(row.proposal_fingerprint);
+    }
+    for (const entry of parseStoredHistory(row.proposal_history_json, row.id)) {
+      fingerprints.add(entry.fingerprint);
+    }
+  }
+  return [...fingerprints];
+}
+
 function candidateJsonSchema(): Record<string, unknown> {
   const nonEmptyString = { type: 'string', minLength: 1 };
   const stringArray = {
@@ -830,8 +939,10 @@ async function runStructuredProposalTool<T>(
   parameters: Record<string, unknown>,
   prompt: string,
   parse: (value: unknown) => T,
+  execution?: CampaignProposalExecution,
 ): Promise<T> {
   const attempt = async (): Promise<T> => {
+    assertProposalExecutionActive(execution);
     let submitted: unknown;
     let calls = 0;
     const tool = defineTool<unknown>(toolName, {
@@ -857,9 +968,13 @@ async function runStructuredProposalTool<T>(
       },
       onPermissionRequest: approveAll,
     });
+    execution?.sessions.add(session);
     try {
+      assertProposalExecutionActive(execution);
       await session.sendAndWait({ prompt }, PROPOSAL_AGENT_TIMEOUT_MS);
+      assertProposalExecutionActive(execution);
     } finally {
+      execution?.sessions.delete(session);
       await session.disconnect().catch((error: unknown) => {
         logger.warn(
           { error: error instanceof Error ? error.message : String(error) },
@@ -878,6 +993,9 @@ async function runStructuredProposalTool<T>(
   try {
     return await attempt();
   } catch (error) {
+    if (execution?.cancelled) {
+      throw new AutonomousCampaignProposalCancelledError(execution.key);
+    }
     if (!isSdkConnectionClosed(error)) throw error;
     logger.warn(
       { toolName, error: error instanceof Error ? error.message : String(error) },
@@ -890,6 +1008,7 @@ async function runStructuredProposalTool<T>(
 
 export async function generateCampaignFeatureCandidatesWithCopilot(
   context: CampaignCandidateGeneratorContext,
+  execution?: CampaignProposalExecution,
 ): Promise<CampaignFeatureCandidateSet> {
   const selection = context.modelConfig.metaAgent;
   const model = selection?.model ?? DEFAULT_MODEL;
@@ -920,12 +1039,14 @@ export async function generateCampaignFeatureCandidatesWithCopilot(
       formatCampaignEvidenceForPrompt(context.evidenceSnapshot),
     ].join('\n'),
     parseCandidateSet,
+    execution,
   );
 }
 
 export async function critiqueCampaignFeatureCandidatesWithCopilot(
   context: CampaignProposalCriticContext,
   modelConfig: AutonomousCampaignModelConfig,
+  execution?: CampaignProposalExecution,
 ): Promise<CampaignProposalCriticDecision> {
   const selection = modelConfig.reviewer ?? modelConfig.metaAgent;
   const model = selection?.model ?? DEFAULT_MODEL;
@@ -977,20 +1098,52 @@ export async function critiqueCampaignFeatureCandidatesWithCopilot(
       '<<<END_UNTRUSTED_CANDIDATES>>>',
     ].join('\n'),
     (value) => parseCriticDecision(value, context.candidates),
+    execution,
   );
 }
 
 export function createCopilotCampaignProposalAgents(
   modelConfig: AutonomousCampaignModelConfig,
+  execution?: CampaignProposalExecution,
 ): Pick<
   GenerateAndCritiqueCampaignProposalInput,
   'generateCandidates' | 'critique'
 > {
   return {
-    generateCandidates: generateCampaignFeatureCandidatesWithCopilot,
+    generateCandidates: (context) =>
+      generateCampaignFeatureCandidatesWithCopilot(context, execution),
     critique: (context) =>
-      critiqueCampaignFeatureCandidatesWithCopilot(context, modelConfig),
+      critiqueCampaignFeatureCandidatesWithCopilot(
+        context,
+        modelConfig,
+        execution,
+      ),
   };
+}
+
+export async function prepareConfiguredCampaignProposal(input: {
+  campaignId: string;
+  cycleId: string;
+  modelConfig: AutonomousCampaignModelConfig;
+}): Promise<CampaignProposalResult> {
+  const execution = beginProposalExecution(input.campaignId, input.cycleId);
+  try {
+    await captureConfiguredCampaignEvidence(input.campaignId);
+    assertProposalExecutionActive(execution);
+    const agents = createCopilotCampaignProposalAgents(
+      input.modelConfig,
+      execution,
+    );
+    return await generateAndCritiqueCampaignProposal({
+      campaignId: input.campaignId,
+      cycleId: input.cycleId,
+      modelConfig: input.modelConfig,
+      knownFingerprints: getCampaignProposalFingerprints(input.campaignId),
+      ...agents,
+    });
+  } finally {
+    finishProposalExecution(execution);
+  }
 }
 
 export function resetAutonomousCampaignProposalStore(): void {

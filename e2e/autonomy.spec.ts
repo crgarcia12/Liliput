@@ -130,6 +130,30 @@ test.describe('Flow: autonomous campaign controls', () => {
     await expect(autonomy.startButton).toBeHidden();
   });
 
+  test('@flow:campaign-controls @frd:autonomous-workstream-campaigns admin creates and starts a campaign in one action', async ({
+    page,
+  }) => {
+    const adminToken = await authenticate(page, 'ADMIN');
+    await stopExistingTestCampaigns(page, adminToken);
+    const autonomy = new AutonomyPage(page);
+
+    await autonomy.goto();
+    await autonomy.createAndStartCampaign({
+      repository: REPOSITORY,
+      branch: BRANCH,
+      model: MODEL,
+      maxTurns: 7,
+      maxMinutes: 30,
+      maxCostUsd: 5,
+    });
+
+    await autonomy.expectStatus('proposing');
+    await expect(autonomy.startButton).toBeHidden();
+
+    await autonomy.stopButton.click();
+    await autonomy.expectStatus('stopped');
+  });
+
   test('@flow:campaign-controls @frd:autonomous-workstream-campaigns non-admin is denied campaign controls', async ({
     page,
   }) => {

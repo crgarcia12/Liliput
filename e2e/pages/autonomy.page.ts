@@ -12,6 +12,7 @@ export class AutonomyPage {
   readonly maxMinutesInput: Locator;
   readonly maxCostInput: Locator;
   readonly createButton: Locator;
+  readonly createAndStartButton: Locator;
   readonly campaignList: Locator;
   readonly campaignDetail: Locator;
   readonly startButton: Locator;
@@ -32,6 +33,7 @@ export class AutonomyPage {
     this.maxMinutesInput = page.getByTestId('campaign-max-minutes');
     this.maxCostInput = page.getByTestId('campaign-max-cost');
     this.createButton = page.getByTestId('campaign-create');
+    this.createAndStartButton = page.getByTestId('campaign-create-and-start');
     this.campaignList = page.getByTestId('campaign-list');
     this.campaignDetail = page.getByTestId('campaign-detail');
     this.startButton = page.getByTestId('campaign-start');
@@ -56,6 +58,30 @@ export class AutonomyPage {
     maxMinutes?: number;
     maxCostUsd?: number;
   }): Promise<void> {
+    await this.fillCampaignForm(input);
+    await this.createButton.click();
+  }
+
+  async createAndStartCampaign(input: {
+    repository: string;
+    branch: string;
+    model: string;
+    maxTurns?: number;
+    maxMinutes?: number;
+    maxCostUsd?: number;
+  }): Promise<void> {
+    await this.fillCampaignForm(input);
+    await this.createAndStartButton.click();
+  }
+
+  private async fillCampaignForm(input: {
+    repository: string;
+    branch: string;
+    model: string;
+    maxTurns?: number;
+    maxMinutes?: number;
+    maxCostUsd?: number;
+  }): Promise<void> {
     await this.repositoryInput.fill(input.repository);
     await this.branchInput.fill(input.branch);
     await this.metaAgentModelInput.fill(input.model);
@@ -70,7 +96,6 @@ export class AutonomyPage {
     if (input.maxCostUsd !== undefined) {
       await this.maxCostInput.fill(String(input.maxCostUsd));
     }
-    await this.createButton.click();
   }
 
   async openCampaign(repository: string): Promise<void> {
