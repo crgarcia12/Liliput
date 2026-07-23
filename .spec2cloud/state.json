@@ -74,13 +74,13 @@
       "id": "ext-004",
       "type": "extension",
       "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
-      "status": "in-progress"
+      "status": "done"
     },
     {
       "id": "ext-005",
       "type": "extension",
       "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
-      "status": "planned"
+      "status": "in-progress"
     },
     {
       "id": "ext-006",
@@ -95,7 +95,7 @@
       "status": "planned"
     }
   ],
-  "currentIncrement": "ext-004",
+  "currentIncrement": "ext-005",
   "increments": {
     "ext-pre-001": {
       "type": "extension-prerequisite",
@@ -1209,7 +1209,7 @@
     },
     "ext-004": {
       "type": "extension",
-      "status": "in-progress",
+      "status": "done",
       "steps": {
         "tests": {
           "status": "approved",
@@ -1378,22 +1378,76 @@
           "completedAt": "2026-07-23T07:40:23Z"
         },
         "verification": {
-          "status": "in-progress",
+          "status": "done",
           "deployment": {
-            "status": "blocked",
-            "workflowRun": "https://github.com/crgarcia12/Liliput/actions/runs/29989156233",
-            "commitSha": "62b941a893f22818615b200024fb492b68df7ac6",
-            "attempts": 2,
-            "error": "AKS API hostname returned DNS NXDOMAIN from GitHub Actions and local resolvers.",
-            "recovery": "Add guarded AKS control-plane restart and DNS readiness handling to the production deployment workflow."
+            "status": "pass",
+            "platform": "aks",
+            "workflowRun": "https://github.com/crgarcia12/Liliput/actions/runs/29990114193",
+            "commitSha": "33d75df447fe6a1e7f82482cba5f6d35507ad6ed",
+            "apiImage": "crgarliliputacr.azurecr.io/liliput-api:33d75df447fe6a1e7f82482cba5f6d35507ad6ed",
+            "webImage": "crgarliliputacr.azurecr.io/liliput-web:33d75df447fe6a1e7f82482cba5f6d35507ad6ed",
+            "controlPlaneRecovery": {
+              "pullRequest": "https://github.com/crgarcia12/Liliput/pull/105",
+              "mergeCommit": "33d75df447fe6a1e7f82482cba5f6d35507ad6ed",
+              "restartRequested": true,
+              "dnsRecovered": true
+            },
+            "completedAt": "2026-07-23T08:17:26Z"
           },
-          "updatedAt": "2026-07-23T08:02:51Z"
+          "cluster": {
+            "powerState": "Running",
+            "provisioningState": "Succeeded",
+            "kubernetesVersion": "1.34.4",
+            "readyNodes": 4,
+            "nodes": 4,
+            "api": "1/1",
+            "web": "1/1",
+            "gateway": "1/1"
+          },
+          "persistence": {
+            "status": "pass",
+            "database": "/data/liliput.db",
+            "table": "autonomous_cycles",
+            "deliveryCheckpointColumns": [
+              "workstream_id",
+              "task_id",
+              "branch_name",
+              "image_ref",
+              "preview_namespace",
+              "preview_url",
+              "pull_request_number",
+              "pull_request_url"
+            ]
+          },
+          "smokeTests": {
+            "status": "pass",
+            "root": 200,
+            "brandVisible": true,
+            "apiHealth": 200,
+            "https": true
+          },
+          "logs": {
+            "status": "pass",
+            "startupErrors": 0,
+            "coordinatorStarted": true
+          },
+          "playwright": {
+            "status": "pass",
+            "passed": 4,
+            "failed": 0
+          },
+          "humanApproval": {
+            "status": "approved",
+            "approvedAt": "2026-07-23T08:32:23Z",
+            "approvalSource": "explicit-unattended-continuation"
+          },
+          "completedAt": "2026-07-23T08:32:23Z"
         }
       }
     },
     "ext-005": {
       "type": "extension",
-      "status": "planned"
+      "status": "in-progress"
     },
     "ext-006": {
       "type": "extension",
@@ -1437,7 +1491,8 @@
     "ext-003-deployment-approved": true,
     "ext-004-gherkin-approved": true,
     "ext-004-tests-approved": true,
-    "ext-004-implementation-approved": true
+    "ext-004-implementation-approved": true,
+    "ext-004-deployment-approved": true
   },
   "testsStatus": {
     "reviewerConfigAndCliAuth": {
@@ -1617,5 +1672,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-23T08:02:51Z"
+  "lastUpdated": "2026-07-23T08:32:23Z"
 }
