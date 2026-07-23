@@ -148,6 +148,9 @@ sequenceDiagram
     participant Generator as Meta-Agent
     participant Critic
     participant GitHub
+    participant Pipeline as Existing Task Pipeline
+    participant ACR
+    participant AKS
     participant Runtime as Liliput Runtime Stores
     participant SQLite
 
@@ -185,8 +188,35 @@ sequenceDiagram
         Critic-->>Proposal: Select one candidate or reject all
         Proposal->>Proposal: Validate selection, size, testability, reversibility, and duplicates
         Proposal->>SQLite: Immediate transaction writes proposal/fingerprint/history
-        Note over Proposal,SQLite: No workstream or task is created in ext-003
         SQLite-->>Proposal: Immutable proposal decision
         Proposal-->>Coordinator: Accepted, rejected, or replayed result
+    end
+
+    Coordinator->>SQLite: Claim or renew campaign lease
+    Coordinator->>Runtime: Ensure workstream and task by unique cycle ID
+    Runtime->>SQLite: Persist cycle links before pipeline start
+    Coordinator->>Runtime: Persist generated task specification and building state
+    Coordinator->>Pipeline: startBuild(taskId)
+    Pipeline->>Runtime: Checkpoint deterministic branch intent
+    Pipeline->>GitHub: Create or reuse task branch
+    Pipeline->>Runtime: Checkpoint commit and expected image reference
+    Pipeline->>ACR: Build image with deterministic commit tag
+    Pipeline->>Runtime: Checkpoint namespace and preview intent
+    Pipeline->>AKS: Ensure namespace, deploy image, and publish preview route
+    Pipeline->>GitHub: Find or create one pull request for the task branch
+    Pipeline->>Runtime: Persist pull request before feature linkage
+
+    loop Non-overlapping coordinator ticks
+        Coordinator->>Runtime: Read campaign task and durable resource identifiers
+        Runtime-->>Coordinator: Active, review, completed, or failed state
+        alt Review reached
+            Coordinator->>SQLite: Mark cycle ready_to_release
+        else Task reports completed
+            Coordinator->>SQLite: Keep ready_to_release pending merge confirmation
+        else Delivery failed
+            Coordinator->>SQLite: Preserve proposal and links with failure
+        else Delivery active
+            Coordinator->>SQLite: Refresh resource checkpoints
+        end
     end
 ```

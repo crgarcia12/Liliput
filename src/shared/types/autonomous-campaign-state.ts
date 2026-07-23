@@ -103,7 +103,11 @@ export interface AutonomousCampaignCycle {
   workstreamId?: string;
   taskId?: string;
   branchName?: string;
+  imageRef?: string;
+  previewNamespace?: string;
+  previewUrl?: string;
   pullRequestUrl?: string;
+  pullRequestNumber?: number;
   reviewDecision?: AutonomousCampaignJsonObject;
   releaseGates?: AutonomousCampaignJsonObject;
   mergeSha?: string;

@@ -1,13 +1,14 @@
-version: "1.4"
-increments: [ext-pre-001, ext-pre-002, ext-001, ext-002, ext-003]
+version: "1.5"
+increments: [ext-pre-001, ext-pre-002, ext-001, ext-002, ext-003, ext-004]
 target: azure-kubernetes-service
 description: >
   Durable autonomous campaign state, admin controls, redacted evidence
-  snapshots, and structured feature proposals reuse Liliput's existing API,
-  Web, Socket.IO server, single-writer SQLite database, model_pricing table,
-  gateway route, Copilot SDK integration, and Azure Disk PVC. ext-003 adds no
-  Azure resource, Kubernetes workload, secret, environment variable, model
-  deployment, or external network route.
+  snapshots, structured feature proposals, and serial workstream handoff reuse
+  Liliput's existing API, Web, Socket.IO server, task pipeline, single-writer
+  SQLite database, model_pricing table, gateway route, Copilot SDK integration,
+  AKS preview path, ACR, and Azure Disk PVC. ext-004 adds no Azure resource,
+  Kubernetes workload, secret, environment variable, model deployment, or
+  external network route.
 
 newResources: []
 newEnvironmentVariables: []
@@ -35,7 +36,7 @@ resources:
   - name: liliput-api
     type: Kubernetes/apps/v1/Deployment
     lifecycle: existing
-    description: Runs the Express API and the single SQLite writer.
+    description: Runs the Express API, single SQLite writer, and serial campaign coordinator.
     sku:
       name: single-replica
       justification: >
@@ -112,7 +113,7 @@ dependencies:
     reason: The API deployment runs on the existing AKS cluster.
   - from: liliput-api
     to: container-registry
-    reason: The existing API image is pulled from ACR.
+    reason: The existing API image is pulled from ACR and campaign tasks reuse existing ACR preview builds.
   - from: liliput-web
     to: liliput-api
     reason: The Autonomy portal reads and mutates campaign state through authenticated API routes.
@@ -140,5 +141,10 @@ constraints:
   - Proposal generation must use the persisted evidence snapshot and exact base SHA.
   - Proposal generation must persist at most one accepted proposal and must not create a workstream or task.
   - Candidate generation and criticism run as separate Copilot SDK invocations within the existing API process.
+  - Every autonomous cycle must link to at most one workstream and one task through unique campaign_cycle_id values.
+  - Existing manually created workstreams and tasks must keep campaign_cycle_id null and retain their current lifecycle.
+  - The campaign coordinator must reuse the existing task pipeline rather than creating a second build, test, preview, or review engine.
+  - Task status completed is not evidence that the campaign feature merged into the base branch.
+  - Branch, image, preview, and pull request identifiers must be recoverable from persisted task state after API or AKS restart.
 
 gaps: []

@@ -38,6 +38,7 @@ interface TaskRow {
   id: string;
   repository: string | null;
   workstream_id: string | null;
+  campaign_cycle_id: string | null;
   status: string;
   data: string;
   created_at: string;
@@ -87,6 +88,11 @@ function hydrateTask(row: TaskRow): Task {
   // Column is source of truth for the FK in case the JSON blob predates it.
   if (row.workstream_id && !base.workstreamId) {
     base.workstreamId = row.workstream_id;
+  } else if (!('workstreamId' in base)) {
+    base.workstreamId = undefined;
+  }
+  if (row.campaign_cycle_id && !base.campaignCycleId) {
+    base.campaignCycleId = row.campaign_cycle_id;
   }
 
   const agentRows = db
@@ -160,6 +166,7 @@ export function createTask(
     baseBranch?: string;
     commitMode?: CommitMode;
     workstreamId?: string;
+    campaignCycleId?: string;
     ownerUserId?: string;
     model?: string;
     reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
@@ -184,6 +191,9 @@ export function createTask(
     baseBranch: options.baseBranch ?? 'main',
     commitMode: options.commitMode ?? 'pr',
     ...(options.workstreamId ? { workstreamId: options.workstreamId } : {}),
+    ...(options.campaignCycleId
+      ? { campaignCycleId: options.campaignCycleId }
+      : {}),
     ...(options.ownerUserId ? { ownerUserId: options.ownerUserId } : {}),
     ...(options.model && options.model.trim() ? { model: options.model.trim() } : {}),
     ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
@@ -207,13 +217,16 @@ export function createTask(
 
   getDb()
     .prepare(
-      `INSERT INTO tasks (id, repository, workstream_id, status, data, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO tasks (
+         id, repository, workstream_id, campaign_cycle_id, status, data,
+         created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       task.id,
       task.repository ?? null,
       task.workstreamId ?? null,
+      task.campaignCycleId ?? null,
       task.status,
       JSON.stringify(rest),
       ts,
@@ -248,6 +261,15 @@ export function getTask(id: string): Task | undefined {
   return hydrateTask(row);
 }
 
+export function getTaskByCampaignCycleId(
+  campaignCycleId: string,
+): Task | undefined {
+  const row = getDb()
+    .prepare('SELECT * FROM tasks WHERE campaign_cycle_id = ?')
+    .get(campaignCycleId) as TaskRow | undefined;
+  return row ? hydrateTask(row) : undefined;
+}
+
 export function getTasks(): Task[] {
   const rows = getDb()
     .prepare("SELECT * FROM tasks WHERE status != 'deleting' ORDER BY updated_at DESC")
@@ -279,6 +301,7 @@ export function updateTask(
       | 'devEnvState'
       | 'errorMessage'
       | 'workstreamId'
+      | 'campaignCycleId'
       | 'model'
       | 'reasoningEffort'
       | 'reviewerModel'
@@ -305,11 +328,17 @@ export function updateTask(
 
   db.prepare(
     `UPDATE tasks
-        SET repository = ?, workstream_id = ?, status = ?, data = ?, updated_at = ?
+        SET repository = ?,
+            workstream_id = ?,
+            campaign_cycle_id = ?,
+            status = ?,
+            data = ?,
+            updated_at = ?
       WHERE id = ?`,
   ).run(
     (merged.repository ?? null) as string | null,
     (merged.workstreamId ?? null) as string | null,
+    (merged.campaignCycleId ?? null) as string | null,
     merged.status,
     JSON.stringify(merged),
     ts,
@@ -337,6 +366,7 @@ export function updateTask(
     ...row,
     repository: merged.repository ?? null,
     workstream_id: merged.workstreamId ?? null,
+    campaign_cycle_id: merged.campaignCycleId ?? null,
     status: merged.status,
     data: JSON.stringify(merged),
     updated_at: ts,
@@ -770,18 +800,61 @@ export function reconcileOrphanedRuns(): {
     const ACTIVE_STATUSES = ['clarifying', 'specifying', 'building', 'deploying', 'shipping'];
     const taskRows = db
       .prepare(
-        `SELECT id, status, data FROM tasks WHERE status IN (${ACTIVE_STATUSES.map(() => '?').join(',')})`,
+        `SELECT id, status, campaign_cycle_id, data
+           FROM tasks
+          WHERE status IN (${ACTIVE_STATUSES.map(() => '?').join(',')})`,
       )
-      .all(...ACTIVE_STATUSES) as { id: string; status: string; data: string }[];
+      .all(...ACTIVE_STATUSES) as {
+        id: string;
+        status: string;
+        campaign_cycle_id: string | null;
+        data: string;
+      }[];
 
     const updateTaskStmt = db.prepare(
       `UPDATE tasks
          SET status = ?, data = ?, updated_at = ?, owner_pod_id = ?, lease_expires_at = ?
        WHERE id = ?`,
     );
+    const replayableCampaignStmt = db.prepare(
+      `SELECT 1
+         FROM autonomous_cycles cycle
+         JOIN autonomous_campaigns campaign ON campaign.id = cycle.campaign_id
+        WHERE cycle.id = ?
+          AND campaign.status = 'running'
+          AND campaign.current_cycle_id = cycle.id
+          AND cycle.status IN ('proposing', 'delivering')`,
+    );
 
     for (const row of taskRows) {
       const task = JSON.parse(row.data) as Task;
+      const campaignCycleId = row.campaign_cycle_id ?? task.campaignCycleId;
+      const campaignCanResume =
+        campaignCycleId !== undefined &&
+        replayableCampaignStmt.get(campaignCycleId) !== undefined;
+      const shouldReplayCampaignHandoff =
+        campaignCanResume &&
+        (row.status === 'clarifying' ||
+          row.status === 'specifying' ||
+          (row.status === 'building' && !task.baseCommitSha));
+      if (shouldReplayCampaignHandoff) {
+        const replayable = {
+          ...task,
+          campaignCycleId,
+          status: 'clarifying' as const,
+          errorMessage: undefined,
+          updatedAt: ts,
+        };
+        updateTaskStmt.run(
+          'clarifying',
+          JSON.stringify(replayable),
+          ts,
+          podId,
+          leaseExpiresAt,
+          row.id,
+        );
+        continue;
+      }
       const updated = { ...task, status: 'failed' as const, updatedAt: ts };
       updateTaskStmt.run(
         'failed',
@@ -795,7 +868,12 @@ export function reconcileOrphanedRuns(): {
 
       // Resumable iff (a) was actively coding, and (b) has a workspace to
       // resurrect against. `iterateTask` requires repository + branch.
-      if (row.status === 'building' && task.repository && task.branch) {
+      if (
+        row.status === 'building' &&
+        task.repository &&
+        task.branch &&
+        task.baseCommitSha
+      ) {
         resumable.push(row.id);
       }
     }

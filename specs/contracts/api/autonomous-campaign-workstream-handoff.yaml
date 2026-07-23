@@ -1,0 +1,263 @@
+feature: autonomous-campaign-workstream-handoff
+increment: ext-004
+version: "1.0"
+basePath: /api/autonomous-campaigns
+exposure: internal-only
+description: >
+  Converts one accepted autonomous campaign proposal into exactly one normal
+  Liliput workstream and task, starts the existing task delivery pipeline,
+  renews coordinator ownership while delivery is active, and reconciles
+  persisted task resources after process restarts. This increment does not add
+  an HTTP endpoint, release-gate evaluation, campaign reviewer, merge operation,
+  attempt budget, retry policy, or next-cycle scheduling.
+
+endpoints: []
+
+internalOperations:
+  - operationId: createAutonomousCampaignCoordinator
+    input:
+      owner: non-empty string
+      leaseTtlMs: positive integer
+      now: injectable clock
+      startTaskPipeline: existing task pipeline adapter
+      hooks: optional fault-injection callbacks for tests
+    output: AutonomousCampaignCoordinator
+    behavior:
+      - Expose handoffAcceptedProposal, reconcileDelivery, renewLease, and runOnce.
+      - Execute one coordinator transition at a time.
+      - Never claim or mutate a task without an autonomous campaign cycle link.
+
+  - operationId: handoffAcceptedProposal
+    input:
+      campaignId: uuid
+      cycleId: uuid
+    output:
+      cycle: AutonomousCampaignCycle
+      workstream: Workstream
+      task: Task
+      replayed: boolean
+    preconditions:
+      - campaign exists and is running
+      - campaign lease belongs to the coordinator and is unexpired
+      - cycle exists, belongs to the campaign, and is the current cycle
+      - cycle contains one accepted proposal and proposal fingerprint
+      - cycle status is proposing or delivering
+    idempotency:
+      key: cycleId
+      localResources:
+        workstream:
+          uniqueField: workstreams.campaign_cycle_id
+          replayBehavior: Return the existing workstream.
+        task:
+          uniqueField: tasks.campaign_cycle_id
+          replayBehavior: Return the existing task.
+      pipelineStart:
+        marker: task status building
+        replayBehavior: >
+          Start the existing task pipeline only when the recovered task has not
+          already crossed the persisted building boundary.
+    behavior:
+      - Render the accepted proposal as the task description and specification.
+      - Pin repository, base branch, PR commit mode, coding model, and reviewer model from the campaign.
+      - Create or recover one campaign-linked workstream.
+      - Create or recover one campaign-linked task.
+      - Persist workstream and task identifiers on the cycle.
+      - Set the task specification and move the task to building before invoking the pipeline adapter.
+      - Move the cycle to delivering.
+      - Do not create a second cycle.
+      - Do not invoke campaign release or merge behavior.
+
+  - operationId: reconcileDelivery
+    input:
+      campaignId: uuid
+      cycleId: uuid
+    output: AutonomousCampaignDeliveryReconciliation
+    preconditions:
+      - campaign exists and is running
+      - campaign lease belongs to the coordinator and is unexpired
+      - cycle exists and belongs to the campaign
+      - one campaign-linked task exists for the cycle
+    resourceRecovery:
+      sourceOfTruth: persisted Task
+      copiedToCycle:
+        - task.id
+        - task.branch
+        - task.imageRef
+        - task.devNamespace
+        - task.devUrl
+        - task.pullRequestUrl
+        - task.pullRequestNumber
+    taskStatusMapping:
+      clarifying:
+        outcome: active
+        cycleStatus: delivering
+      specifying:
+        outcome: active
+        cycleStatus: delivering
+      building:
+        outcome: active
+        cycleStatus: delivering
+      deploying:
+        outcome: active
+        cycleStatus: delivering
+      shipping:
+        outcome: active
+        cycleStatus: delivering
+      review:
+        outcome: ready-to-release
+        cycleStatus: ready_to_release
+      completed:
+        outcome: awaiting-merge-confirmation
+        cycleStatus: ready_to_release
+        rule: Task completion must not set mergeSha, completedAt, or succeeded.
+      failed:
+        outcome: failed
+        cycleStatus: delivering
+        rule: Persist task.errorMessage as cycle.lastError and retain the same proposal and resources.
+      discarded:
+        outcome: failed
+        cycleStatus: delivering
+        rule: Persist a non-success error and retain the same proposal and resources.
+      deleting:
+        outcome: failed
+        cycleStatus: delivering
+        rule: Persist a non-success error and retain the same proposal and resources.
+
+  - operationId: renewLease
+    input:
+      campaignId: uuid
+    output:
+      claimed: boolean
+      leaseOwner: string
+      leaseExpiresAt: epoch milliseconds
+    behavior:
+      - Renew through the existing SQLite lease claim operation using the same owner.
+      - Return the later persisted expiry when renewal succeeds.
+      - Reject advancement with CAMPAIGN_CONFLICT when another unexpired owner holds the lease.
+
+  - operationId: runOnce
+    input: none
+    output: AutonomousCampaignCoordinatorTickResult
+    selection:
+      - inspect running campaigns in deterministic persisted order
+      - claim at most one campaign for the tick
+      - skip campaigns with no accepted current proposal
+    behavior:
+      - Hand off an accepted cycle that has no task.
+      - Reconcile an accepted cycle that already has a task.
+      - Renew the lease before advancing delivery state.
+      - Return idle when no campaign can be advanced.
+      - Leave manual tasks and default workstreams unchanged.
+      - Never create the next cycle while the current cycle is non-terminal.
+
+  - operationId: startAutonomousCampaignCoordinator
+    input:
+      socketServer: existing Socket.IO server
+      intervalMs: optional positive integer
+      initialDelayMs: optional non-negative integer
+      leaseTtlMs: optional positive integer
+    output: stop function
+    behavior:
+      - Start one non-overlapping internal scheduler after startup reconciliation.
+      - Run each tick sequentially through runOnce.
+      - Log and retain state on tick failure instead of terminating the API process.
+      - Be idempotent when startup calls it more than once.
+
+persistence:
+  workstreams:
+    additiveColumns:
+      - name: campaign_cycle_id
+        type: TEXT
+        nullable: true
+        uniqueWhenPresent: true
+    semantics:
+      - identifies the one workstream created for an autonomous cycle
+      - permits recovery after a crash before autonomous_cycles.workstream_id is written
+
+  tasks:
+    additiveColumns:
+      - name: campaign_cycle_id
+        type: TEXT
+        nullable: true
+        uniqueWhenPresent: true
+    semantics:
+      - identifies the one task created for an autonomous cycle
+      - permits recovery after a crash before autonomous_cycles.task_id is written
+      - remains null for every manually created task
+
+  autonomous_cycles:
+    existingColumns:
+      - workstream_id
+      - task_id
+      - branch_name
+      - pull_request_url
+      - last_error
+    additiveColumns:
+      - name: image_ref
+        type: TEXT
+        nullable: true
+      - name: preview_namespace
+        type: TEXT
+        nullable: true
+      - name: preview_url
+        type: TEXT
+        nullable: true
+      - name: pull_request_number
+        type: INTEGER
+        nullable: true
+    resourceCheckpoint:
+      - workstream_id
+      - task_id
+      - branch_name
+      - image_ref
+      - preview_namespace
+      - preview_url
+      - pull_request_url
+      - pull_request_number
+      - updated_at
+    writeGuard:
+      - campaign status is running
+      - lease owner matches the coordinator
+      - cycle belongs to the campaign
+      - cycle is the campaign current cycle
+    transaction: BEGIN IMMEDIATE for each local compare-and-set transition
+
+errors:
+  campaign-proposal-required:
+    description: The cycle has no accepted proposal or proposal fingerprint.
+  campaign-cycle-mismatch:
+    description: The cycle does not belong to the requested campaign or is not current.
+  campaign-not-running:
+    description: The campaign is not in running status.
+  campaign-delivery-conflict:
+    description: Another persisted resource or state transition won the handoff race.
+  campaign-task-not-found:
+    description: No campaign-linked task can be recovered for the cycle.
+  CAMPAIGN_CONFLICT:
+    description: Another coordinator owns an unexpired campaign lease.
+
+scenarioMappings:
+  - scenario: Accepted proposal creates one serial workstream
+    operations: [handoffAcceptedProposal]
+  - scenario: Existing delivery pipeline executes the campaign task
+    operations: [handoffAcceptedProposal, reconcileDelivery]
+  - scenario: A non-terminal campaign task blocks the next feature cycle
+    operations: [runOnce, reconcileDelivery]
+  - scenario: Active delivery renews the coordinator lease
+    operations: [renewLease]
+  - scenario: Another coordinator cannot advance a renewed campaign
+    operations: [renewLease, handoffAcceptedProposal]
+  - scenario: Replaying delivery handoff does not duplicate local resources
+    operations: [handoffAcceptedProposal]
+  - scenario: Restart after workstream creation reuses that workstream
+    operations: [handoffAcceptedProposal]
+  - scenario: Restart recovers persisted delivery resources
+    operations: [reconcileDelivery]
+  - scenario: Normal review state is detected as delivery completion
+    operations: [reconcileDelivery]
+  - scenario: Task completion is not confirmed merge success
+    operations: [reconcileDelivery]
+  - scenario: Failed delivery remains attached to the same feature
+    operations: [reconcileDelivery]
+  - scenario: Manual task creation remains independent
+    operations: [runOnce]

@@ -17,6 +17,7 @@ interface WorkstreamRow {
   id: string;
   repository: string;
   name: string;
+  campaign_cycle_id: string | null;
   data: string;
   created_at: string;
   updated_at: string;
@@ -27,13 +28,18 @@ function now(): string {
 }
 
 function hydrate(row: WorkstreamRow): Workstream {
-  return JSON.parse(row.data) as Workstream;
+  const workstream = JSON.parse(row.data) as Workstream;
+  if (row.campaign_cycle_id && !workstream.campaignCycleId) {
+    workstream.campaignCycleId = row.campaign_cycle_id;
+  }
+  return workstream;
 }
 
 export function createWorkstream(
   repository: string,
   name: string,
   description?: string,
+  options: { campaignCycleId?: string } = {},
 ): Workstream {
   const ts = now();
   const ws: Workstream = {
@@ -41,15 +47,27 @@ export function createWorkstream(
     repository,
     name,
     ...(description ? { description } : {}),
+    ...(options.campaignCycleId
+      ? { campaignCycleId: options.campaignCycleId }
+      : {}),
     createdAt: ts,
     updatedAt: ts,
   };
   getDb()
     .prepare(
-      `INSERT INTO workstreams (id, repository, name, data, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO workstreams (
+         id, repository, name, campaign_cycle_id, data, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(ws.id, repository, name, JSON.stringify(ws), ts, ts);
+    .run(
+      ws.id,
+      repository,
+      name,
+      ws.campaignCycleId ?? null,
+      JSON.stringify(ws),
+      ts,
+      ts,
+    );
   return ws;
 }
 
@@ -58,6 +76,50 @@ export function getWorkstream(id: string): Workstream | undefined {
     | WorkstreamRow
     | undefined;
   return row ? hydrate(row) : undefined;
+}
+
+export function getWorkstreamByCampaignCycleId(
+  campaignCycleId: string,
+): Workstream | undefined {
+  const row = getDb()
+    .prepare('SELECT * FROM workstreams WHERE campaign_cycle_id = ?')
+    .get(campaignCycleId) as WorkstreamRow | undefined;
+  return row ? hydrate(row) : undefined;
+}
+
+export interface EnsureCampaignWorkstreamResult {
+  workstream: Workstream;
+  created: boolean;
+}
+
+export function ensureCampaignWorkstream(input: {
+  campaignCycleId: string;
+  repository: string;
+  name: string;
+  description?: string;
+}): EnsureCampaignWorkstreamResult {
+  if (!input.campaignCycleId.trim()) {
+    throw new Error('Campaign cycle ID is required');
+  }
+  const db = getDb();
+  const ensure = db.transaction(() => {
+    const existing = db
+      .prepare('SELECT * FROM workstreams WHERE campaign_cycle_id = ?')
+      .get(input.campaignCycleId) as WorkstreamRow | undefined;
+    if (existing) {
+      return { workstream: hydrate(existing), created: false };
+    }
+    return {
+      workstream: createWorkstream(
+        input.repository,
+        input.name,
+        input.description,
+        { campaignCycleId: input.campaignCycleId },
+      ),
+      created: true,
+    };
+  });
+  return ensure.immediate();
 }
 
 export function listWorkstreams(repository?: string): Workstream[] {

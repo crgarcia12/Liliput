@@ -1209,7 +1209,175 @@
     },
     "ext-004": {
       "type": "extension",
-      "status": "in-progress"
+      "status": "in-progress",
+      "steps": {
+        "tests": {
+          "status": "approved",
+          "e2e": {
+            "status": "done",
+            "flowCount": 0,
+            "newSpecFiles": [],
+            "newPageObjects": [],
+            "reason": "Workstream handoff and pipeline completion detection are internal coordinator capabilities with no new operator UI journey.",
+            "existingPlaywrightSuite": "4-discovered"
+          },
+          "gherkin": {
+            "status": "approved",
+            "featureFiles": [
+              "specs/features/autonomous-campaign-workstream-handoff.feature"
+            ],
+            "scenarioCount": 12,
+            "approvedAt": "2026-07-22T11:30:27Z",
+            "approvalSource": "explicit-unattended-continuation"
+          },
+          "cucumberSteps": [
+            "tests/features/step-definitions/autonomous-campaign-workstream-handoff.steps.ts"
+          ],
+          "vitestFiles": [
+            "src/api/tests/unit/autonomous-campaign-workstream-handoff.test.ts"
+          ],
+          "redBaseline": {
+            "apiBuild": "pass",
+            "cucumberDryRun": {
+              "status": "pass",
+              "scenarios": 12,
+              "steps": 84,
+              "undefined": 0,
+              "ambiguous": 0
+            },
+            "cucumber": {
+              "status": "expected-failure",
+              "scenariosFailed": 12,
+              "scenariosPassed": 0,
+              "stepsFailed": 12,
+              "reason": "The autonomous campaign coordinator module does not exist yet."
+            },
+            "vitest": {
+              "status": "expected-failure",
+              "filesFailed": 1,
+              "testsFailed": 13,
+              "testsPassed": 0,
+              "reason": "The autonomous campaign coordinator module does not exist yet."
+            },
+            "playwrightDiscovery": {
+              "status": "pass",
+              "files": 2,
+              "tests": 4
+            },
+            "verifiedAt": "2026-07-22T13:53:07Z"
+          },
+          "approvedAt": "2026-07-22T13:53:07Z",
+          "approvalSource": "explicit-unattended-continuation"
+        },
+        "contracts": {
+          "status": "done",
+          "apiContracts": [
+            "specs/contracts/api/autonomous-campaign-workstream-handoff.yaml"
+          ],
+          "sharedTypes": [
+            "src/shared/types/autonomous-campaign-delivery.ts",
+            "src/shared/types/autonomous-campaign-state.ts",
+            "src/shared/types/index.ts"
+          ],
+          "infraContract": "specs/contracts/infra/resources.yaml",
+          "infraUpdated": true,
+          "newResources": [],
+          "newEnvironmentVariables": [],
+          "newSecrets": [],
+          "newModelDeployments": [],
+          "bicepChangesRequired": false,
+          "kubernetesManifestChangesRequired": false,
+          "apiBuild": "pass",
+          "webBuild": "pass",
+          "yamlValidation": "pass",
+          "completedAt": "2026-07-22T13:59:06Z"
+        },
+        "implementation": {
+          "status": "approved",
+          "research": {
+            "sqliteTransactions": "Use better-sqlite3 immediate transactions and unique partial indexes for exact-once cycle linkage.",
+            "scheduler": "Use recursive unref timers, non-overlapping ticks, round-robin campaign selection, and heartbeat every owned lease.",
+            "remoteRecovery": "Persist deterministic branch, image, preview, and pull-request checkpoints before or immediately after remote mutation, and reuse open PRs by head branch.",
+            "sources": [
+              "https://www.sqlite.org/lang_transaction.html",
+              "https://www.sqlite.org/partialindex.html",
+              "https://github.com/WiseLibs/better-sqlite3/blob/master/docs/api.md",
+              "https://nodejs.org/api/timers.html",
+              "https://docs.github.com/en/rest/pulls/pulls"
+            ],
+            "packageUpdates": []
+          },
+          "slices": {
+            "api": {
+              "status": "done",
+              "modifiedFiles": [
+                "src/api/src/engine/agent-engine.ts",
+                "src/api/src/engine/autonomous-campaign-control.ts",
+                "src/api/src/engine/autonomous-campaign-coordinator.ts",
+                "src/api/src/engine/checkpoint-writer.ts",
+                "src/api/src/engine/github-pr.ts",
+                "src/api/src/stores/autonomous-campaign-store.ts",
+                "src/api/src/stores/db.ts",
+                "src/api/src/stores/task-store.ts",
+                "src/api/src/stores/workstream-store.ts"
+              ],
+              "failingTests": [],
+              "lastTestRun": "2026-07-23T07:40:23Z",
+              "iteration": 7
+            },
+            "web": {
+              "status": "not-applicable",
+              "reason": "ext-004 adds no operator UI or browser flow.",
+              "modifiedFiles": []
+            },
+            "integration": {
+              "status": "done",
+              "modifiedFiles": [
+                "src/api/src/index.ts",
+                "specs/prd.md"
+              ],
+              "failingTests": [],
+              "lastTestRun": "2026-07-23T07:40:23Z",
+              "iteration": 4
+            }
+          },
+          "review": {
+            "status": "pass",
+            "exactlyOnceLinks": "unique-partial-index-and-immediate-transaction",
+            "restartRecovery": "campaign-aware-handoff-replay-and-remote-checkpoints",
+            "leaseSafety": "fresh-atomic-revalidation-and-owned-lease-heartbeats",
+            "schedulerFairness": "round-robin-across-running-campaigns",
+            "manualWorkflowIsolation": "pass",
+            "humanApproval": {
+              "status": "approved",
+              "approvedAt": "2026-07-23T07:40:23Z",
+              "approvalSource": "explicit-unattended-continuation"
+            }
+          },
+          "regression": {
+            "api": {
+              "status": "pass",
+              "files": 43,
+              "tests": 465
+            },
+            "cucumber": {
+              "status": "pass",
+              "scenarios": 60,
+              "steps": 422
+            },
+            "playwright": {
+              "status": "pass",
+              "tests": 4
+            },
+            "apiBuild": "pass",
+            "apiLint": "pass",
+            "webBuild": "pass",
+            "webLint": "pass",
+            "skippedTests": 0
+          },
+          "completedAt": "2026-07-23T07:40:23Z"
+        }
+      }
     },
     "ext-005": {
       "type": "extension",
@@ -1254,7 +1422,10 @@
     "ext-003-gherkin-approved": true,
     "ext-003-tests-approved": true,
     "ext-003-implementation-approved": true,
-    "ext-003-deployment-approved": true
+    "ext-003-deployment-approved": true,
+    "ext-004-gherkin-approved": true,
+    "ext-004-tests-approved": true,
+    "ext-004-implementation-approved": true
   },
   "testsStatus": {
     "reviewerConfigAndCliAuth": {
@@ -1337,6 +1508,18 @@
       "playwright": "4-pass",
       "deployment": "pass",
       "productionPlaywright": "4-pass"
+    },
+    "autonomousCampaignDelivery": {
+      "apiBuild": "pass",
+      "webBuild": "pass",
+      "apiLint": "pass",
+      "webLint": "pass",
+      "implementation": "pass",
+      "implementationApproval": "approved",
+      "apiTests": "465-pass",
+      "cucumber": "60-scenarios-422-steps-pass",
+      "playwright": "4-pass",
+      "skippedTests": 0
     }
   },
   "extensions": {
@@ -1422,5 +1605,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-22T11:24:08Z"
+  "lastUpdated": "2026-07-23T07:40:23Z"
 }
