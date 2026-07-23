@@ -163,6 +163,7 @@ export function pauseCampaign(
       expectedStatus: 'running',
       nextStatus: 'paused',
       idempotencyKey: `control:pause:${campaignId}:${randomUUID()}`,
+      leaseOwner: campaign.leaseOwner,
       nowMs,
     });
     const timestamp = new Date(nowMs).toISOString();
@@ -213,6 +214,7 @@ export function resumeCampaign(
       expectedStatus: 'paused',
       nextStatus: 'running',
       idempotencyKey: `control:resume:${campaignId}:${randomUUID()}`,
+      leaseOwner: campaign.leaseOwner,
       nowMs,
     });
     const timestamp = new Date(nowMs).toISOString();
@@ -255,6 +257,7 @@ export function stopCampaign(
       expectedStatus: campaign.status,
       nextStatus: 'stopped',
       idempotencyKey: `control:stop:${campaignId}:${randomUUID()}`,
+      leaseOwner: campaign.leaseOwner,
       nowMs,
     });
     const timestamp = new Date(nowMs).toISOString();

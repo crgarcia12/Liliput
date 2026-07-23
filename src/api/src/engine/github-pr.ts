@@ -316,6 +316,49 @@ export async function openPullRequest(
   };
 }
 
+export async function findPullRequestByHead(
+  repo: string,
+  head: string,
+  base = 'main',
+): Promise<PullRequest | undefined> {
+  const token = getToken();
+  const owner = repo.split('/')[0];
+  if (!owner) {
+    throw new Error(`Invalid GitHub repository: ${repo}`);
+  }
+  const query = new URLSearchParams({
+    state: 'open',
+    head: `${owner}:${head}`,
+    base,
+    per_page: '10',
+  });
+  const res = await fetch(
+    `https://api.github.com/repos/${repo}/pulls?${query.toString()}`,
+    {
+      headers: {
+        Authorization: ['Bearer', token].join(' '),
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    },
+  );
+  if (!res.ok) {
+    throw new Error(
+      `GitHub PR lookup failed (${res.status}): ${await res.text()}`,
+    );
+  }
+  const pulls = (await res.json()) as GitHubPrResponse[];
+  const pull = pulls[0];
+  return pull
+    ? {
+        number: pull.number,
+        htmlUrl: pull.html_url,
+        apiUrl: pull.url,
+        state: pull.state,
+      }
+    : undefined;
+}
+
 export async function updatePullRequestBody(
   repo: string,
   prNumber: number,

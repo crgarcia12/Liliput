@@ -8,6 +8,7 @@ import {
   type AutonomousCampaign,
   type AutonomousCampaignAttempt,
   type AutonomousCampaignCycle,
+  type AutonomousCampaignCycleStatus,
   type AutonomousCampaignIdeaSource,
   type AutonomousCampaignJsonObject,
   type AutonomousCampaignLeaseClaimResult,
@@ -65,7 +66,11 @@ interface CycleRow {
   workstream_id: string | null;
   task_id: string | null;
   branch_name: string | null;
+  image_ref: string | null;
+  preview_namespace: string | null;
+  preview_url: string | null;
   pull_request_url: string | null;
+  pull_request_number: number | null;
   review_decision_json: string | null;
   release_gates_json: string | null;
   merge_sha: string | null;
@@ -181,7 +186,11 @@ function hydrateCycle(row: CycleRow): AutonomousCampaignCycle {
     workstreamId: optional(row.workstream_id),
     taskId: optional(row.task_id),
     branchName: optional(row.branch_name),
+    imageRef: optional(row.image_ref),
+    previewNamespace: optional(row.preview_namespace),
+    previewUrl: optional(row.preview_url),
     pullRequestUrl: optional(row.pull_request_url),
+    pullRequestNumber: optional(row.pull_request_number),
     reviewDecision: row.review_decision_json
       ? parseJson<AutonomousCampaignJsonObject>(row.review_decision_json)
       : undefined,
@@ -246,6 +255,22 @@ function assertLeaseOwner(
   if (hasUnexpiredLease && campaign.lease_owner !== leaseOwner) {
     throw new AutonomousCampaignConflictError(
       `Campaign ${campaign.id} is leased by another coordinator`,
+    );
+  }
+}
+
+function assertActiveLeaseOwner(
+  campaign: CampaignRow,
+  leaseOwner: string,
+  nowMs: number,
+): void {
+  if (
+    campaign.lease_owner !== leaseOwner ||
+    campaign.lease_expires_at === null ||
+    campaign.lease_expires_at <= nowMs
+  ) {
+    throw new AutonomousCampaignConflictError(
+      `Campaign ${campaign.id} is not actively leased by ${leaseOwner}`,
     );
   }
 }
@@ -384,6 +409,18 @@ export function listCampaigns(): AutonomousCampaign[] {
   return rows.map(hydrateCampaign);
 }
 
+export function listRunningCampaigns(): AutonomousCampaign[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT *
+         FROM autonomous_campaigns
+        WHERE status = 'running'
+        ORDER BY created_at ASC, id ASC`,
+    )
+    .all() as CampaignRow[];
+  return rows.map(hydrateCampaign);
+}
+
 export function createCycle(
   input: CreateAutonomousCampaignCycleInput,
 ): AutonomousCampaignCycle {
@@ -463,6 +500,91 @@ export function getCurrentCycle(
     )
     .get(campaignId) as CycleRow | undefined;
   return row ? hydrateCycle(row) : undefined;
+}
+
+export interface UpdateAutonomousCampaignDeliveryInput {
+  campaignId: string;
+  cycleId: string;
+  leaseOwner: string;
+  nowMs?: number;
+  expectedStatus?: AutonomousCampaignCycleStatus;
+  status?: AutonomousCampaignCycleStatus;
+  workstreamId?: string;
+  taskId?: string;
+  branchName?: string;
+  imageRef?: string;
+  previewNamespace?: string;
+  previewUrl?: string;
+  pullRequestUrl?: string;
+  pullRequestNumber?: number;
+  lastError?: string;
+}
+
+export function updateCycleDelivery(
+  input: UpdateAutonomousCampaignDeliveryInput,
+): AutonomousCampaignCycle {
+  const db = getDb();
+  const update = db.transaction(() => {
+    const nowMs = input.nowMs ?? Date.now();
+    const campaign = requireCampaignRow(input.campaignId);
+    assertActiveLeaseOwner(campaign, input.leaseOwner, nowMs);
+    if (campaign.status !== 'running') {
+      throw new AutonomousCampaignConflictError(
+        `Campaign ${input.campaignId} is not running`,
+      );
+    }
+    if (campaign.current_cycle_id !== input.cycleId) {
+      throw new AutonomousCampaignConflictError(
+        `Cycle ${input.cycleId} is not current for campaign ${input.campaignId}`,
+      );
+    }
+    const row = requireCycleRow(input.cycleId);
+    if (row.campaign_id !== input.campaignId) {
+      throw new AutonomousCampaignConflictError(
+        `Cycle ${input.cycleId} does not belong to campaign ${input.campaignId}`,
+      );
+    }
+    if (
+      input.expectedStatus !== undefined &&
+      row.status !== input.expectedStatus
+    ) {
+      throw new AutonomousCampaignConflictError(
+        `Cycle ${input.cycleId} changed from ${input.expectedStatus} to ${row.status}`,
+      );
+    }
+    const current = hydrateCycle(row);
+    const ts = new Date(nowMs).toISOString();
+    db.prepare(
+      `UPDATE autonomous_cycles
+          SET status = ?,
+              workstream_id = ?,
+              task_id = ?,
+              branch_name = ?,
+              image_ref = ?,
+              preview_namespace = ?,
+              preview_url = ?,
+              pull_request_url = ?,
+              pull_request_number = ?,
+              last_error = ?,
+              updated_at = ?
+        WHERE id = ?`,
+    ).run(
+      input.status ?? current.status,
+      input.workstreamId ?? current.workstreamId ?? null,
+      input.taskId ?? current.taskId ?? null,
+      input.branchName ?? current.branchName ?? null,
+      input.imageRef ?? current.imageRef ?? null,
+      input.previewNamespace ?? current.previewNamespace ?? null,
+      input.previewUrl ?? current.previewUrl ?? null,
+      input.pullRequestUrl ?? current.pullRequestUrl ?? null,
+      input.pullRequestNumber ?? current.pullRequestNumber ?? null,
+      input.lastError ?? current.lastError ?? null,
+      ts,
+      input.cycleId,
+    );
+    return hydrateCycle(requireCycleRow(input.cycleId));
+  });
+  return update.immediate();
 }
 
 export function createAttempt(

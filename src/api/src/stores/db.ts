@@ -51,12 +51,13 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 
 CREATE TABLE IF NOT EXISTS workstreams (
-  id          TEXT PRIMARY KEY,
-  repository  TEXT NOT NULL,
-  name        TEXT NOT NULL,
-  data        TEXT NOT NULL,
-  created_at  TEXT NOT NULL,
-  updated_at  TEXT NOT NULL
+  id                TEXT PRIMARY KEY,
+  repository        TEXT NOT NULL,
+  name              TEXT NOT NULL,
+  campaign_cycle_id TEXT,
+  data              TEXT NOT NULL,
+  created_at        TEXT NOT NULL,
+  updated_at        TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_workstreams_repository ON workstreams(repository);
 
@@ -64,6 +65,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   id            TEXT PRIMARY KEY,
   repository    TEXT,
   workstream_id TEXT,
+  campaign_cycle_id TEXT,
   status        TEXT NOT NULL,
   data          TEXT NOT NULL,
   created_at    TEXT NOT NULL,
@@ -303,7 +305,11 @@ CREATE TABLE IF NOT EXISTS autonomous_cycles (
   workstream_id         TEXT,
   task_id               TEXT,
   branch_name           TEXT,
+  image_ref             TEXT,
+  preview_namespace     TEXT,
+  preview_url           TEXT,
   pull_request_url      TEXT,
+  pull_request_number   INTEGER,
   review_decision_json  TEXT,
   release_gates_json    TEXT,
   merge_sha             TEXT,
@@ -396,6 +402,15 @@ export function getDb(): Database.Database {
       logger.info({}, 'Migrated: added feature_id column to tasks');
     }
     _db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_feature ON tasks(feature_id)`);
+    if (!cols.some((c) => c.name === 'campaign_cycle_id')) {
+      _db.exec(`ALTER TABLE tasks ADD COLUMN campaign_cycle_id TEXT`);
+      logger.info({}, 'Migrated: added campaign_cycle_id column to tasks');
+    }
+    _db.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_campaign_cycle
+         ON tasks(campaign_cycle_id)
+        WHERE campaign_cycle_id IS NOT NULL`,
+    );
     // Pod-ownership / lease columns. Forward-compat for multi-replica scale-out.
     // Today (single replica) the columns are written by reconcileOrphanedRuns +
     // autoResumeInterruptedTasks for telemetry only — no enforcement. Scale-out
@@ -472,6 +487,32 @@ export function getDb(): Database.Database {
       logger.info(
         {},
         'Migrated: added proposal_history_json column to autonomous_cycles',
+      );
+    }
+    if (!cycleCols.some((c) => c.name === 'image_ref')) {
+      _db.exec(`ALTER TABLE autonomous_cycles ADD COLUMN image_ref TEXT`);
+      logger.info({}, 'Migrated: added image_ref column to autonomous_cycles');
+    }
+    if (!cycleCols.some((c) => c.name === 'preview_namespace')) {
+      _db.exec(
+        `ALTER TABLE autonomous_cycles ADD COLUMN preview_namespace TEXT`,
+      );
+      logger.info(
+        {},
+        'Migrated: added preview_namespace column to autonomous_cycles',
+      );
+    }
+    if (!cycleCols.some((c) => c.name === 'preview_url')) {
+      _db.exec(`ALTER TABLE autonomous_cycles ADD COLUMN preview_url TEXT`);
+      logger.info({}, 'Migrated: added preview_url column to autonomous_cycles');
+    }
+    if (!cycleCols.some((c) => c.name === 'pull_request_number')) {
+      _db.exec(
+        `ALTER TABLE autonomous_cycles ADD COLUMN pull_request_number INTEGER`,
+      );
+      logger.info(
+        {},
+        'Migrated: added pull_request_number column to autonomous_cycles',
       );
     }
 
@@ -551,6 +592,18 @@ export function getDb(): Database.Database {
       _db.exec(`ALTER TABLE workstreams ADD COLUMN tracker_issue_number INTEGER`);
       logger.info({}, 'Migrated: added tracker_issue_number column to workstreams');
     }
+    if (!wsCols.some((c) => c.name === 'campaign_cycle_id')) {
+      _db.exec(`ALTER TABLE workstreams ADD COLUMN campaign_cycle_id TEXT`);
+      logger.info(
+        {},
+        'Migrated: added campaign_cycle_id column to workstreams',
+      );
+    }
+    _db.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_workstreams_campaign_cycle
+         ON workstreams(campaign_cycle_id)
+        WHERE campaign_cycle_id IS NOT NULL`,
+    );
 
     const featureCols = _db
       .prepare(`PRAGMA table_info(features)`)

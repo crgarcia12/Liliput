@@ -9,13 +9,15 @@ import { createApp } from './app.js';
 import { setupWebSocket } from './ws/handler.js';
 import { stopCopilotClient } from './engine/copilot-client.js';
 import { reconcileOrphanedRuns, backfillDefaultWorkstreams } from './stores/task-store.js';
-import { purgeOrphanWorkspaces, restoreDevRoutesFromStore, autoResumeInterruptedTasks } from './engine/agent-engine.js';
+import { purgeOrphanWorkspaces, restoreDevRoutesFromStore, autoResumeInterruptedTasks, startBuild } from './engine/agent-engine.js';
 import { runDeletingSweeper } from './routes/workstreams.js';
 import { ensureAzLogin } from './engine/azure-builder.js';
 import { startReconciler } from './engine/loop-reconciler.js';
 import { logger } from './logger.js';
 import { isAutoResumeEnabled, autoResumeConcurrency, getPodId } from './engine/pod-identity.js';
 import { startInternalServer } from './internal-server.js';
+import { startAutonomousCampaignCoordinator } from './engine/autonomous-campaign-coordinator.js';
+import { findPullRequestByHead } from './engine/github-pr.js';
 
 const PORT = parseInt(process.env['PORT'] ?? '5001', 10);
 
@@ -133,11 +135,17 @@ if (process.env['LILIPUT_RECONCILER_ENABLED'] === '1') {
   startReconciler(io, Number.isFinite(interval) && interval > 0 ? { intervalMs: interval } : {});
 }
 
+const stopCampaignCoordinator = startAutonomousCampaignCoordinator({
+  startTaskPipeline: (taskId) => startBuild(io, taskId),
+  findPullRequest: findPullRequestByHead,
+});
+
 // Privileged loopback-only listener for orchestrator-driven tools.
 const internalServer = startInternalServer();
 
 async function shutdown(signal: string): Promise<void> {
   logger.info({ signal }, 'Shutting down');
+  stopCampaignCoordinator();
   await stopCopilotClient();
   if (internalServer) internalServer.close();
   server.close(() => process.exit(0));

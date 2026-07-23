@@ -61,6 +61,8 @@ export interface CheckpointWriterOptions {
   handle: git.RepoHandle;
   /** Logger callback for chat / activity rows (debug-level only). */
   onLog?: (level: 'info' | 'warn', message: string) => void;
+  /** Called after a checkpoint commit is confirmed on the remote branch. */
+  onPushed?: (sha: string) => void;
   /**
    * Debounce window: wait this long after the last mutating event before
    * committing. Default 60s — long enough that a cluster of 10 edits in a
@@ -79,6 +81,7 @@ export interface CheckpointWriterOptions {
 export class CheckpointWriter {
   private readonly handle: git.RepoHandle;
   private readonly onLog: (level: 'info' | 'warn', message: string) => void;
+  private readonly onPushed: (sha: string) => void;
   private readonly debounceMs: number;
   private readonly maxIntervalMs: number;
 
@@ -92,6 +95,7 @@ export class CheckpointWriter {
   constructor(opts: CheckpointWriterOptions) {
     this.handle = opts.handle;
     this.onLog = opts.onLog ?? (() => undefined);
+    this.onPushed = opts.onPushed ?? (() => undefined);
     this.debounceMs = opts.debounceMs ?? 60_000;
     this.maxIntervalMs = opts.maxIntervalMs ?? 300_000;
   }
@@ -165,6 +169,7 @@ export class CheckpointWriter {
       }
       try {
         await git.push(this.handle);
+        this.onPushed(sha);
         this.lastCheckpointAt = Date.now();
         this.firstPendingEventAt = 0;
         this.onLog('info', `📦 Checkpoint ${sha.substring(0, 7)} pushed to ${this.handle.branch}`);

@@ -63,6 +63,7 @@ import {
 import { syncRoutes, type DevRoute } from './nginx-patcher.js';
 import {
   buildPullRequestDescription,
+  findPullRequestByHead,
   openPullRequest,
   markPullRequestReady,
   closePullRequest,
@@ -1343,6 +1344,12 @@ async function buildWithFixer(ctx: BuildContext): Promise<BuildOutcome> {
   let transientRetries = 0;
   for (let attempt = 1; attempt <= MAX_BUILD_FIX_ATTEMPTS + 1; attempt++) {
     const tag = sha.substring(0, 12);
+    if (ACR_NAME) {
+      store.updateTask(ctx.taskId, {
+        imageRef: `${ACR_NAME}.azurecr.io/${ctx.imageName}:${tag}`,
+        commitSha: sha,
+      });
+    }
     try {
       logPhase(
         ctx.io,
@@ -1367,6 +1374,10 @@ async function buildWithFixer(ctx: BuildContext): Promise<BuildOutcome> {
         undefined,
         result.imageRef,
       );
+      store.updateTask(ctx.taskId, {
+        imageRef: result.imageRef,
+        commitSha: sha,
+      });
       return { imageRef: result.imageRef, sha };
     } catch (err) {
       lastErr = err;
@@ -2391,17 +2402,19 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
 
   logPhase(io, taskId, coder, 'info', `Creating branch ${branch}`, `git checkout -b ${branch}`);
   await git.createBranch(handle, branch);
+  store.updateTask(taskId, { branch });
 
   // Reserve the branch on origin immediately so a pod crash mid-turn can
   // recover by re-cloning from the remote — without this, ``task.branch``
   // would only be set after the Builder phase succeeds, and any crash
   // during the (long) Coder turn would silently lose all work.
+  let branchReserved = false;
   try {
     logPhase(io, taskId, coder, 'info', `Reserving branch on origin…`, `git push --set-upstream origin ${branch}`);
     await git.pushInitialBranch(handle, {
       onLog: (m) => logPhase(io, taskId, coder, 'info', m),
     });
-    store.updateTask(taskId, { branch });
+    branchReserved = true;
     logPhase(io, taskId, coder, 'info', `📌 Branch ${branch} reserved — checkpoints will push here`);
   } catch (err) {
     // Non-fatal: agent can still run, just no resilience to mid-turn crashes.
@@ -2414,7 +2427,9 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
     );
   }
   const baselineSha = await git.headSha(handle);
-  store.updateTask(taskId, { baseCommitSha: baselineSha });
+  if (branchReserved) {
+    store.updateTask(taskId, { baseCommitSha: baselineSha });
+  }
 
   // Drop the Liliput Deploy Contract into the workspace so the agent can
   // re-read the proxy semantics any time. Excluded from git so it never
@@ -2510,6 +2525,12 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   const hb = startHeartbeat(io, taskId, coder);
   const checkpointer = new CheckpointWriter({
     handle,
+    onPushed: () => {
+      store.updateTask(taskId, {
+        branch,
+        baseCommitSha: baselineSha,
+      });
+    },
     onLog: (level, message) => logPhase(io, taskId, coder, level, message),
   });
   let result;
@@ -2686,6 +2707,11 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
       }
     },
   });
+  store.updateTask(taskId, {
+    branch,
+    baseCommitSha: baselineSha,
+    commitSha: sha,
+  });
   logPhase(io, taskId, builder, 'info', `Branch pushed to ${repo}`);
 
   if (!ACR_NAME) {
@@ -2720,8 +2746,15 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
 
   const namespace = devEnvName(repo, branch);
   const appName = 'app';
+  const devUrl = `${PUBLIC_BASE_URL}${pathPrefix}/`;
   // `pathPrefix` is already in scope from the coder phase above (computed
   // once via pathPrefixFor(repo, branch) right after clone).
+  store.updateTask(taskId, {
+    devNamespace: namespace,
+    devUrl,
+    devPort: df.port,
+    devEnvState: 'stopped',
+  });
 
   logPhase(io, taskId, deployer, 'info', `Ensuring namespace ${namespace}…`);
   await ensureNamespace({ name: namespace, labels: { 'liliput.dev/task-id': taskId } });
@@ -2753,7 +2786,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   });
   await syncRoutes(activeRoutes());
 
-  const devUrl = `${PUBLIC_BASE_URL}${pathPrefix}/`;
+  store.updateTask(taskId, { devEnvState: 'active' });
   logPhase(io, taskId, deployer, 'info', `Dev environment live at ${devUrl}`);
   completePhase(io, taskId, deployer);
   setPipelineStage(io, taskId, 'deploy', 'done');
@@ -2775,25 +2808,44 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   const reviewer = spawnPhase(io, taskId, 'reviewer', 'Reviewer Liliputian');
   let prUrl: string | undefined;
   let prNumber: number | undefined;
-  if (reviewer && task.repository && task.branch) {
+  if (reviewer && task.repository) {
     const baseBranch = task.baseBranch ?? 'main';
     try {
-      logPhase(io, taskId, reviewer, 'info', `Opening draft pull request to ${baseBranch}…`);
-      const pr = await openPullRequest({
-        repo: task.repository,
-        title: `[liliput] ${task.title}`,
-        body: taskPullRequestDescription(task, {
-          implementationNotes,
-          changedFiles: implementationChangedFiles,
-          commitSha: deployOutcome.sha,
-          previewUrl: devUrl,
-        }),
-        head: task.branch,
-        base: baseBranch,
-        draft: true,
-      });
+      const existingPr = await findPullRequestByHead(
+        task.repository,
+        branch,
+        baseBranch,
+      );
+      logPhase(
+        io,
+        taskId,
+        reviewer,
+        'info',
+        existingPr
+          ? `Reusing pull request #${existingPr.number} for ${branch}`
+          : `Opening draft pull request to ${baseBranch}…`,
+      );
+      const pr =
+        existingPr ??
+        (await openPullRequest({
+          repo: task.repository,
+          title: `[liliput] ${task.title}`,
+          body: taskPullRequestDescription(task, {
+            implementationNotes,
+            changedFiles: implementationChangedFiles,
+            commitSha: deployOutcome.sha,
+            previewUrl: devUrl,
+          }),
+          head: branch,
+          base: baseBranch,
+          draft: true,
+        }));
       prUrl = pr.htmlUrl;
       prNumber = pr.number;
+      store.updateTask(taskId, {
+        pullRequestUrl: pr.htmlUrl,
+        pullRequestNumber: pr.number,
+      });
       logPhase(io, taskId, reviewer, 'info', `Draft PR opened: ${pr.htmlUrl}`);
       // Link PR back to Feature so the RM dispatcher can find it. The PR is
       // still draft — we apply `dev:in-progress` on the issue, not rm:review.
