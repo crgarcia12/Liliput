@@ -175,3 +175,6 @@
 [2026-07-23T07:40:23Z] increment=ext-004 step=implementation action=focused-review result=pass exactOnce=partial-unique-index restartRecovery=campaign-aware remoteCheckpoints=deterministic leaseSafety=atomic-revalidation scheduler=round-robin-heartbeat
 [2026-07-23T07:40:23Z] increment=ext-004 step=implementation action=full-regression result=pass api=43-files-465-tests cucumber=60-scenarios-422-steps playwright=4 apiBuild=pass apiLint=pass webBuild=pass webLint=pass skipped=0
 [2026-07-23T07:40:23Z] increment=ext-004 step=implementation action=human-gate result=approved approvalSource=explicit-unattended-continuation nextStep=verification
+[2026-07-23T07:45:13Z] increment=ext-004 step=verification action=pull-request-merged result=success pr=https://github.com/crgarcia12/Liliput/pull/104 mergeCommit=62b941a893f22818615b200024fb492b68df7ac6 ci=https://github.com/crgarcia12/Liliput/actions/runs/29989023592
+[2026-07-23T08:02:51Z] increment=ext-004 step=verification action=aks-deploy result=error message="AKS API hostname returned DNS NXDOMAIN on two workflow attempts" workflow=https://github.com/crgarcia12/Liliput/actions/runs/29989156233
+[2026-07-23T08:02:51Z] increment=ext-004 step=verification action=deploy-recovery result=done strategy=guarded-control-plane-restart-and-dns-readiness

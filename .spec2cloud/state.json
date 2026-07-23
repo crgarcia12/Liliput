@@ -1376,6 +1376,18 @@
             "skippedTests": 0
           },
           "completedAt": "2026-07-23T07:40:23Z"
+        },
+        "verification": {
+          "status": "in-progress",
+          "deployment": {
+            "status": "blocked",
+            "workflowRun": "https://github.com/crgarcia12/Liliput/actions/runs/29989156233",
+            "commitSha": "62b941a893f22818615b200024fb492b68df7ac6",
+            "attempts": 2,
+            "error": "AKS API hostname returned DNS NXDOMAIN from GitHub Actions and local resolvers.",
+            "recovery": "Add guarded AKS control-plane restart and DNS readiness handling to the production deployment workflow."
+          },
+          "updatedAt": "2026-07-23T08:02:51Z"
         }
       }
     },
@@ -1605,5 +1617,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-23T07:40:23Z"
+  "lastUpdated": "2026-07-23T08:02:51Z"
 }
