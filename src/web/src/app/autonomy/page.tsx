@@ -24,8 +24,20 @@ const SOCKET_URL =
 const inputClassName =
   'mt-1 w-full rounded-md border border-[#2a2a40] bg-[#090910] px-3 py-2 text-sm text-gray-100 outline-none transition-colors placeholder:text-gray-600 focus:border-cyan-500/70 focus:ring-1 focus:ring-cyan-500/30';
 
+type CampaignCreationAction = 'draft' | 'start';
+
 function isTerminalCycle(status: AutonomousCampaignCycleStatus): boolean {
   return status === 'succeeded' || status === 'stopped';
+}
+
+function requestedCreationAction(
+  event: FormEvent<HTMLFormElement>,
+): CampaignCreationAction {
+  const submitter =
+    'submitter' in event.nativeEvent ? event.nativeEvent.submitter : null;
+  return submitter instanceof HTMLButtonElement && submitter.value === 'start'
+    ? 'start'
+    : 'draft';
 }
 
 function effectiveStatus(detail: AutonomousCampaignDetailResponse): string {
@@ -57,7 +69,8 @@ export default function AutonomyPage() {
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [adminDenied, setAdminDenied] = useState(false);
-  const [creating, setCreating] = useState(false);
+  const [creatingAction, setCreatingAction] =
+    useState<CampaignCreationAction | null>(null);
   const [actionInProgress, setActionInProgress] =
     useState<AutonomousCampaignAction | null>(null);
 
@@ -150,8 +163,10 @@ export default function AutonomyPage() {
 
   const createCampaign = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setCreating(true);
+    const creationAction = requestedCreationAction(event);
+    setCreatingAction(creationAction);
     setError(null);
+    let createdCampaignId: string | null = null;
 
     const request: CreateAutonomousCampaignRequest = {
       repository: repository.trim(),
@@ -171,13 +186,26 @@ export default function AutonomyPage() {
         '/api/autonomous-campaigns',
         { ...request },
       );
-      selectedCampaignIdRef.current = response.campaign.id;
-      setSelectedCampaignId(response.campaign.id);
-      await Promise.all([loadCampaigns(), loadDetail(response.campaign.id)]);
+      createdCampaignId = response.campaign.id;
+      selectedCampaignIdRef.current = createdCampaignId;
+      setSelectedCampaignId(createdCampaignId);
+
+      if (creationAction === 'start') {
+        const started = await apiClient.post<AutonomousCampaignDetailResponse>(
+          `/api/autonomous-campaigns/${createdCampaignId}/start`,
+        );
+        setDetail(started);
+        await loadCampaigns();
+      } else {
+        await Promise.all([loadCampaigns(), loadDetail(createdCampaignId)]);
+      }
     } catch (caught) {
+      if (createdCampaignId) {
+        await Promise.all([loadCampaigns(), loadDetail(createdCampaignId)]);
+      }
       reportError(caught);
     } finally {
-      setCreating(false);
+      setCreatingAction(null);
     }
   };
 
@@ -228,7 +256,7 @@ export default function AutonomyPage() {
             <div className="mb-4">
               <h2 className="text-sm font-semibold text-cyan-300">Create campaign</h2>
               <p className="mt-1 text-xs text-gray-500">
-                New campaigns remain in draft until explicitly started.
+                Save a draft, or start immediately with the configured attempt limits.
               </p>
             </div>
 
@@ -340,14 +368,28 @@ export default function AutonomyPage() {
                 </label>
               </div>
 
-              <button
-                type="submit"
-                data-testid="campaign-create"
-                disabled={creating}
-                className="inline-flex h-9 items-center rounded-md bg-cyan-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {creating ? 'Creating…' : 'Create campaign'}
-              </button>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="submit"
+                  name="creationAction"
+                  value="draft"
+                  data-testid="campaign-create"
+                  disabled={creatingAction !== null}
+                  className="inline-flex h-9 items-center rounded-md border border-[#34344a] bg-[#151520] px-4 text-sm font-semibold text-gray-200 transition-colors hover:border-cyan-500/50 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {creatingAction === 'draft' ? 'Saving…' : 'Save draft'}
+                </button>
+                <button
+                  type="submit"
+                  name="creationAction"
+                  value="start"
+                  data-testid="campaign-create-and-start"
+                  disabled={creatingAction !== null}
+                  className="inline-flex h-9 items-center rounded-md bg-cyan-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {creatingAction === 'start' ? 'Starting…' : 'Create and start'}
+                </button>
+              </div>
             </form>
           </section>
         )}

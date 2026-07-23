@@ -10,6 +10,7 @@ import type {
   CreateAutonomousCampaignInput,
 } from '../../../../shared/types/autonomous-campaign-state.js';
 import { createAutonomousCampaignsRouter } from '../../src/routes/autonomous-campaigns.js';
+import type { AutonomousCampaignControlOptions } from '../../src/engine/autonomous-campaign-control.js';
 import { resetAutonomousCampaignStore } from '../../src/stores/autonomous-campaign-store.js';
 import { getDb, resetDb } from '../../src/stores/db.js';
 
@@ -22,6 +23,7 @@ interface CampaignRouterDeps {
     | { ok: false; status: number; reason: string }
   >;
   now?: () => string;
+  control?: AutonomousCampaignControlOptions;
 }
 
 interface CampaignDetailResponse {
@@ -49,6 +51,7 @@ const validInput: CreateAutonomousCampaignInput = {
 async function buildApp(input: {
   role?: 'ADMIN' | 'USER';
   verifyRepositoryBranch?: CampaignRouterDeps['verifyRepositoryBranch'];
+  control?: AutonomousCampaignControlOptions;
 } = {}) {
   const server = http.createServer();
   const io = new SocketServer(server);
@@ -69,6 +72,7 @@ async function buildApp(input: {
         input.verifyRepositoryBranch ??
         vi.fn(async () => ({ ok: true as const })),
       now: () => now,
+      ...(input.control ? { control: input.control } : {}),
     }),
   );
   return { app, io, emit };
@@ -189,6 +193,26 @@ describe('autonomous campaign admin routes', () => {
       allowedActions: ['pause', 'stop'],
     });
   });
+
+  it.each(['pause', 'stop'] as const)(
+    'should cancel active proposal work when the operator requests %s',
+    async (action) => {
+      const cancelProposal = vi.fn();
+      const { app } = await buildApp({
+        control: { cancelProposal },
+      });
+      const campaign = await createCampaign(app);
+      const started = await request(app)
+        .post(`/api/autonomous-campaigns/${campaign.id}/start`);
+      const cycleId = started.body.cycle.id as string;
+
+      const response = await request(app)
+        .post(`/api/autonomous-campaigns/${campaign.id}/${action}`);
+
+      expect(response.status).toBe(200);
+      expect(cancelProposal).toHaveBeenCalledWith(campaign.id, cycleId);
+    },
+  );
 
   it('should make stop terminal for the campaign and current cycle', async () => {
     const { app } = await buildApp();

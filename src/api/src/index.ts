@@ -25,6 +25,7 @@ import { logger } from './logger.js';
 import { isAutoResumeEnabled, autoResumeConcurrency, getPodId } from './engine/pod-identity.js';
 import { startInternalServer } from './internal-server.js';
 import { startAutonomousCampaignCoordinator } from './engine/autonomous-campaign-coordinator.js';
+import { cancelAutonomousCampaignProposal } from './engine/autonomous-campaign-proposal.js';
 import { findPullRequestByHead } from './engine/github-pr.js';
 
 const PORT = parseInt(process.env['PORT'] ?? '5001', 10);
@@ -40,6 +41,7 @@ const app = createApp(io, {
     interruptTask: interruptTaskAgentTurn,
     resumeTask: (taskId) =>
       resumeCampaignTask(io, taskId, { queueIfActive: true }),
+    cancelProposal: cancelAutonomousCampaignProposal,
   },
 });
 server.on('request', app);

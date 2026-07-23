@@ -205,3 +205,10 @@
 [2026-07-23T11:26:11Z] increment=ext-005 step=verification action=cluster-verification result=pass powerState=Running readyNodes=4 api=1/1 web=1/1 gateway=1/1
 [2026-07-23T11:26:11Z] increment=ext-005 step=verification action=human-gate result=approved approvalSource=explicit-unattended-continuation
 [2026-07-23T11:26:11Z] increment=ext-005 action=increment-delivered result=transition-to-ext-006
+[2026-07-23T14:23:42Z] increment=bugfix-001 step=tests action=test-created result=failing frd=specs/liliput/frd-autonomous-workstream-campaigns.md test=src/api/tests/unit/autonomous-campaign-workstream-handoff.test.ts
+[2026-07-23T14:23:42Z] increment=bugfix-001 step=tests action=test-approved result=approved approver=human approvalSource=explicit-user-expectation-and-unattended-continuation
+[2026-07-23T14:23:42Z] increment=bugfix-001 step=implementation action=cucumber-run result=error message="Fresh Aspire API had no GitHub token, so campaign creation returned CAMPAIGN_BRANCH_INACCESSIBLE"
+[2026-07-23T14:23:42Z] increment=bugfix-001 step=implementation action=test-harness-recovery result=done strategy=restart-aspire-with-authenticated-gh-token
+[2026-07-23T14:23:42Z] increment=bugfix-001 step=implementation action=fix-applied result=done files=campaign-coordinator,campaign-proposal,campaign-control,index,autonomy-portal
+[2026-07-23T14:23:42Z] increment=bugfix-001 step=implementation action=focused-review result=pass findings=0 checks=nonblocking-proposals,lease-heartbeats,session-cancellation,atomic-persistence
+[2026-07-23T14:23:42Z] increment=bugfix-001 step=implementation action=regression-passed result=all-green api=46-files-489-tests cucumber=75-scenarios-554-steps playwright=5 apiBuild=pass apiLint=pass webBuild=pass webLint=pass

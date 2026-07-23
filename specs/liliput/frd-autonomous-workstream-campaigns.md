@@ -59,6 +59,8 @@ second implementation engine.
 
 - As an operator, I want to start an autonomous campaign for one repository so
   Liliput can keep improving it without requiring a new prompt per feature.
+- As an operator, I want to either save a campaign as a draft or create and
+  start it in one action so the portal makes execution intent explicit.
 - As an operator, I want every cycle to create a normal workstream and task so I
   can inspect it with the existing portal and CLI.
 - As an operator, I want features to execute serially so each proposal is based
@@ -124,8 +126,9 @@ retroactively to an in-flight tool call.
   database migrations and restart reconciliation complete.
 - **Shared types (`src/shared/types/index.ts`)** - adds campaign, cycle, attempt,
   status, configuration, and API response contracts.
-- **Web portal** - adds an Autonomy surface for creation, controls, current
-  feature, attempt budgets, evidence, and cycle history.
+- **Web portal** - adds an Autonomy surface with explicit `Save draft` and
+  `Create and start` creation actions, lifecycle controls, current feature,
+  attempt budgets, evidence, and cycle history.
 - **Authentication and RBAC** - only admins can create, start, pause, resume, or
   stop campaigns. Authenticated non-admin users may receive read access only if
   existing task visibility permits it.
@@ -465,6 +468,8 @@ into a generic running or failed status.
 ## Acceptance Criteria
 
 - [ ] An admin can create a campaign for one selected repository and base branch.
+- [ ] Saving a campaign as a draft does not begin coordinator scheduling.
+- [ ] Creating and starting a campaign begins coordinator scheduling in one action.
 - [ ] A non-admin cannot create, start, pause, resume, or stop a campaign.
 - [ ] Only one non-stopped campaign can target the same repository/base branch.
 - [ ] Starting a campaign persists its config and begins coordinator scheduling.

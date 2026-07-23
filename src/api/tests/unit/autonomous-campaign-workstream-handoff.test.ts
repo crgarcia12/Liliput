@@ -11,6 +11,7 @@ import {
   vi,
 } from 'vitest';
 import type {
+  AutonomousCampaign,
   AutonomousCampaignCycle,
   AutonomousCampaignJsonObject,
   PipelineState,
@@ -87,6 +88,10 @@ interface CampaignCoordinatorOptions {
   now: () => number;
   startTaskPipeline: (taskId: string) => void;
   resumeTaskPipeline?: (taskId: string) => void;
+  prepareProposal?: (
+    campaign: AutonomousCampaign,
+    cycle: AutonomousCampaignCycle,
+  ) => Promise<void>;
   hooks?: {
     afterWorkstreamCreated?: (workstream: Workstream) => void;
     afterTaskCreated?: (task: Task) => void;
@@ -147,13 +152,16 @@ async function loadCoordinatorModule(): Promise<CampaignCoordinatorModule> {
   return loaded as CampaignCoordinatorModule;
 }
 
-function createAcceptedCycle(): {
+function createAcceptedCycle(
+  targetRepository = repository,
+  targetBaseBranch = baseBranch,
+): {
   campaignId: string;
   cycleId: string;
 } {
   const campaign = campaignStore.createCampaign({
-    repository,
-    baseBranch,
+    repository: targetRepository,
+    baseBranch: targetBaseBranch,
     modelConfig: {
       metaAgent: { model: 'gpt-5.6-sol', reasoningEffort: 'high' },
       coding: { model: 'gpt-5.6-terra', reasoningEffort: 'high' },
@@ -183,6 +191,37 @@ function createAcceptedCycle(): {
     baseSha: proposal.baseSha,
     leaseOwner,
     nowMs,
+  });
+  return { campaignId: campaign.id, cycleId: cycle.id };
+}
+
+function createUnpreparedCycle(
+  targetRepository = repository,
+  targetBaseBranch = baseBranch,
+): {
+  campaignId: string;
+  cycleId: string;
+} {
+  const campaign = campaignStore.createCampaign({
+    repository: targetRepository,
+    baseBranch: targetBaseBranch,
+    modelConfig: {
+      metaAgent: { model: 'gpt-5.6-sol', reasoningEffort: 'high' },
+      coding: { model: 'gpt-5.6-terra', reasoningEffort: 'high' },
+      reviewer: { model: 'gpt-5.6-luna', reasoningEffort: 'medium' },
+    },
+  });
+  campaignStore.transitionCampaign({
+    campaignId: campaign.id,
+    expectedStatus: 'draft',
+    nextStatus: 'running',
+    idempotencyKey: `${campaign.id}-start`,
+  });
+  const cycle = campaignStore.createCycle({
+    campaignId: campaign.id,
+    sequence: 1,
+    title: 'Pending proposal',
+    status: 'proposing',
   });
   return { campaignId: campaign.id, cycleId: cycle.id };
 }
@@ -242,6 +281,25 @@ function countRows(table: 'autonomous_cycles' | 'tasks' | 'workstreams'): number
     .prepare(`SELECT COUNT(*) AS count FROM ${table}`)
     .get() as { count: number };
   return row.count;
+}
+
+function persistAcceptedProposal(cycleId: string): void {
+  getDb()
+    .prepare(
+      `UPDATE autonomous_cycles
+          SET proposal_json = ?,
+              proposal_fingerprint = ?,
+              base_sha = ?,
+              updated_at = ?
+        WHERE id = ?`,
+    )
+    .run(
+      JSON.stringify(proposal),
+      proposal.fingerprint,
+      proposal.baseSha,
+      new Date(nowMs).toISOString(),
+      cycleId,
+    );
 }
 
 beforeEach(async () => {
@@ -646,5 +704,123 @@ describe('autonomous campaign workstream handoff', () => {
     expect(countRows('workstreams')).toBe(1);
     expect(countRows('tasks')).toBe(1);
     expect(startTaskPipeline).toHaveBeenCalledTimes(1);
+  });
+
+  it('should prepare then hand off a newly started proposing cycle', async () => {
+    const started = createUnpreparedCycle();
+    const prepareProposal = vi.fn(
+      async (
+        _campaign: AutonomousCampaign,
+        cycle: AutonomousCampaignCycle,
+      ): Promise<void> => {
+        persistAcceptedProposal(cycle.id);
+      },
+    );
+    const coordinator = createCoordinator({ prepareProposal });
+
+    const preparationTick = await coordinator.runOnce();
+
+    expect(prepareProposal).toHaveBeenCalledWith(
+      expect.objectContaining({ id: started.campaignId, status: 'running' }),
+      expect.objectContaining({ id: started.cycleId, status: 'proposing' }),
+    );
+    expect(preparationTick).toMatchObject({
+      outcome: 'idle',
+      campaignId: started.campaignId,
+      cycleId: started.cycleId,
+    });
+    await vi.waitFor(() => {
+      expect(campaignStore.getCycle(started.cycleId)?.proposal).toBeDefined();
+    });
+
+    const handoffTick = await coordinator.runOnce();
+
+    expect(handoffTick).toMatchObject({
+      outcome: 'handed-off',
+      campaignId: started.campaignId,
+      cycleId: started.cycleId,
+    });
+    expect(countRows('workstreams')).toBe(1);
+    expect(countRows('tasks')).toBe(1);
+    expect(startTaskPipeline).toHaveBeenCalledTimes(1);
+  });
+
+  it('should keep coordinating other campaigns while a proposal is prepared', async () => {
+    const started = createUnpreparedCycle();
+    const accepted = createAcceptedCycle('crgarcia12/another-repository');
+    let finishProposal: (() => void) | undefined;
+    const preparationFinished = new Promise<void>((resolvePreparation) => {
+      finishProposal = () => {
+        persistAcceptedProposal(started.cycleId);
+        resolvePreparation();
+      };
+    });
+    const prepareProposal = vi.fn(async (): Promise<void> => preparationFinished);
+    const coordinator = createCoordinator({ prepareProposal });
+
+    const preparationTick = await coordinator.runOnce();
+    const deliveryTick = await coordinator.runOnce();
+
+    expect(preparationTick).toMatchObject({
+      outcome: 'idle',
+      campaignId: started.campaignId,
+      cycleId: started.cycleId,
+    });
+    expect(deliveryTick).toMatchObject({
+      outcome: 'handed-off',
+      campaignId: accepted.campaignId,
+      cycleId: accepted.cycleId,
+    });
+    expect(prepareProposal).toHaveBeenCalledTimes(1);
+    expect(countRows('workstreams')).toBe(1);
+    expect(countRows('tasks')).toBe(1);
+
+    finishProposal?.();
+    await preparationFinished;
+    await vi.waitFor(() => {
+      expect(campaignStore.getCycle(started.cycleId)?.proposal).toBeDefined();
+    });
+  });
+
+  it('should renew the campaign lease while proposal preparation is active', async () => {
+    vi.useFakeTimers();
+    try {
+      const started = createUnpreparedCycle();
+      let finishProposal: (() => void) | undefined;
+      const prepareProposal = vi.fn(
+        async (
+          _campaign: AutonomousCampaign,
+          cycle: AutonomousCampaignCycle,
+        ): Promise<void> =>
+          new Promise<void>((resolve) => {
+            finishProposal = () => {
+              persistAcceptedProposal(cycle.id);
+              resolve();
+            };
+          }),
+      );
+      const coordinator = createCoordinator({
+        leaseTtlMs: 60,
+        prepareProposal,
+      });
+
+      await coordinator.runOnce();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(prepareProposal).toHaveBeenCalledTimes(1);
+      const initialLease = campaignStore.getCampaign(started.campaignId);
+
+      nowMs = 1_020;
+      await vi.advanceTimersByTimeAsync(20);
+      const renewedLease = campaignStore.getCampaign(started.campaignId);
+
+      expect(renewedLease?.leaseExpiresAt).toBeGreaterThan(
+        initialLease?.leaseExpiresAt ?? 0,
+      );
+      expect(finishProposal).toBeDefined();
+      finishProposal?.();
+      await vi.advanceTimersByTimeAsync(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

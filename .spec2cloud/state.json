@@ -83,6 +83,12 @@
       "status": "done"
     },
     {
+      "id": "bugfix-001",
+      "type": "bugfix",
+      "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
+      "status": "done"
+    },
+    {
       "id": "ext-006",
       "type": "extension",
       "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
@@ -1687,6 +1693,31 @@
         }
       }
     },
+    "bugfix-001": {
+      "type": "bugfix",
+      "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
+      "description": "Started campaigns generate accepted proposals and ordinary visible workstreams without blocking other campaigns; creation intent is explicit in the portal.",
+      "status": "done",
+      "testFile": "src/api/tests/unit/autonomous-campaign-workstream-handoff.test.ts",
+      "fixedFiles": [
+        "src/api/src/engine/autonomous-campaign-coordinator.ts",
+        "src/api/src/engine/autonomous-campaign-proposal.ts",
+        "src/api/src/engine/autonomous-campaign-control.ts",
+        "src/api/src/index.ts",
+        "src/web/src/app/autonomy/page.tsx"
+      ],
+      "regression": {
+        "api": "46-files-489-tests-pass",
+        "cucumber": "75-scenarios-554-steps-pass",
+        "playwright": "5-pass",
+        "apiBuild": "pass",
+        "apiLint": "pass",
+        "webBuild": "pass",
+        "webLint": "pass",
+        "codeReview": "pass"
+      },
+      "completedAt": "2026-07-23T14:23:42Z"
+    },
     "ext-006": {
       "type": "extension",
       "status": "in-progress"
@@ -1879,6 +1910,12 @@
         "sdkSessionPolicy": "Treat Copilot SDK sessions as ephemeral workers, not durable campaign state.",
         "releasePattern": "Campaign-marked PRs bypass RM webhook/polling dispatch; success requires explicit merge and base-SHA confirmation.",
         "acceptedRisk": "No sensitive-path denylist or mandatory human approval; tests and LLM review gate all campaign diffs.",
+        "campaignCreationUx": {
+          "decision": "Expose separate Save draft and Create and start actions so operators can choose whether configured campaign budgets activate immediately.",
+          "framework": "Keep the interactive form in the existing Next.js Client Component and reuse the create/start API contracts.",
+          "source": "https://nextjs.org/docs/app/getting-started/server-and-client-components",
+          "packageUpdates": []
+        },
         "newInfrastructure": "none",
         "newDependencies": []
       }
@@ -1929,5 +1966,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-23T11:26:11Z"
+  "lastUpdated": "2026-07-23T14:23:42Z"
 }

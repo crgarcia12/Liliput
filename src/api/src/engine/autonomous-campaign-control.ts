@@ -36,6 +36,7 @@ export interface AutonomousCampaignControlOptions {
     reason: AutonomousCampaignTaskInterruptReason,
   ) => void;
   resumeTask?: (taskId: string) => void;
+  cancelProposal?: (campaignId: string, cycleId: string) => void;
 }
 
 export class AutonomousCampaignControlError extends Error {
@@ -262,7 +263,11 @@ export function pauseCampaign(
       .run(timestamp, timestamp, campaignId);
     return getCampaignDetail(campaignId);
   });
-  return operation.immediate();
+  const detail = operation.immediate();
+  if (detail.cycle) {
+    options.cancelProposal?.(campaignId, detail.cycle.id);
+  }
+  return detail;
 }
 
 export function resumeCampaign(
@@ -376,5 +381,9 @@ export function stopCampaign(
     }
     return getCampaignDetail(campaignId);
   });
-  return operation.immediate();
+  const detail = operation.immediate();
+  if (detail.cycle) {
+    options.cancelProposal?.(campaignId, detail.cycle.id);
+  }
+  return detail;
 }

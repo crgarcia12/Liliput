@@ -25,6 +25,10 @@ import {
   createAutonomousCampaignAttemptManager,
   type AutonomousCampaignTaskInterruptReason,
 } from './autonomous-campaign-attempt-manager.js';
+import {
+  cancelAutonomousCampaignProposal,
+  prepareConfiguredCampaignProposal,
+} from './autonomous-campaign-proposal.js';
 import { getPodId } from './pod-identity.js';
 
 const DEFAULT_COORDINATOR_INTERVAL_MS = 5_000;
@@ -99,6 +103,11 @@ export interface CampaignCoordinatorOptions {
     branch: string,
     baseBranch: string,
   ) => Promise<PullRequest | undefined>;
+  prepareProposal?: (
+    campaign: AutonomousCampaign,
+    cycle: AutonomousCampaignCycle,
+  ) => Promise<void>;
+  cancelProposal?: (campaignId: string, cycleId: string) => void;
   hooks?: CampaignCoordinatorHooks;
 }
 
@@ -344,11 +353,26 @@ export function createAutonomousCampaignCoordinator(
     throw new RangeError('Campaign coordinator leaseTtlMs must be positive');
   }
   let lastProcessedCampaignId: string | undefined;
+  const proposalPreparations = new Map<string, Promise<void>>();
   const attemptManager = createAutonomousCampaignAttemptManager({
     owner: options.owner,
     now: options.now,
     interruptTask: options.interruptTask ?? (() => undefined),
   });
+  const prepareProposal =
+    options.prepareProposal ??
+    (async (
+      campaign: AutonomousCampaign,
+      cycle: AutonomousCampaignCycle,
+    ): Promise<void> => {
+      await prepareConfiguredCampaignProposal({
+        campaignId: campaign.id,
+        cycleId: cycle.id,
+        modelConfig: campaign.modelConfig,
+      });
+    });
+  const cancelProposal =
+    options.cancelProposal ?? cancelAutonomousCampaignProposal;
 
   const handoffAcceptedProposal = async (
     campaignId: string,
@@ -592,6 +616,96 @@ export function createAutonomousCampaignCoordinator(
     };
   };
 
+  const prepareProposalWithLease = async (
+    campaign: AutonomousCampaign,
+    cycle: AutonomousCampaignCycle,
+  ): Promise<void> => {
+    const heartbeatIntervalMs = Math.max(
+      10,
+      Math.floor(options.leaseTtlMs / 3),
+    );
+    let heartbeatFailure: unknown;
+    let heartbeatPromise: Promise<void> | undefined;
+    const heartbeat = (): void => {
+      if (heartbeatPromise || heartbeatFailure) return;
+      heartbeatPromise = renewLease(campaign.id)
+        .then((lease) => {
+          if (!lease.claimed) {
+            throw new campaignStore.AutonomousCampaignConflictError(
+              `Campaign ${campaign.id} lost its coordinator lease while preparing cycle ${cycle.id}`,
+            );
+          }
+        })
+        .catch((error: unknown) => {
+          heartbeatFailure = error;
+          cancelProposal(campaign.id, cycle.id);
+        })
+        .finally(() => {
+          heartbeatPromise = undefined;
+        });
+    };
+    const timer = setInterval(heartbeat, heartbeatIntervalMs);
+    timer.unref();
+    try {
+      await prepareProposal(campaign, cycle);
+      if (heartbeatPromise) {
+        await heartbeatPromise;
+      }
+      if (heartbeatFailure) {
+        throw heartbeatFailure;
+      }
+      const lease = await renewLease(campaign.id);
+      if (!lease.claimed) {
+        cancelProposal(campaign.id, cycle.id);
+        throw new campaignStore.AutonomousCampaignConflictError(
+          `Campaign ${campaign.id} lost its coordinator lease while preparing cycle ${cycle.id}`,
+        );
+      }
+    } finally {
+      clearInterval(timer);
+    }
+  };
+
+  const proposalPreparationKey = (
+    campaignId: string,
+    cycleId: string,
+  ): string => `${campaignId}:${cycleId}`;
+
+  const startProposalPreparation = (
+    campaign: AutonomousCampaign,
+    cycle: AutonomousCampaignCycle,
+  ): boolean => {
+    const key = proposalPreparationKey(campaign.id, cycle.id);
+    if (proposalPreparations.has(key)) return false;
+    const preparation = prepareProposalWithLease(campaign, cycle)
+      .catch((error: unknown) => {
+        const details = {
+          campaignId: campaign.id,
+          cycleId: cycle.id,
+          err: error instanceof Error ? error.message : String(error),
+        };
+        if (
+          error instanceof Error &&
+          error.name === 'AutonomousCampaignProposalCancelledError'
+        ) {
+          logger.info(
+            details,
+            'autonomous-campaign: proposal preparation cancelled',
+          );
+          return;
+        }
+        logger.warn(
+          details,
+          'autonomous-campaign: proposal preparation failed',
+        );
+      })
+      .finally(() => {
+        proposalPreparations.delete(key);
+      });
+    proposalPreparations.set(key, preparation);
+    return true;
+  };
+
   const runOnce = async (): Promise<AutonomousCampaignCoordinatorTickResult> => {
     const candidates = campaignStore.listRunningCampaigns();
     const heartbeatNow = options.now();
@@ -618,13 +732,14 @@ export function createAutonomousCampaignCoordinator(
     for (const candidate of orderedCandidates) {
       const pendingCycle = campaignStore.getCurrentCycle(candidate.id);
       if (pendingCycle?.status === 'waiting_for_external') {
-        const pendingAttempt = campaignStore.getLatestAttempt(pendingCycle.id);
+        const waitingCycle = pendingCycle;
+        const pendingAttempt = campaignStore.getLatestAttempt(waitingCycle.id);
         const pendingUsage = pendingAttempt
           ? campaignStore.listPendingAttemptUsage(pendingAttempt.id)
           : [];
         const pendingCosts = pendingUsage.map(pendingUsageCostUsd);
         if (pendingCosts.some((cost) => cost === undefined)) continue;
-        const pricingMatch = pendingCycle.lastError?.match(
+        const pricingMatch = waitingCycle.lastError?.match(
           /^model-pricing-missing:(.+)$/,
         );
         if (
@@ -638,7 +753,7 @@ export function createAutonomousCampaignCoordinator(
           continue;
         }
         const externalRetryAt = Number(
-          pendingCycle.lastError?.match(
+          waitingCycle.lastError?.match(
             /^(?:transient-image-build|kubernetes-cluster-unavailable)-until=(\d+):/,
           )?.[1] ?? 0,
         );
@@ -647,7 +762,7 @@ export function createAutonomousCampaignCoordinator(
         if (!lease.claimed) continue;
         if (pendingAttempt) {
           pendingUsage.forEach((usage, index) => {
-            attemptManager.recordUsage(candidate.id, pendingCycle.id, {
+            attemptManager.recordUsage(candidate.id, waitingCycle.id, {
               usageEventId: usage.usageEventId,
               turns: 0,
               estimatedCostUsd: pendingCosts[index] ?? 0,
@@ -660,7 +775,7 @@ export function createAutonomousCampaignCoordinator(
         }
         const resumed = attemptManager.resumeExternalWait(
           candidate.id,
-          pendingCycle.id,
+          waitingCycle.id,
         );
         const task = recoverTask(resumed.cycle);
         if (!task) {
@@ -684,6 +799,31 @@ export function createAutonomousCampaignCoordinator(
           campaignId: candidate.id,
           cycleId: resumed.cycle.id,
           taskId: task.id,
+        };
+      }
+      if (
+        pendingCycle?.status === 'proposing' &&
+        (!pendingCycle.proposal || !pendingCycle.proposalFingerprint)
+      ) {
+        if (
+          proposalPreparations.has(
+            proposalPreparationKey(candidate.id, pendingCycle.id),
+          )
+        ) {
+          continue;
+        }
+        const lease = await renewLease(candidate.id);
+        if (!lease.claimed) continue;
+        logger.info(
+          { campaignId: candidate.id, cycleId: pendingCycle.id },
+          'autonomous-campaign: preparing proposal',
+        );
+        startProposalPreparation(candidate, pendingCycle);
+        lastProcessedCampaignId = candidate.id;
+        return {
+          outcome: 'idle',
+          campaignId: candidate.id,
+          cycleId: pendingCycle.id,
         };
       }
       if (
