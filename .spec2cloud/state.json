@@ -80,13 +80,13 @@
       "id": "ext-005",
       "type": "extension",
       "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
-      "status": "in-progress"
+      "status": "done"
     },
     {
       "id": "ext-006",
       "type": "extension",
       "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
-      "status": "planned"
+      "status": "in-progress"
     },
     {
       "id": "ext-007",
@@ -95,7 +95,7 @@
       "status": "planned"
     }
   ],
-  "currentIncrement": "ext-005",
+  "currentIncrement": "ext-006",
   "increments": {
     "ext-pre-001": {
       "type": "extension-prerequisite",
@@ -1447,7 +1447,7 @@
     },
     "ext-005": {
       "type": "extension",
-      "status": "in-progress",
+      "status": "done",
       "featureFiles": [
         "specs/features/autonomous-campaign-attempt-bounds.feature"
       ],
@@ -1623,7 +1623,7 @@
           "completedAt": "2026-07-23T11:09:36Z"
         },
         "verification": {
-          "status": "in-progress",
+          "status": "done",
           "regression": {
             "apiBuild": "pass",
             "webBuild": "pass",
@@ -1643,19 +1643,53 @@
             }
           },
           "deployment": {
-            "status": "pending",
+            "status": "done",
             "environment": "production",
-            "platform": "aks"
+            "platform": "aks",
+            "url": "https://liliput.crgarcia.com.ar",
+            "workflow": "https://github.com/crgarcia12/Liliput/actions/runs/30002509151",
+            "commitSha": "37e21a290fd9b2fbcd51b7cf6752c19a824f6869",
+            "apiImage": "crgarliliputacr.azurecr.io/liliput-api:37e21a290fd9b2fbcd51b7cf6752c19a824f6869",
+            "webImage": "crgarliliputacr.azurecr.io/liliput-web:37e21a290fd9b2fbcd51b7cf6752c19a824f6869",
+            "deployedAt": "2026-07-23T11:24:04Z"
           },
           "smokeTests": {
-            "status": "pending"
-          }
+            "status": "done",
+            "rootStatus": 200,
+            "apiHealthStatus": 200,
+            "autonomyStatus": 302,
+            "https": true,
+            "productionPlaywright": {
+              "pass": 4,
+              "fail": 0
+            },
+            "cluster": {
+              "powerState": "Running",
+              "readyNodes": 4,
+              "api": "1/1",
+              "web": "1/1",
+              "gateway": "1/1"
+            },
+            "startupErrors": 0,
+            "schemaTables": [
+              "autonomous_attempts",
+              "autonomous_attempt_usage_events",
+              "autonomous_attempt_pending_usage"
+            ],
+            "verifiedAt": "2026-07-23T11:26:11Z"
+          },
+          "humanApproval": {
+            "status": "approved",
+            "approvedAt": "2026-07-23T11:26:11Z",
+            "approvalSource": "explicit-unattended-continuation"
+          },
+          "completedAt": "2026-07-23T11:26:11Z"
         }
       }
     },
     "ext-006": {
       "type": "extension",
-      "status": "planned"
+      "status": "in-progress"
     },
     "ext-007": {
       "type": "extension",
@@ -1699,7 +1733,8 @@
     "ext-004-deployment-approved": true,
     "ext-005-gherkin-approved": true,
     "ext-005-tests-approved": true,
-    "ext-005-implementation-approved": true
+    "ext-005-implementation-approved": true,
+    "ext-005-deployment-approved": true
   },
   "testsStatus": {
     "reviewerConfigAndCliAuth": {
@@ -1804,7 +1839,11 @@
       "apiTests": "483-pass",
       "cucumber": "75-scenarios-554-steps-pass",
       "playwright": "4-pass",
-      "codeReview": "pass"
+      "codeReview": "pass",
+      "deployment": "pass",
+      "productionPlaywright": "4-pass",
+      "cluster": "running-4-nodes",
+      "startupErrors": 0
     }
   },
   "extensions": {
@@ -1852,14 +1891,14 @@
     "resourceGroup": "crgar-liliput-rg",
     "cluster": "crgar-liliput-aks",
     "clusterPowerState": "Running",
-    "clusterVerifiedAt": "2026-07-22T11:24:08Z",
+    "clusterVerifiedAt": "2026-07-23T11:26:11Z",
     "namespace": "liliput",
     "url": "https://liliput.crgarcia.com.ar",
-    "commitSha": "350a8db24a96b48f86b80bdcad4b032831d28031",
-    "apiImage": "crgarliliputacr.azurecr.io/liliput-api:350a8db24a96b48f86b80bdcad4b032831d28031",
-    "webImage": "crgarliliputacr.azurecr.io/liliput-web:350a8db24a96b48f86b80bdcad4b032831d28031",
-    "deployedAt": "2026-07-22T11:20:34Z",
-    "verifiedAt": "2026-07-22T11:24:08Z",
+    "commitSha": "37e21a290fd9b2fbcd51b7cf6752c19a824f6869",
+    "apiImage": "crgarliliputacr.azurecr.io/liliput-api:37e21a290fd9b2fbcd51b7cf6752c19a824f6869",
+    "webImage": "crgarliliputacr.azurecr.io/liliput-web:37e21a290fd9b2fbcd51b7cf6752c19a824f6869",
+    "deployedAt": "2026-07-23T11:24:04Z",
+    "verifiedAt": "2026-07-23T11:26:11Z",
     "aiFoundry": {
       "account": "crgar-liliput-ai",
       "resourceGroup": "crgar-ai-rg",
@@ -1890,5 +1929,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-23T11:09:36Z"
+  "lastUpdated": "2026-07-23T11:26:11Z"
 }
