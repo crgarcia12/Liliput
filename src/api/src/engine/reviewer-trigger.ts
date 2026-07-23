@@ -225,17 +225,18 @@ export async function triggerPipelineReview(
   io: SocketServer,
   taskId: string,
   ctx: PipelineReviewContext,
-): Promise<{ feedback: string | null }> {
+  options: Pick<ReviewerConfig, 'onUsage'> = {},
+): Promise<{ feedback: string | null; ran: boolean }> {
   try {
     const task = store.getTask(taskId);
-    if (!task) return { feedback: null };
-    if (!reviewerEnabled(task)) return { feedback: null };
+    if (!task) return { feedback: null, ran: false };
+    if (!reviewerEnabled(task)) return { feedback: null, ran: false };
     if (!(await isUsableWorkspace(ctx.workspaceRoot))) {
       logger.warn(
         { taskId, workspaceRoot: ctx.workspaceRoot },
         'reviewer-trigger: workspace not usable, skipping pipeline review',
       );
-      return { feedback: null };
+      return { feedback: null, ran: false };
     }
 
     // Build the prompt context with diff stat + changed files.
@@ -295,7 +296,11 @@ export async function triggerPipelineReview(
       };
     }
 
-    const reviewerCfg = reviewerConfig(task);
+    const reviewerCfg = {
+      ...reviewerConfig(task),
+      taskId,
+      ...options,
+    };
     logger.info(
       {
         taskId,
@@ -309,15 +314,15 @@ export async function triggerPipelineReview(
     const result = await reviewEvent(reviewCtx, reviewerCfg);
     if (!result.feedback) {
       logger.info({ taskId, reason: result.reason }, 'reviewer-trigger: pipeline review — no feedback');
-      return { feedback: null };
+      return { feedback: null, ran: result.ran };
     }
     postReviewerChat(io, taskId, formatFeedbackForChat(ctx.kind, result.feedback));
     persistFeedback(taskId, ctx.kind, result.feedback, ctx.sha);
-    return { feedback: result.feedback };
+    return { feedback: result.feedback, ran: result.ran };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn({ taskId, err: msg }, 'reviewer-trigger: pipeline review threw (swallowed)');
-    return { feedback: null };
+    return { feedback: null, ran: false };
   }
 }
 

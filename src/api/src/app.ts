@@ -17,6 +17,7 @@ import { createGitHubWebhookRouter } from './routes/github-webhook.js';
 import { createWebhookDispatcher } from './engine/webhook-dispatcher.js';
 import { authMiddleware } from './middleware/auth-middleware.js';
 import type { SpecGenerator } from './engine/spec-generator.js';
+import type { AutonomousCampaignControlOptions } from './engine/autonomous-campaign-control.js';
 
 export interface AppOptions {
   /** Override the spec generator (used by tests to inject a mock). */
@@ -27,6 +28,8 @@ export interface AppOptions {
   disableWebhookDispatcher?: boolean;
   /** Disable authentication middleware (tests only). */
   disableAuthMiddleware?: boolean;
+  /** Override campaign task interruption and lease ownership. */
+  campaignControl?: AutonomousCampaignControlOptions;
 }
 
 export function createApp(io: SocketServer, options: AppOptions = {}): express.Express {
@@ -71,7 +74,13 @@ export function createApp(io: SocketServer, options: AppOptions = {}): express.E
   app.use(createProjectsRouter());
   app.use(createProfileRouter());
   app.use(createTitleSuggestRouter());
-  app.use(createAutonomousCampaignsRouter(io));
+  app.use(
+    createAutonomousCampaignsRouter(io, {
+      ...(options.campaignControl
+        ? { control: options.campaignControl }
+        : {}),
+    }),
+  );
   app.use(createTasksRouter(io, options.specGenerator));
 
   return app;

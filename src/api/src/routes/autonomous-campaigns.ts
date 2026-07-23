@@ -20,6 +20,7 @@ import {
   resumeCampaign,
   startCampaign,
   stopCampaign,
+  type AutonomousCampaignControlOptions,
 } from '../engine/autonomous-campaign-control.js';
 import {
   AutonomousCampaignPricingError,
@@ -54,6 +55,7 @@ export interface AutonomousCampaignsRouterDeps {
     branch: string,
   ) => Promise<VerifyCampaignRepositoryBranchResult>;
   now?: () => string;
+  control?: AutonomousCampaignControlOptions;
 }
 
 class CampaignRequestValidationError extends Error {
@@ -391,9 +393,12 @@ export function createAutonomousCampaignsRouter(
 
   const actions = {
     start: startCampaign,
-    pause: pauseCampaign,
-    resume: resumeCampaign,
-    stop: stopCampaign,
+    pause: (campaignId: string, nowMs?: number) =>
+      pauseCampaign(campaignId, nowMs, deps.control),
+    resume: (campaignId: string, nowMs?: number) =>
+      resumeCampaign(campaignId, nowMs, deps.control),
+    stop: (campaignId: string, nowMs?: number) =>
+      stopCampaign(campaignId, nowMs, deps.control),
   } as const;
 
   for (const [action, control] of Object.entries(actions) as Array<

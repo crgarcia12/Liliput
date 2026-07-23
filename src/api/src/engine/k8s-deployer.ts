@@ -19,6 +19,58 @@ import { logger } from '../logger.js';
 const kc = new k8s.KubeConfig();
 let configured = false;
 
+const KUBERNETES_NETWORK_ERROR_CODES = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'ETIMEDOUT',
+]);
+
+function errorRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+export function isKubernetesInfrastructureUnavailable(error: unknown): boolean {
+  const visited = new Set<unknown>();
+  let current: unknown = error;
+  for (let depth = 0; current !== undefined && depth < 6; depth++) {
+    if (visited.has(current)) break;
+    visited.add(current);
+    const record = errorRecord(current);
+    const code = record?.['code'];
+    if (typeof code === 'string' && KUBERNETES_NETWORK_ERROR_CODES.has(code)) {
+      return true;
+    }
+    const status =
+      typeof record?.['statusCode'] === 'number'
+        ? record['statusCode']
+        : typeof record?.['status'] === 'number'
+          ? record['status']
+          : undefined;
+    if (status === 502 || status === 503 || status === 504) return true;
+    const message =
+      current instanceof Error
+        ? current.message
+        : typeof record?.['message'] === 'string'
+          ? record['message']
+          : '';
+    if (
+      /(?:fetch failed|unable to connect to the server|network is unreachable|getaddrinfo|socket hang up|client network socket disconnected|connect (?:econnrefused|etimedout))/i.test(
+        message,
+      )
+    ) {
+      return true;
+    }
+    current = record?.['cause'];
+  }
+  return false;
+}
+
 function getKubeConfig(): k8s.KubeConfig {
   if (!configured) {
     try {

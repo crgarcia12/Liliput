@@ -240,6 +240,8 @@ export interface UsageDelta {
   /** Owning agent id when known. Stored on the per-call row so cost can
    *  later be sliced per agent kind (coder / reviewer / ops-fixer). */
   agentId?: string;
+  /** Stable identifier shared with any external usage ledger. */
+  callId?: string;
 }
 
 /** Add a usage delta to a turn's running totals AND persist a per-call row
@@ -300,7 +302,7 @@ export function recordUsage(turnId: string, delta: UsageDelta): Turn | undefined
     // but loses per-call granularity. The only producer today (agent-engine
     // `recordUsageEvent`) always passes calls=1, so this is fine.
     insertCall.run(
-      uuid(),
+      delta.callId ?? uuid(),
       turnId,
       row.task_id,
       delta.agentId ?? null,

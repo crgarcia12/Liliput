@@ -32,7 +32,13 @@
  * conflict exists. Everything else is plain git plumbing.
  */
 
-import { runAgentTurn, type AgentSession, type LogFn, type ToolEventFn } from './agent-loop.js';
+import {
+  runAgentTurn,
+  type AgentSession,
+  type LogFn,
+  type ToolEventFn,
+  type UsageFn,
+} from './agent-loop.js';
 import * as git from './git-client.js';
 import type { RepoHandle } from './git-client.js';
 import { addLabels, ensureLabel } from './github-rest.js';
@@ -81,6 +87,10 @@ export interface ConflictGuardOptions {
   maxResolveAttempts?: number;
   onLog?: (level: 'info' | 'warn' | 'error', message: string, command?: string, output?: string) => void;
   onToolEvent?: ToolEventFn;
+  onUsage?: UsageFn;
+  beforeResolverTurn?: (attempt: number) => void;
+  onResolverModelTurn?: (attempt: number) => void;
+  shouldRethrow?: (error: unknown) => boolean;
   /** Called when a resolver (Copilot) turn is spawned, so the UI can show an agent. */
   onResolverStart?: () => void;
   /** Called when the resolver turn ends. */
@@ -183,6 +193,7 @@ export async function guardMainConflicts(
     // Tier 2 — real merge → conflicts → Copilot resolution.
     return await resolveWithCopilot(opts, log, maxAttempts, probe.files);
   } catch (err) {
+    if (opts.shouldRethrow?.(err)) throw err;
     const m = err instanceof Error ? err.message : String(err);
     log('error', `Conflict guard failed unexpectedly (non-fatal): ${m}`);
     logger.warn({ repo, baseBranch, err: m }, 'conflict-guard: unexpected failure');
@@ -217,6 +228,7 @@ async function resolveWithCopilot(
 
   let lastSummary = '(no summary)';
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    opts.beforeResolverTurn?.(attempt);
     opts.onResolverStart?.();
     const resolverLog: LogFn = (level, msg, cmd, out) => log(level, msg, cmd, out);
     try {
@@ -235,7 +247,9 @@ async function resolveWithCopilot(
         timeoutMs: RESOLVER_TIMEOUT_MS,
         onLog: resolverLog,
         ...(opts.onToolEvent ? { onToolEvent: opts.onToolEvent } : {}),
+        ...(opts.onUsage ? { onUsage: opts.onUsage } : {}),
       });
+      opts.onResolverModelTurn?.(attempt);
       lastSummary = result.summary;
     } catch (err) {
       const m = err instanceof Error ? err.message : String(err);

@@ -337,6 +337,10 @@ CREATE TABLE IF NOT EXISTS autonomous_attempts (
   turns_used          INTEGER NOT NULL DEFAULT 0,
   elapsed_ms          INTEGER NOT NULL DEFAULT 0,
   estimated_cost_usd  REAL NOT NULL DEFAULT 0,
+  max_turns            INTEGER NOT NULL,
+  max_elapsed_ms       INTEGER NOT NULL,
+  max_estimated_cost_usd REAL NOT NULL,
+  active_started_at    TEXT,
   started_at          TEXT NOT NULL,
   completed_at        TEXT,
   failure_stage       TEXT,
@@ -372,6 +376,20 @@ CREATE TABLE IF NOT EXISTS autonomous_attempt_usage_events (
   usage_event_id      TEXT NOT NULL,
   turns               INTEGER NOT NULL,
   estimated_cost_usd  REAL NOT NULL,
+  created_at          TEXT NOT NULL,
+  PRIMARY KEY (attempt_id, usage_event_id),
+  FOREIGN KEY (attempt_id) REFERENCES autonomous_attempts(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS autonomous_attempt_pending_usage (
+  attempt_id          TEXT NOT NULL,
+  usage_event_id      TEXT NOT NULL,
+  model               TEXT NOT NULL,
+  input_tokens        INTEGER NOT NULL DEFAULT 0,
+  output_tokens       INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens   INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens  INTEGER NOT NULL DEFAULT 0,
+  occurred_at         TEXT NOT NULL,
   created_at          TEXT NOT NULL,
   PRIMARY KEY (attempt_id, usage_event_id),
   FOREIGN KEY (attempt_id) REFERENCES autonomous_attempts(id) ON DELETE CASCADE
@@ -515,6 +533,85 @@ export function getDb(): Database.Database {
         'Migrated: added pull_request_number column to autonomous_cycles',
       );
     }
+
+    const attemptCols = _db
+      .prepare(`PRAGMA table_info(autonomous_attempts)`)
+      .all() as Array<{ name: string }>;
+    if (!attemptCols.some((c) => c.name === 'max_turns')) {
+      _db.exec(
+        `ALTER TABLE autonomous_attempts
+           ADD COLUMN max_turns INTEGER NOT NULL DEFAULT 0`,
+      );
+      logger.info({}, 'Migrated: added max_turns column to autonomous_attempts');
+    }
+    if (!attemptCols.some((c) => c.name === 'max_elapsed_ms')) {
+      _db.exec(
+        `ALTER TABLE autonomous_attempts
+           ADD COLUMN max_elapsed_ms INTEGER NOT NULL DEFAULT 0`,
+      );
+      logger.info(
+        {},
+        'Migrated: added max_elapsed_ms column to autonomous_attempts',
+      );
+    }
+    if (!attemptCols.some((c) => c.name === 'max_estimated_cost_usd')) {
+      _db.exec(
+        `ALTER TABLE autonomous_attempts
+           ADD COLUMN max_estimated_cost_usd REAL NOT NULL DEFAULT 0`,
+      );
+      logger.info(
+        {},
+        'Migrated: added max_estimated_cost_usd column to autonomous_attempts',
+      );
+    }
+    if (!attemptCols.some((c) => c.name === 'active_started_at')) {
+      _db.exec(
+        `ALTER TABLE autonomous_attempts ADD COLUMN active_started_at TEXT`,
+      );
+      logger.info(
+        {},
+        'Migrated: added active_started_at column to autonomous_attempts',
+      );
+    }
+    _db.exec(`
+      UPDATE autonomous_attempts
+         SET max_turns = (
+               SELECT campaign.max_turns_per_attempt
+                 FROM autonomous_cycles cycle
+                 JOIN autonomous_campaigns campaign
+                   ON campaign.id = cycle.campaign_id
+                WHERE cycle.id = autonomous_attempts.cycle_id
+             )
+       WHERE max_turns <= 0;
+      UPDATE autonomous_attempts
+         SET max_elapsed_ms = (
+               SELECT campaign.max_minutes_per_attempt * 60000
+                 FROM autonomous_cycles cycle
+                 JOIN autonomous_campaigns campaign
+                   ON campaign.id = cycle.campaign_id
+                WHERE cycle.id = autonomous_attempts.cycle_id
+             )
+       WHERE max_elapsed_ms <= 0;
+      UPDATE autonomous_attempts
+         SET max_estimated_cost_usd = (
+               SELECT campaign.max_cost_usd_per_attempt
+                 FROM autonomous_cycles cycle
+                 JOIN autonomous_campaigns campaign
+                   ON campaign.id = cycle.campaign_id
+                WHERE cycle.id = autonomous_attempts.cycle_id
+             )
+       WHERE max_estimated_cost_usd <= 0;
+      UPDATE autonomous_attempts
+         SET active_started_at = started_at
+       WHERE status = 'running'
+         AND active_started_at IS NULL
+         AND EXISTS (
+               SELECT 1
+                 FROM autonomous_cycles cycle
+                WHERE cycle.id = autonomous_attempts.cycle_id
+                  AND cycle.status = 'delivering'
+             );
+    `);
 
     // ─── PM / Dev / RM agent loop — issue + webhook tracking ───────────────
     //
@@ -664,6 +761,7 @@ export function getDb(): Database.Database {
 export function resetDb(): void {
   const db = getDb();
   db.exec(`
+    DELETE FROM autonomous_attempt_pending_usage;
     DELETE FROM autonomous_attempt_usage_events;
     DELETE FROM autonomous_attempt_idempotency;
     DELETE FROM autonomous_campaign_transitions;

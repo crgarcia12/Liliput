@@ -18,13 +18,36 @@ import type { AcceptedCampaignProposal } from '../../../shared/types/autonomous-
 import type { PullRequest } from './github-pr.js';
 import { logger } from '../logger.js';
 import * as campaignStore from '../stores/autonomous-campaign-store.js';
+import { getEffectivePrice } from '../stores/pricing-store.js';
 import * as taskStore from '../stores/task-store.js';
 import * as workstreamStore from '../stores/workstream-store.js';
+import {
+  createAutonomousCampaignAttemptManager,
+  type AutonomousCampaignTaskInterruptReason,
+} from './autonomous-campaign-attempt-manager.js';
 import { getPodId } from './pod-identity.js';
 
 const DEFAULT_COORDINATOR_INTERVAL_MS = 5_000;
 const DEFAULT_COORDINATOR_INITIAL_DELAY_MS = 30_000;
 const DEFAULT_COORDINATOR_LEASE_TTL_MS = 60_000;
+
+function pendingUsageCostUsd(
+  usage: campaignStore.AutonomousCampaignPendingUsage,
+): number | undefined {
+  const price = getEffectivePrice(
+    usage.model,
+    usage.occurredAt,
+    usage.inputTokens,
+  );
+  if (!price) return undefined;
+  return (
+    (usage.inputTokens * price.inputPerMtok +
+      usage.outputTokens * price.outputPerMtok +
+      usage.cacheReadTokens * (price.cachedInputPerMtok ?? 0) +
+      usage.cacheWriteTokens * (price.cacheWritePerMtok ?? 0)) /
+    1_000_000
+  );
+}
 
 export class AutonomousCampaignDeliveryError extends Error {
   constructor(
@@ -66,6 +89,11 @@ export interface CampaignCoordinatorOptions {
   leaseTtlMs: number;
   now: () => number;
   startTaskPipeline: (taskId: string) => void;
+  resumeTaskPipeline?: (taskId: string) => void;
+  interruptTask?: (
+    taskId: string,
+    reason: AutonomousCampaignTaskInterruptReason,
+  ) => void;
   findPullRequest?: (
     repository: string,
     branch: string,
@@ -316,6 +344,11 @@ export function createAutonomousCampaignCoordinator(
     throw new RangeError('Campaign coordinator leaseTtlMs must be positive');
   }
   let lastProcessedCampaignId: string | undefined;
+  const attemptManager = createAutonomousCampaignAttemptManager({
+    owner: options.owner,
+    now: options.now,
+    interruptTask: options.interruptTask ?? (() => undefined),
+  });
 
   const handoffAcceptedProposal = async (
     campaignId: string,
@@ -404,6 +437,16 @@ export function createAutonomousCampaignCoordinator(
         status: 'delivering',
         workstreamId: workstream.id,
         taskId: task.id,
+      });
+    }
+    if (!campaignStore.getLatestAttempt(cycle.id)) {
+      campaignStore.createAttempt({
+        cycleId: cycle.id,
+        attemptNumber: 1,
+        status: 'running',
+        idempotencyKey: `${cycle.id}-attempt-1`,
+        leaseOwner: options.owner,
+        nowMs,
       });
     }
 
@@ -574,6 +617,75 @@ export function createAutonomousCampaignCoordinator(
         : candidates;
     for (const candidate of orderedCandidates) {
       const pendingCycle = campaignStore.getCurrentCycle(candidate.id);
+      if (pendingCycle?.status === 'waiting_for_external') {
+        const pendingAttempt = campaignStore.getLatestAttempt(pendingCycle.id);
+        const pendingUsage = pendingAttempt
+          ? campaignStore.listPendingAttemptUsage(pendingAttempt.id)
+          : [];
+        const pendingCosts = pendingUsage.map(pendingUsageCostUsd);
+        if (pendingCosts.some((cost) => cost === undefined)) continue;
+        const pricingMatch = pendingCycle.lastError?.match(
+          /^model-pricing-missing:(.+)$/,
+        );
+        if (
+          pricingMatch &&
+          !getEffectivePrice(
+            pricingMatch[1] ?? '',
+            new Date(options.now()).toISOString(),
+            0,
+          )
+        ) {
+          continue;
+        }
+        const externalRetryAt = Number(
+          pendingCycle.lastError?.match(
+            /^(?:transient-image-build|kubernetes-cluster-unavailable)-until=(\d+):/,
+          )?.[1] ?? 0,
+        );
+        if (externalRetryAt > options.now()) continue;
+        const lease = await renewLease(candidate.id);
+        if (!lease.claimed) continue;
+        if (pendingAttempt) {
+          pendingUsage.forEach((usage, index) => {
+            attemptManager.recordUsage(candidate.id, pendingCycle.id, {
+              usageEventId: usage.usageEventId,
+              turns: 0,
+              estimatedCostUsd: pendingCosts[index] ?? 0,
+            });
+            campaignStore.deletePendingAttemptUsage(
+              pendingAttempt.id,
+              usage.usageEventId,
+            );
+          });
+        }
+        const resumed = attemptManager.resumeExternalWait(
+          candidate.id,
+          pendingCycle.id,
+        );
+        const task = recoverTask(resumed.cycle);
+        if (!task) {
+          throw new AutonomousCampaignDeliveryError(
+            AUTONOMOUS_CAMPAIGN_TASK_NOT_FOUND,
+            `No campaign task exists for external-wait cycle ${resumed.cycle.id}`,
+          );
+        }
+        taskStore.updateTask(task.id, {
+          status: 'building',
+          errorMessage: undefined,
+        });
+        if (task.branch && options.resumeTaskPipeline) {
+          options.resumeTaskPipeline(task.id);
+        } else {
+          options.startTaskPipeline(task.id);
+        }
+        lastProcessedCampaignId = candidate.id;
+        return {
+          outcome: 'handed-off',
+          campaignId: candidate.id,
+          cycleId: resumed.cycle.id,
+          taskId: task.id,
+        };
+      }
       if (
         !pendingCycle ||
         !pendingCycle.proposal ||
@@ -582,11 +694,41 @@ export function createAutonomousCampaignCoordinator(
         pendingCycle.status === 'stopped' ||
         pendingCycle.status === 'paused' ||
         pendingCycle.status === 'cooldown' ||
-        pendingCycle.status === 'retry_wait' ||
-        pendingCycle.status === 'waiting_for_external' ||
         pendingCycle.status === 'releasing'
       ) {
         continue;
+      }
+      if (pendingCycle.status === 'retry_wait') {
+        const lease = await renewLease(candidate.id);
+        if (!lease.claimed) continue;
+        const retry = attemptManager.startDueRetry(
+          candidate.id,
+          pendingCycle.id,
+        );
+        if (!retry.started) continue;
+        const task = recoverTask(retry.cycle);
+        if (!task) {
+          throw new AutonomousCampaignDeliveryError(
+            AUTONOMOUS_CAMPAIGN_TASK_NOT_FOUND,
+            `No campaign task exists for retry cycle ${retry.cycle.id}`,
+          );
+        }
+        taskStore.updateTask(task.id, {
+          status: 'building',
+          errorMessage: undefined,
+        });
+        if (task.branch && options.resumeTaskPipeline) {
+          options.resumeTaskPipeline(task.id);
+        } else {
+          options.startTaskPipeline(task.id);
+        }
+        lastProcessedCampaignId = candidate.id;
+        return {
+          outcome: 'handed-off',
+          campaignId: candidate.id,
+          cycleId: retry.cycle.id,
+          taskId: task.id,
+        };
       }
       const lease = await renewLease(candidate.id);
       if (!lease.claimed) continue;
@@ -599,11 +741,23 @@ export function createAutonomousCampaignCoordinator(
         cycle.status === 'stopped' ||
         cycle.status === 'paused' ||
         cycle.status === 'cooldown' ||
-        cycle.status === 'retry_wait' ||
         cycle.status === 'waiting_for_external' ||
         cycle.status === 'releasing'
       ) {
         continue;
+      }
+      if (
+        cycle.status === 'delivering' &&
+        !campaignStore.getLatestAttempt(cycle.id)
+      ) {
+        campaignStore.createAttempt({
+          cycleId: cycle.id,
+          attemptNumber: 1,
+          status: 'running',
+          idempotencyKey: `${cycle.id}-attempt-1`,
+          leaseOwner: options.owner,
+          nowMs: options.now(),
+        });
       }
       lastProcessedCampaignId = candidate.id;
       const linkedTask = recoverTask(cycle);
@@ -622,6 +776,18 @@ export function createAutonomousCampaignCoordinator(
         };
       }
       const reconciled = await reconcileDelivery(candidate.id, cycle.id);
+      if (
+        reconciled.outcome === 'failed' &&
+        reconciled.cycle.status === 'delivering'
+      ) {
+        attemptManager.failAttempt(candidate.id, cycle.id, {
+          stage: 'agent-turn',
+          message:
+            reconciled.cycle.lastError ??
+            reconciled.task.errorMessage ??
+            'Campaign task failed',
+        });
+      }
       return {
         outcome: reconciled.outcome,
         campaignId: candidate.id,
@@ -642,6 +808,8 @@ export function createAutonomousCampaignCoordinator(
 
 export interface StartAutonomousCampaignCoordinatorOptions {
   startTaskPipeline: (taskId: string) => void;
+  resumeTaskPipeline?: (taskId: string) => void;
+  interruptTask?: CampaignCoordinatorOptions['interruptTask'];
   findPullRequest?: CampaignCoordinatorOptions['findPullRequest'];
   owner?: string;
   intervalMs?: number;
@@ -675,6 +843,12 @@ export function startAutonomousCampaignCoordinator(
     leaseTtlMs,
     now: Date.now,
     startTaskPipeline: options.startTaskPipeline,
+    ...(options.resumeTaskPipeline
+      ? { resumeTaskPipeline: options.resumeTaskPipeline }
+      : {}),
+    ...(options.interruptTask
+      ? { interruptTask: options.interruptTask }
+      : {}),
     ...(options.findPullRequest
       ? { findPullRequest: options.findPullRequest }
       : {}),

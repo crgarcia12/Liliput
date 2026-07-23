@@ -17,8 +17,8 @@ export class CustomWorld extends World {
 
   response: { status: number; body: any; headers: Headers } | null = null;
   cookies: string[] = [];
-  apiBaseUrl = 'http://localhost:5001';
-  webBaseUrl = 'http://localhost:3000';
+  apiBaseUrl = process.env.API_URL ?? 'http://localhost:5001';
+  webBaseUrl = process.env.WEB_URL ?? 'http://localhost:3001';
   storedPasswords: Record<string, string> = {};
   tamperedJwt: string | null = null;
 
@@ -58,6 +58,7 @@ export class CustomWorld extends World {
   async openBrowser() {
     this.browser = await chromium.launch();
     this.context = await this.browser.newContext({
+      baseURL: this.webBaseUrl,
       viewport: { width: 1280, height: 720 },
     });
     this.page = await this.context.newPage();

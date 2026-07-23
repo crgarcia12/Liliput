@@ -474,6 +474,27 @@ describe('autonomous campaign attempt bounds', () => {
     expect(campaignStore.listAttempts(scenario.cycleId)).toHaveLength(1);
   });
 
+  it('should restore an external wait and its recovery marker after pause and resume', () => {
+    const scenario = createScenario();
+    const manager = createManager();
+    const recoveryMarker =
+      'kubernetes-cluster-unavailable-until=61000:connect ECONNREFUSED';
+    manager.waitForExternal(scenario.campaignId, scenario.cycleId, {
+      stage: 'deployment',
+      message: recoveryMarker,
+    });
+
+    manager.pause(scenario.campaignId, scenario.cycleId);
+    nowMs += 5_000;
+    const resumed = manager.resume(scenario.campaignId, scenario.cycleId);
+
+    expect(resumed.campaign.status).toBe('running');
+    expect(resumed.cycle.status).toBe('waiting_for_external');
+    expect(resumed.cycle.lastError).toBe(recoveryMarker);
+    expect(resumed.attempt.status).toBe('running');
+    expect(resumed.attempt.activeStartedAt).toBeUndefined();
+  });
+
   it('should prevent future retry or cycle work after stop', () => {
     const scenario = createScenario();
     const manager = createManager();

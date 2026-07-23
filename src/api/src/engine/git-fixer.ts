@@ -22,6 +22,7 @@ import {
   type AgentSession,
   type LogFn,
   type ToolEventFn,
+  type UsageFn,
 } from './agent-loop.js';
 
 const FIXER_TIMEOUT_MS = parseInt(
@@ -133,6 +134,12 @@ export interface RunGitOpWithFixerOptions<T> {
   onLog?: (level: 'info' | 'warn' | 'error', message: string, command?: string, output?: string) => void;
   /** Tool-event destination — usually a logPhase wrapper. */
   onToolEvent?: ToolEventFn;
+  /** Usage destination for the SDK calls made by the fixer turn. */
+  onUsage?: UsageFn;
+  /** Safe-boundary hook invoked immediately before a fixer model turn. */
+  beforeFixerTurn?: (attempt: number) => void;
+  /** Invoked once after a fixer model turn completes successfully. */
+  onFixerModelTurn?: (attempt: number) => void;
   /** Called when we spawn a fixer turn so the caller can register a UI agent. */
   onFixerTurnStart?: (attempt: number) => void;
   /** Called when a fixer turn completes (whether it recovered or not). */
@@ -167,6 +174,7 @@ export async function runGitOpWithFixer<T>(
       if (attempt === max) break;
 
       opts.onLog?.('info', 'Spawning git-fixer agent to diagnose and recover…');
+      opts.beforeFixerTurn?.(attempt);
       opts.onFixerTurnStart?.(attempt);
 
       const fixerLog: LogFn = (level, msg, cmd, out) =>
@@ -174,6 +182,7 @@ export async function runGitOpWithFixer<T>(
 
       let recovered = false;
       let summary = '(no summary)';
+      let modelTurnCompleted = false;
       try {
         const result = await runAgentTurn(opts.agentSession, {
           taskTitle: '(git-fixer)',
@@ -192,7 +201,9 @@ export async function runGitOpWithFixer<T>(
           timeoutMs: FIXER_TIMEOUT_MS,
           onLog: fixerLog,
           ...(opts.onToolEvent ? { onToolEvent: opts.onToolEvent } : {}),
+          ...(opts.onUsage ? { onUsage: opts.onUsage } : {}),
         });
+        modelTurnCompleted = true;
         summary = result.summary;
         opts.onLog?.(
           'info',
@@ -201,6 +212,9 @@ export async function runGitOpWithFixer<T>(
       } catch (fixErr) {
         const m = fixErr instanceof Error ? fixErr.message : String(fixErr);
         opts.onLog?.('warn', `git-fixer turn failed: ${m}`);
+      }
+      if (modelTurnCompleted) {
+        opts.onFixerModelTurn?.(attempt);
       }
 
       if (opts.recoveryCheck) {

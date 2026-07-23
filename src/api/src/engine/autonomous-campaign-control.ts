@@ -8,16 +8,35 @@ import type {
   AutonomousCampaignDetailResponse,
 } from '../../../shared/types/autonomous-campaign-controls.js';
 import {
+  claimCampaignLease,
   createCycle,
   getCampaign,
   getCycle,
+  getLatestAttempt,
   listAttempts,
   transitionCampaign,
 } from '../stores/autonomous-campaign-store.js';
 import { getDb } from '../stores/db.js';
+import {
+  AutonomousCampaignAttemptManagerError,
+  createAutonomousCampaignAttemptManager,
+  type AutonomousCampaignTaskInterruptReason,
+} from './autonomous-campaign-attempt-manager.js';
 import { getCampaignEvidenceSnapshot } from './autonomous-campaign-evidence.js';
+import { getPodId } from './pod-identity.js';
 
 const PAUSED_FROM_PREFIX = 'campaign-control:paused-from:';
+const DEFAULT_CONTROL_LEASE_TTL_MS = 60_000;
+
+export interface AutonomousCampaignControlOptions {
+  owner?: string;
+  leaseTtlMs?: number;
+  interruptTask?: (
+    taskId: string,
+    reason: AutonomousCampaignTaskInterruptReason,
+  ) => void;
+  resumeTask?: (taskId: string) => void;
+}
 
 export class AutonomousCampaignControlError extends Error {
   constructor(
@@ -74,6 +93,55 @@ function allowedActions(
 function previousCycleStatus(lastError: string | undefined): AutonomousCampaignCycleStatus {
   if (!lastError?.startsWith(PAUSED_FROM_PREFIX)) return 'proposing';
   return lastError.slice(PAUSED_FROM_PREFIX.length) as AutonomousCampaignCycleStatus;
+}
+
+function runAttemptControl(
+  campaignId: string,
+  nowMs: number,
+  options: AutonomousCampaignControlOptions,
+  action: 'pause' | 'resume' | 'stop',
+): AutonomousCampaignDetailResponse | undefined {
+  const campaign = requireCampaign(campaignId);
+  if (!campaign.currentCycleId) return undefined;
+  const cycle = getCycle(campaign.currentCycleId);
+  if (!cycle || !getLatestAttempt(cycle.id)) return undefined;
+  const owner = options.owner ?? getPodId();
+  const lease = claimCampaignLease({
+    campaignId,
+    owner,
+    nowMs,
+    ttlMs: options.leaseTtlMs ?? DEFAULT_CONTROL_LEASE_TTL_MS,
+  });
+  if (!lease.claimed) {
+    throw new AutonomousCampaignControlError(
+      `Campaign ${campaignId} is controlled by another coordinator`,
+      'INVALID_CAMPAIGN_ACTION',
+    );
+  }
+  const manager = createAutonomousCampaignAttemptManager({
+    owner,
+    now: () => nowMs,
+    interruptTask: options.interruptTask ?? (() => undefined),
+  });
+  try {
+    const result = manager[action](campaignId, cycle.id);
+    if (
+      action === 'resume' &&
+      result.cycle.status === 'delivering' &&
+      result.cycle.taskId
+    ) {
+      options.resumeTask?.(result.cycle.taskId);
+    }
+  } catch (error) {
+    if (error instanceof AutonomousCampaignAttemptManagerError) {
+      throw new AutonomousCampaignControlError(
+        error.message,
+        'INVALID_CAMPAIGN_ACTION',
+      );
+    }
+    throw error;
+  }
+  return getCampaignDetail(campaignId);
 }
 
 export function getCampaignDetail(
@@ -141,7 +209,15 @@ export function startCampaign(
 export function pauseCampaign(
   campaignId: string,
   nowMs = Date.now(),
+  options: AutonomousCampaignControlOptions = {},
 ): AutonomousCampaignDetailResponse {
+  const attemptResult = runAttemptControl(
+    campaignId,
+    nowMs,
+    options,
+    'pause',
+  );
+  if (attemptResult) return attemptResult;
   const operation = getDb().transaction(() => {
     const campaign = requireCampaign(campaignId);
     assertStatus(campaign, 'pause', 'running');
@@ -192,7 +268,15 @@ export function pauseCampaign(
 export function resumeCampaign(
   campaignId: string,
   nowMs = Date.now(),
+  options: AutonomousCampaignControlOptions = {},
 ): AutonomousCampaignDetailResponse {
+  const attemptResult = runAttemptControl(
+    campaignId,
+    nowMs,
+    options,
+    'resume',
+  );
+  if (attemptResult) return attemptResult;
   const operation = getDb().transaction(() => {
     const campaign = requireCampaign(campaignId);
     assertStatus(campaign, 'resume', 'paused');
@@ -243,7 +327,15 @@ export function resumeCampaign(
 export function stopCampaign(
   campaignId: string,
   nowMs = Date.now(),
+  options: AutonomousCampaignControlOptions = {},
 ): AutonomousCampaignDetailResponse {
+  const attemptResult = runAttemptControl(
+    campaignId,
+    nowMs,
+    options,
+    'stop',
+  );
+  if (attemptResult) return attemptResult;
   const operation = getDb().transaction(() => {
     const campaign = requireCampaign(campaignId);
     if (campaign.status === 'stopped') {

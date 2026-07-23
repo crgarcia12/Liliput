@@ -25,6 +25,8 @@ import {
 import { getCopilotClient, isSdkConnectionClosed, resetCopilotClient } from './copilot-client.js';
 import { setForceEffort } from './force-effort.js';
 import { reviewEvent } from './reviewer-loop.js';
+import type { UsageFn } from './agent-loop.js';
+import { registerTaskAborter } from './task-interrupt-registry.js';
 import { logger } from '../logger.js';
 
 /** Short timeouts — preflight must not dominate the build. Overridable via env. */
@@ -38,6 +40,39 @@ export interface StageConfig {
   reasoningEffort?: ReasoningEffort;
   /** Repo the task targets (e.g. "owner/repo") — context for the prompts. */
   repository?: string;
+  taskId?: string;
+  onUsage?: UsageFn;
+}
+
+function forwardUsageEvent(
+  event: { type: string; data?: unknown },
+  onUsage: UsageFn | undefined,
+): void {
+  if (!onUsage || event.type !== 'assistant.usage') return;
+  const data = event.data as {
+    model: string;
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+    duration?: number;
+    copilotUsage?: { totalNanoAiu?: number };
+  };
+  onUsage({
+    model: data.model,
+    ...(data.inputTokens != null ? { inputTokens: data.inputTokens } : {}),
+    ...(data.outputTokens != null ? { outputTokens: data.outputTokens } : {}),
+    ...(data.cacheReadTokens != null
+      ? { cacheReadTokens: data.cacheReadTokens }
+      : {}),
+    ...(data.cacheWriteTokens != null
+      ? { cacheWriteTokens: data.cacheWriteTokens }
+      : {}),
+    ...(data.copilotUsage?.totalNanoAiu != null
+      ? { nanoAiu: data.copilotUsage.totalNanoAiu }
+      : {}),
+    ...(data.duration != null ? { durationMs: data.duration } : {}),
+  });
 }
 
 function resolveModel(cfg: StageConfig): { model: string; effort: ReasoningEffort | undefined } {
@@ -75,9 +110,8 @@ async function runBoundedTurn(
       ...(effort ? { reasoningEffort: effort } : {}),
       enableConfigDiscovery: false,
       onPermissionRequest: approveAll,
-      onEvent: () => {
-        // Preflight stages don't stream tool events to the UI — their only
-        // output is the final assistant message from sendAndWait.
+      onEvent: (event) => {
+        forwardUsageEvent(event, cfg.onUsage);
       },
     });
   } catch (err) {
@@ -89,6 +123,9 @@ async function runBoundedTurn(
     return null;
   }
 
+  const unregisterAborter = cfg.taskId
+    ? registerTaskAborter(cfg.taskId, () => session.abort())
+    : () => undefined;
   let reply = '';
   try {
     const result = await session.sendAndWait({ prompt }, timeoutMs);
@@ -98,6 +135,7 @@ async function runBoundedTurn(
     logger.warn({ label, err: msg }, 'pipeline-stages: sendAndWait failed — skipping stage');
     if (isSdkConnectionClosed(err)) void resetCopilotClient();
   } finally {
+    unregisterAborter();
     try {
       await session.disconnect();
     } catch {
@@ -227,6 +265,8 @@ export async function critiquePlan(
       {
         ...(cfg.model ? { model: cfg.model } : {}),
         ...(cfg.reasoningEffort ? { reasoningEffort: cfg.reasoningEffort } : {}),
+        ...(cfg.taskId ? { taskId: cfg.taskId } : {}),
+        ...(cfg.onUsage ? { onUsage: cfg.onUsage } : {}),
       },
     );
     return { feedback: result.feedback, ran: result.ran };
