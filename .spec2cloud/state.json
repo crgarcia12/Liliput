@@ -1717,6 +1717,25 @@
         "codeReview": "pass",
         "coordinatorConcurrencyStress": "5-pass"
       },
+      "verification": {
+        "pullRequest": "https://github.com/crgarcia12/Liliput/pull/107",
+        "mergeCommit": "abd3d9b7b1295d1d7c3bb3a0054f421bc255ce3e",
+        "mainCi": "https://github.com/crgarcia12/Liliput/actions/runs/30016986359",
+        "deploymentWorkflow": "https://github.com/crgarcia12/Liliput/actions/runs/30016986635",
+        "productionPlaywright": "5-pass",
+        "cluster": "running-4-ready-nodes",
+        "startupErrors": 0,
+        "obelisco": {
+          "campaignId": "ea8d97fc-f17b-4ba1-bea5-40370617f090",
+          "cycleId": "814c0bcc-5b71-47cd-beca-1bcf32413e3f",
+          "cycleStatus": "delivering",
+          "workstreamId": "1f511c46-d629-4a0b-b4a3-e057a0120308",
+          "taskId": "0edaa890-2975-4656-85af-4afa18626d53",
+          "taskStatus": "building",
+          "activeStage": "implement"
+        },
+        "verifiedAt": "2026-07-23T14:53:07Z"
+      },
       "completedAt": "2026-07-23T14:23:42Z"
     },
     "ext-006": {
@@ -1929,14 +1948,14 @@
     "resourceGroup": "crgar-liliput-rg",
     "cluster": "crgar-liliput-aks",
     "clusterPowerState": "Running",
-    "clusterVerifiedAt": "2026-07-23T11:26:11Z",
+    "clusterVerifiedAt": "2026-07-23T14:53:07Z",
     "namespace": "liliput",
     "url": "https://liliput.crgarcia.com.ar",
-    "commitSha": "37e21a290fd9b2fbcd51b7cf6752c19a824f6869",
-    "apiImage": "crgarliliputacr.azurecr.io/liliput-api:37e21a290fd9b2fbcd51b7cf6752c19a824f6869",
-    "webImage": "crgarliliputacr.azurecr.io/liliput-web:37e21a290fd9b2fbcd51b7cf6752c19a824f6869",
-    "deployedAt": "2026-07-23T11:24:04Z",
-    "verifiedAt": "2026-07-23T11:26:11Z",
+    "commitSha": "abd3d9b7b1295d1d7c3bb3a0054f421bc255ce3e",
+    "apiImage": "crgarliliputacr.azurecr.io/liliput-api:abd3d9b7b1295d1d7c3bb3a0054f421bc255ce3e",
+    "webImage": "crgarliliputacr.azurecr.io/liliput-web:abd3d9b7b1295d1d7c3bb3a0054f421bc255ce3e",
+    "deployedAt": "2026-07-23T14:49:07Z",
+    "verifiedAt": "2026-07-23T14:53:07Z",
     "aiFoundry": {
       "account": "crgar-liliput-ai",
       "resourceGroup": "crgar-ai-rg",
@@ -1967,5 +1986,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-23T14:36:59Z"
+  "lastUpdated": "2026-07-23T14:53:07Z"
 }
