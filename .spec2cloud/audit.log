@@ -212,3 +212,6 @@
 [2026-07-23T14:23:42Z] increment=bugfix-001 step=implementation action=fix-applied result=done files=campaign-coordinator,campaign-proposal,campaign-control,index,autonomy-portal
 [2026-07-23T14:23:42Z] increment=bugfix-001 step=implementation action=focused-review result=pass findings=0 checks=nonblocking-proposals,lease-heartbeats,session-cancellation,atomic-persistence
 [2026-07-23T14:23:42Z] increment=bugfix-001 step=implementation action=regression-passed result=all-green api=46-files-489-tests cucumber=75-scenarios-554-steps playwright=5 apiBuild=pass apiLint=pass webBuild=pass webLint=pass
+[2026-07-23T14:36:59Z] increment=bugfix-001 step=verification action=pull-request-ci result=error message="Cross-campaign concurrency test depended on UUID ordering when campaigns shared the same created_at timestamp" workflow=https://github.com/crgarcia12/Liliput/actions/runs/30015790790
+[2026-07-23T14:36:59Z] increment=bugfix-001 step=tests action=test-stabilized result=done strategy=explicit-campaign-created-at-ordering stressRuns=5
+[2026-07-23T14:36:59Z] increment=bugfix-001 step=tests action=regression-passed result=all-green api=46-files-489-tests apiLint=pass

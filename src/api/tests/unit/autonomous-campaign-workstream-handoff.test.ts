@@ -155,19 +155,23 @@ async function loadCoordinatorModule(): Promise<CampaignCoordinatorModule> {
 function createAcceptedCycle(
   targetRepository = repository,
   targetBaseBranch = baseBranch,
+  occurredAt?: string,
 ): {
   campaignId: string;
   cycleId: string;
 } {
-  const campaign = campaignStore.createCampaign({
-    repository: targetRepository,
-    baseBranch: targetBaseBranch,
-    modelConfig: {
-      metaAgent: { model: 'gpt-5.6-sol', reasoningEffort: 'high' },
-      coding: { model: 'gpt-5.6-terra', reasoningEffort: 'high' },
-      reviewer: { model: 'gpt-5.6-luna', reasoningEffort: 'medium' },
+  const campaign = campaignStore.createCampaign(
+    {
+      repository: targetRepository,
+      baseBranch: targetBaseBranch,
+      modelConfig: {
+        metaAgent: { model: 'gpt-5.6-sol', reasoningEffort: 'high' },
+        coding: { model: 'gpt-5.6-terra', reasoningEffort: 'high' },
+        reviewer: { model: 'gpt-5.6-luna', reasoningEffort: 'medium' },
+      },
     },
-  });
+    occurredAt ? { occurredAt } : {},
+  );
   campaignStore.transitionCampaign({
     campaignId: campaign.id,
     expectedStatus: 'draft',
@@ -198,19 +202,23 @@ function createAcceptedCycle(
 function createUnpreparedCycle(
   targetRepository = repository,
   targetBaseBranch = baseBranch,
+  occurredAt?: string,
 ): {
   campaignId: string;
   cycleId: string;
 } {
-  const campaign = campaignStore.createCampaign({
-    repository: targetRepository,
-    baseBranch: targetBaseBranch,
-    modelConfig: {
-      metaAgent: { model: 'gpt-5.6-sol', reasoningEffort: 'high' },
-      coding: { model: 'gpt-5.6-terra', reasoningEffort: 'high' },
-      reviewer: { model: 'gpt-5.6-luna', reasoningEffort: 'medium' },
+  const campaign = campaignStore.createCampaign(
+    {
+      repository: targetRepository,
+      baseBranch: targetBaseBranch,
+      modelConfig: {
+        metaAgent: { model: 'gpt-5.6-sol', reasoningEffort: 'high' },
+        coding: { model: 'gpt-5.6-terra', reasoningEffort: 'high' },
+        reviewer: { model: 'gpt-5.6-luna', reasoningEffort: 'medium' },
+      },
     },
-  });
+    occurredAt ? { occurredAt } : {},
+  );
   campaignStore.transitionCampaign({
     campaignId: campaign.id,
     expectedStatus: 'draft',
@@ -746,8 +754,16 @@ describe('autonomous campaign workstream handoff', () => {
   });
 
   it('should keep coordinating other campaigns while a proposal is prepared', async () => {
-    const started = createUnpreparedCycle();
-    const accepted = createAcceptedCycle('crgarcia12/another-repository');
+    const started = createUnpreparedCycle(
+      repository,
+      baseBranch,
+      '2026-07-23T12:00:00Z',
+    );
+    const accepted = createAcceptedCycle(
+      'crgarcia12/another-repository',
+      baseBranch,
+      '2026-07-23T12:00:01Z',
+    );
     let finishProposal: (() => void) | undefined;
     const preparationFinished = new Promise<void>((resolvePreparation) => {
       finishProposal = () => {
