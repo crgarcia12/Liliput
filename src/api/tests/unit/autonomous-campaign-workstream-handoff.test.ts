@@ -86,6 +86,7 @@ interface CampaignCoordinatorOptions {
   leaseTtlMs: number;
   now: () => number;
   startTaskPipeline: (taskId: string) => void;
+  resumeTaskPipeline?: (taskId: string) => void;
   hooks?: {
     afterWorkstreamCreated?: (workstream: Workstream) => void;
     afterTaskCreated?: (task: Task) => void;
@@ -361,6 +362,52 @@ describe('autonomous campaign workstream handoff', () => {
     expect(countRows('autonomous_cycles')).toBe(1);
     expect(countRows('workstreams')).toBe(1);
     expect(countRows('tasks')).toBe(1);
+  });
+
+  it('should keep a cluster outage paused until its durable retry time', async () => {
+    const accepted = createAcceptedCycle();
+    const resumeTaskPipeline = vi.fn<(taskId: string) => void>();
+    const coordinator = createCoordinator({ resumeTaskPipeline });
+    const handoff = await coordinator.handoffAcceptedProposal(
+      accepted.campaignId,
+      accepted.cycleId,
+    );
+    updateTask(handoff.task.id, {
+      status: 'deploying',
+      branch: 'liliput/campaign-cycle-3',
+    });
+    const retryAt = nowMs + 60_000;
+    getDb()
+      .prepare(
+        `UPDATE autonomous_cycles
+            SET status = 'waiting_for_external',
+                last_error = ?
+          WHERE id = ?`,
+      )
+      .run(
+        `kubernetes-cluster-unavailable-until=${retryAt}:connect ECONNREFUSED`,
+        accepted.cycleId,
+      );
+    getDb()
+      .prepare(
+        `UPDATE autonomous_attempts
+            SET active_started_at = NULL
+          WHERE cycle_id = ?`,
+      )
+      .run(accepted.cycleId);
+    startTaskPipeline.mockClear();
+
+    nowMs = retryAt - 1;
+    expect(await coordinator.runOnce()).toMatchObject({ outcome: 'idle' });
+    expect(resumeTaskPipeline).not.toHaveBeenCalled();
+
+    nowMs = retryAt;
+    expect(await coordinator.runOnce()).toMatchObject({
+      outcome: 'handed-off',
+      taskId: handoff.task.id,
+    });
+    expect(resumeTaskPipeline).toHaveBeenCalledWith(handoff.task.id);
+    expect(campaignStore.getCycle(accepted.cycleId)?.status).toBe('delivering');
   });
 
   it('should renew the same coordinator lease while delivery is active', async () => {

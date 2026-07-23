@@ -1447,7 +1447,211 @@
     },
     "ext-005": {
       "type": "extension",
-      "status": "in-progress"
+      "status": "in-progress",
+      "featureFiles": [
+        "specs/features/autonomous-campaign-attempt-bounds.feature"
+      ],
+      "scenarioCount": 15,
+      "steps": {
+        "tests": {
+          "status": "approved",
+          "e2e": {
+            "status": "done",
+            "flowCount": 0,
+            "newSpecFiles": [],
+            "newPageObjects": [],
+            "reason": "Attempt accounting and safe-boundary interruption extend the existing campaign controls without adding a new operator UI journey.",
+            "existingPlaywrightSuite": "4-discovered"
+          },
+          "gherkin": {
+            "status": "approved",
+            "featureFiles": [
+              "specs/features/autonomous-campaign-attempt-bounds.feature"
+            ],
+            "scenarioCount": 15,
+            "approvedAt": "2026-07-23T09:02:38Z",
+            "approvalSource": "explicit-unattended-continuation"
+          },
+          "cucumberSteps": [
+            "tests/features/step-definitions/autonomous-campaign-attempt-bounds.steps.ts"
+          ],
+          "vitestFiles": [
+            "src/api/tests/unit/autonomous-campaign-attempt-bounds.test.ts"
+          ],
+          "redBaseline": {
+            "apiBuild": "pass",
+            "cucumberDryRun": {
+              "status": "pass",
+              "scenarios": 15,
+              "steps": 132,
+              "undefined": 0,
+              "ambiguous": 0
+            },
+            "cucumber": {
+              "status": "expected-failure",
+              "scenariosFailed": 15,
+              "scenariosPassed": 0,
+              "stepsFailed": 15,
+              "reason": "The autonomous campaign attempt manager module does not exist yet."
+            },
+            "vitest": {
+              "status": "expected-failure",
+              "filesFailed": 1,
+              "testsFailed": 13,
+              "testsPassed": 0,
+              "reason": "The autonomous campaign attempt manager module does not exist yet."
+            },
+            "existingRegression": {
+              "api": {
+                "status": "pass",
+                "files": 43,
+                "tests": 465
+              },
+              "cucumber": {
+                "status": "pass",
+                "scenarios": 60,
+                "steps": 422
+              }
+            },
+            "playwrightDiscovery": {
+              "status": "pass",
+              "files": 2,
+              "tests": 4
+            },
+            "verifiedAt": "2026-07-23T09:02:38Z"
+          },
+          "approvedAt": "2026-07-23T09:02:38Z",
+          "approvalSource": "explicit-unattended-continuation"
+        },
+        "contracts": {
+          "status": "done",
+          "apiContracts": [
+            "specs/contracts/api/autonomous-campaign-attempt-bounds.yaml"
+          ],
+          "sharedTypes": [
+            "src/shared/types/autonomous-campaign-attempt-bounds.ts",
+            "src/shared/types/index.ts"
+          ],
+          "infraContract": "specs/contracts/infra/resources.yaml",
+          "infraUpdated": true,
+          "newResources": [],
+          "newEnvironmentVariables": [],
+          "newSecrets": [],
+          "newModelDeployments": [],
+          "bicepChangesRequired": false,
+          "kubernetesManifestChangesRequired": false,
+          "apiBuild": "pass",
+          "webBuild": "pass",
+          "yamlValidation": "pass",
+          "completedAt": "2026-07-23T09:07:12Z"
+        },
+        "implementation": {
+          "status": "done",
+          "research": {
+            "sdkAbortPattern": "Use CopilotSession.abort() to interrupt only the active message while preserving the durable task, branch, and session evidence.",
+            "transactionPattern": "Use synchronous better-sqlite3 transaction.immediate() mutations; never hold a SQLite transaction across asynchronous work.",
+            "usagePattern": "Count one turn per completed model action and use stable usage event identifiers so cost deltas are idempotent.",
+            "externalWaitPattern": "Close the active elapsed-time interval before an external wait and open a new interval only when the same attempt resumes.",
+            "sources": [
+              "https://github.com/github/copilot-sdk/blob/main/docs/nodejs/session-lifecycle.md",
+              "https://github.com/github/copilot-sdk/blob/main/nodejs/src/session.ts",
+              "https://github.com/WiseLibs/better-sqlite3/blob/master/docs/api.md",
+              "https://www.sqlite.org/lang_transaction.html"
+            ],
+            "packageUpdates": []
+          },
+          "slices": {
+            "api": {
+              "status": "done",
+              "modifiedFiles": [
+                "src/api/src/engine/autonomous-campaign-attempt-manager.ts",
+                "src/api/src/engine/task-interrupt-registry.ts",
+                "src/api/src/engine/agent-engine.ts",
+                "src/api/src/engine/autonomous-campaign-control.ts",
+                "src/api/src/engine/autonomous-campaign-coordinator.ts",
+                "src/api/src/engine/conflict-guard.ts",
+                "src/api/src/engine/git-fixer.ts",
+                "src/api/src/engine/k8s-deployer.ts",
+                "src/api/src/engine/pipeline-stages.ts",
+                "src/api/src/engine/reviewer-loop.ts",
+                "src/api/src/engine/reviewer-trigger.ts",
+                "src/api/src/stores/autonomous-campaign-store.ts",
+                "src/api/src/stores/db.ts",
+                "src/api/src/stores/turn-store.ts",
+                "src/api/src/routes/autonomous-campaigns.ts",
+                "src/api/src/app.ts",
+                "src/api/src/index.ts"
+              ],
+              "failingTests": [],
+              "lastTestRun": {
+                "pass": 483,
+                "fail": 0
+              },
+              "iteration": 3
+            },
+            "web": {
+              "status": "not-applicable",
+              "reason": "This increment adds no new operator UI or frontend contract."
+            },
+            "integration": {
+              "status": "done",
+              "modifiedFiles": [
+                "src/api/tests/unit/autonomous-campaign-attempt-bounds.test.ts",
+                "src/api/tests/unit/autonomous-campaign-workstream-handoff.test.ts",
+                "src/api/tests/unit/k8s-deployer.test.ts",
+                "tests/features/support/world.ts"
+              ],
+              "failingTests": [],
+              "lastTestRun": {
+                "cucumber": {
+                  "pass": 75,
+                  "fail": 0,
+                  "steps": 554
+                },
+                "playwright": {
+                  "pass": 4,
+                  "fail": 0
+                }
+              },
+              "iteration": 2
+            }
+          },
+          "codeReview": {
+            "status": "pass",
+            "highConfidenceFindings": 0
+          },
+          "completedAt": "2026-07-23T11:09:36Z"
+        },
+        "verification": {
+          "status": "in-progress",
+          "regression": {
+            "apiBuild": "pass",
+            "webBuild": "pass",
+            "apiLint": "pass",
+            "apiTests": {
+              "pass": 483,
+              "fail": 0
+            },
+            "cucumber": {
+              "pass": 75,
+              "fail": 0,
+              "steps": 554
+            },
+            "playwright": {
+              "pass": 4,
+              "fail": 0
+            }
+          },
+          "deployment": {
+            "status": "pending",
+            "environment": "production",
+            "platform": "aks"
+          },
+          "smokeTests": {
+            "status": "pending"
+          }
+        }
+      }
     },
     "ext-006": {
       "type": "extension",
@@ -1492,7 +1696,10 @@
     "ext-004-gherkin-approved": true,
     "ext-004-tests-approved": true,
     "ext-004-implementation-approved": true,
-    "ext-004-deployment-approved": true
+    "ext-004-deployment-approved": true,
+    "ext-005-gherkin-approved": true,
+    "ext-005-tests-approved": true,
+    "ext-005-implementation-approved": true
   },
   "testsStatus": {
     "reviewerConfigAndCliAuth": {
@@ -1587,6 +1794,17 @@
       "cucumber": "60-scenarios-422-steps-pass",
       "playwright": "4-pass",
       "skippedTests": 0
+    },
+    "autonomousCampaignAttemptBounds": {
+      "apiBuild": "pass",
+      "webBuild": "pass",
+      "apiLint": "pass",
+      "implementation": "pass",
+      "implementationApproval": "approved",
+      "apiTests": "483-pass",
+      "cucumber": "75-scenarios-554-steps-pass",
+      "playwright": "4-pass",
+      "codeReview": "pass"
     }
   },
   "extensions": {
@@ -1672,5 +1890,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-23T08:32:23Z"
+  "lastUpdated": "2026-07-23T11:09:36Z"
 }

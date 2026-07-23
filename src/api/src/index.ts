@@ -9,7 +9,15 @@ import { createApp } from './app.js';
 import { setupWebSocket } from './ws/handler.js';
 import { stopCopilotClient } from './engine/copilot-client.js';
 import { reconcileOrphanedRuns, backfillDefaultWorkstreams } from './stores/task-store.js';
-import { purgeOrphanWorkspaces, restoreDevRoutesFromStore, autoResumeInterruptedTasks, startBuild } from './engine/agent-engine.js';
+import {
+  purgeOrphanWorkspaces,
+  restoreDevRoutesFromStore,
+  autoResumeInterruptedTasks,
+  interruptTaskAgentTurn,
+  iterateTask,
+  resumeCampaignTask,
+  startBuild,
+} from './engine/agent-engine.js';
 import { runDeletingSweeper } from './routes/workstreams.js';
 import { ensureAzLogin } from './engine/azure-builder.js';
 import { startReconciler } from './engine/loop-reconciler.js';
@@ -26,7 +34,14 @@ const io = new SocketServer(server, {
   cors: { origin: '*', methods: ['GET', 'POST'] },
 });
 
-const app = createApp(io);
+const app = createApp(io, {
+  campaignControl: {
+    owner: getPodId(),
+    interruptTask: interruptTaskAgentTurn,
+    resumeTask: (taskId) =>
+      resumeCampaignTask(io, taskId, { queueIfActive: true }),
+  },
+});
 server.on('request', app);
 
 setupWebSocket(io);
@@ -137,6 +152,13 @@ if (process.env['LILIPUT_RECONCILER_ENABLED'] === '1') {
 
 const stopCampaignCoordinator = startAutonomousCampaignCoordinator({
   startTaskPipeline: (taskId) => startBuild(io, taskId),
+  resumeTaskPipeline: (taskId) =>
+    iterateTask(
+      io,
+      taskId,
+      'Resume the same autonomous campaign delivery attempt from its persisted branch and checkpoints.',
+    ),
+  interruptTask: interruptTaskAgentTurn,
   findPullRequest: findPullRequestByHead,
 });
 

@@ -32,6 +32,8 @@ import {
 } from '../../../shared/types/index.js';
 import { setForceEffort } from './force-effort.js';
 import { logger } from '../logger.js';
+import type { UsageFn } from './agent-loop.js';
+import { registerTaskAborter } from './task-interrupt-registry.js';
 
 const execFileP = promisify(execFile);
 
@@ -51,6 +53,39 @@ export interface ReviewerConfig {
   /** Optional reasoning-effort override. Auto-derived from model id suffix
    *  when missing (e.g. `*-xhigh` → 'xhigh'). */
   reasoningEffort?: ReasoningEffort;
+  taskId?: string;
+  onUsage?: UsageFn;
+}
+
+function forwardUsageEvent(
+  event: { type: string; data?: unknown },
+  onUsage: UsageFn | undefined,
+): void {
+  if (!onUsage || event.type !== 'assistant.usage') return;
+  const data = event.data as {
+    model: string;
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+    duration?: number;
+    copilotUsage?: { totalNanoAiu?: number };
+  };
+  onUsage({
+    model: data.model,
+    ...(data.inputTokens != null ? { inputTokens: data.inputTokens } : {}),
+    ...(data.outputTokens != null ? { outputTokens: data.outputTokens } : {}),
+    ...(data.cacheReadTokens != null
+      ? { cacheReadTokens: data.cacheReadTokens }
+      : {}),
+    ...(data.cacheWriteTokens != null
+      ? { cacheWriteTokens: data.cacheWriteTokens }
+      : {}),
+    ...(data.copilotUsage?.totalNanoAiu != null
+      ? { nanoAiu: data.copilotUsage.totalNanoAiu }
+      : {}),
+    ...(data.duration != null ? { durationMs: data.duration } : {}),
+  });
 }
 
 export interface ReviewContextSpec {
@@ -438,9 +473,8 @@ export async function reviewEvent(
       ...(workspaceRoot ? { workingDirectory: workspaceRoot } : {}),
       enableConfigDiscovery: false, // Don't load target-repo skills for the reviewer
       onPermissionRequest: approveAll,
-      onEvent: () => {
-        // The reviewer doesn't stream events to the UI — its only output is
-        // the final assistant message we get from sendAndWait.
+      onEvent: (event) => {
+        forwardUsageEvent(event, cfg.onUsage);
       },
     });
     if (effort) {
@@ -465,6 +499,9 @@ export async function reviewEvent(
     return { feedback: null, ran: false, reason: 'sdk-error' };
   }
 
+  const unregisterAborter = cfg.taskId
+    ? registerTaskAborter(cfg.taskId, () => session.abort())
+    : () => undefined;
   let reply = '';
   let timedOut = false;
   try {
@@ -483,6 +520,7 @@ export async function reviewEvent(
       void resetCopilotClient();
     }
   } finally {
+    unregisterAborter();
     try {
       await session.disconnect();
     } catch {

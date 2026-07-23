@@ -6,6 +6,7 @@ export * from './autonomous-campaign-controls.js';
 export * from './autonomous-campaign-evidence.js';
 export * from './autonomous-campaign-proposal.js';
 export * from './autonomous-campaign-delivery.js';
+export * from './autonomous-campaign-attempt-bounds.js';
 
 // ─── Workstream (groups Tasks for a repo) ─────────────────────
 

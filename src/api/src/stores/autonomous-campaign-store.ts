@@ -24,6 +24,7 @@ import {
   type TransitionAutonomousCampaignInput,
   type AutonomousCampaignStoreErrorCode,
 } from '../../../shared/types/autonomous-campaign-state.js';
+import type { AutonomousCampaignBoundedAttempt } from '../../../shared/types/autonomous-campaign-attempt-bounds.js';
 import { nextRetryDelayMinutes } from '../engine/autonomous-campaign-primitives.js';
 import { getDb } from './db.js';
 
@@ -91,6 +92,10 @@ interface AttemptRow {
   turns_used: number;
   elapsed_ms: number;
   estimated_cost_usd: number;
+  max_turns: number;
+  max_elapsed_ms: number;
+  max_estimated_cost_usd: number;
+  active_started_at: string | null;
   started_at: string;
   completed_at: string | null;
   failure_stage: string | null;
@@ -208,7 +213,7 @@ function hydrateCycle(row: CycleRow): AutonomousCampaignCycle {
   };
 }
 
-function hydrateAttempt(row: AttemptRow): AutonomousCampaignAttempt {
+function hydrateAttempt(row: AttemptRow): AutonomousCampaignBoundedAttempt {
   return {
     id: row.id,
     cycleId: row.cycle_id,
@@ -217,6 +222,10 @@ function hydrateAttempt(row: AttemptRow): AutonomousCampaignAttempt {
     turnsUsed: row.turns_used,
     elapsedMs: row.elapsed_ms,
     estimatedCostUsd: row.estimated_cost_usd,
+    maxTurns: row.max_turns,
+    maxElapsedMs: row.max_elapsed_ms,
+    maxEstimatedCostUsd: row.max_estimated_cost_usd,
+    activeStartedAt: optional(row.active_started_at),
     startedAt: row.started_at,
     completedAt: optional(row.completed_at),
     failureStage: optional(row.failure_stage),
@@ -502,6 +511,21 @@ export function getCurrentCycle(
   return row ? hydrateCycle(row) : undefined;
 }
 
+export function findActiveCycleByTaskId(
+  taskId: string,
+): AutonomousCampaignCycle | undefined {
+  const row = getDb()
+    .prepare(
+      `SELECT cycle.*
+         FROM autonomous_campaigns campaign
+         JOIN autonomous_cycles cycle ON cycle.id = campaign.current_cycle_id
+        WHERE cycle.task_id = ?
+        LIMIT 1`,
+    )
+    .get(taskId) as CycleRow | undefined;
+  return row ? hydrateCycle(row) : undefined;
+}
+
 export interface UpdateAutonomousCampaignDeliveryInput {
   campaignId: string;
   cycleId: string;
@@ -589,7 +613,7 @@ export function updateCycleDelivery(
 
 export function createAttempt(
   input: CreateAutonomousCampaignAttemptInput,
-): AutonomousCampaignAttempt {
+): AutonomousCampaignBoundedAttempt {
   const db = getDb();
   const create = db.transaction(() => {
     const replay = db
@@ -616,7 +640,7 @@ export function createAttempt(
     const campaign = requireCampaignRow(cycle.campaign_id);
     assertLeaseOwner(campaign, input.leaseOwner, input.nowMs);
     const ts = new Date(input.nowMs ?? Date.now()).toISOString();
-    const attempt: AutonomousCampaignAttempt = {
+    const attempt: AutonomousCampaignBoundedAttempt = {
       id: uuid(),
       cycleId: input.cycleId,
       attemptNumber: input.attemptNumber,
@@ -624,6 +648,12 @@ export function createAttempt(
       turnsUsed: 0,
       elapsedMs: 0,
       estimatedCostUsd: 0,
+      maxTurns: campaign.max_turns_per_attempt,
+      maxElapsedMs: campaign.max_minutes_per_attempt * 60_000,
+      maxEstimatedCostUsd: campaign.max_cost_usd_per_attempt,
+      ...(input.status === 'running' || input.status === undefined
+        ? { activeStartedAt: ts }
+        : {}),
       startedAt: ts,
       createdAt: ts,
       updatedAt: ts,
@@ -631,8 +661,10 @@ export function createAttempt(
     db.prepare(
       `INSERT INTO autonomous_attempts (
          id, cycle_id, attempt_number, status, turns_used, elapsed_ms,
-         estimated_cost_usd, started_at, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         estimated_cost_usd, max_turns, max_elapsed_ms,
+         max_estimated_cost_usd, active_started_at, started_at,
+         created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       attempt.id,
       attempt.cycleId,
@@ -641,6 +673,10 @@ export function createAttempt(
       attempt.turnsUsed,
       attempt.elapsedMs,
       attempt.estimatedCostUsd,
+      attempt.maxTurns,
+      attempt.maxElapsedMs,
+      attempt.maxEstimatedCostUsd,
+      attempt.activeStartedAt ?? null,
       attempt.startedAt,
       attempt.createdAt,
       attempt.updatedAt,
@@ -665,14 +701,124 @@ export function createAttempt(
 
 export function getAttempt(
   id: string,
-): AutonomousCampaignAttempt | undefined {
+): AutonomousCampaignBoundedAttempt | undefined {
   const row = getDb()
     .prepare('SELECT * FROM autonomous_attempts WHERE id = ?')
     .get(id) as AttemptRow | undefined;
   return row ? hydrateAttempt(row) : undefined;
 }
 
-export function listAttempts(cycleId: string): AutonomousCampaignAttempt[] {
+export function getLatestAttempt(
+  cycleId: string,
+): AutonomousCampaignBoundedAttempt | undefined {
+  const row = getDb()
+    .prepare(
+      `SELECT *
+         FROM autonomous_attempts
+        WHERE cycle_id = ?
+        ORDER BY attempt_number DESC
+        LIMIT 1`,
+    )
+    .get(cycleId) as AttemptRow | undefined;
+  return row ? hydrateAttempt(row) : undefined;
+}
+
+export interface AutonomousCampaignPendingUsage {
+  attemptId: string;
+  usageEventId: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  occurredAt: string;
+}
+
+export function recordPendingAttemptUsage(
+  input: AutonomousCampaignPendingUsage,
+): void {
+  getDb()
+    .prepare(
+      `INSERT OR IGNORE INTO autonomous_attempt_pending_usage (
+         attempt_id,
+         usage_event_id,
+         model,
+         input_tokens,
+         output_tokens,
+         cache_read_tokens,
+         cache_write_tokens,
+         occurred_at,
+         created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      input.attemptId,
+      input.usageEventId,
+      input.model,
+      input.inputTokens,
+      input.outputTokens,
+      input.cacheReadTokens,
+      input.cacheWriteTokens,
+      input.occurredAt,
+      new Date().toISOString(),
+    );
+}
+
+export function listPendingAttemptUsage(
+  attemptId: string,
+): AutonomousCampaignPendingUsage[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT attempt_id,
+              usage_event_id,
+              model,
+              input_tokens,
+              output_tokens,
+              cache_read_tokens,
+              cache_write_tokens,
+              occurred_at
+         FROM autonomous_attempt_pending_usage
+        WHERE attempt_id = ?
+        ORDER BY created_at, usage_event_id`,
+    )
+    .all(attemptId) as {
+    attempt_id: string;
+    usage_event_id: string;
+    model: string;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_tokens: number;
+    cache_write_tokens: number;
+    occurred_at: string;
+  }[];
+  return rows.map((row) => ({
+    attemptId: row.attempt_id,
+    usageEventId: row.usage_event_id,
+    model: row.model,
+    inputTokens: row.input_tokens,
+    outputTokens: row.output_tokens,
+    cacheReadTokens: row.cache_read_tokens,
+    cacheWriteTokens: row.cache_write_tokens,
+    occurredAt: row.occurred_at,
+  }));
+}
+
+export function deletePendingAttemptUsage(
+  attemptId: string,
+  usageEventId: string,
+): void {
+  getDb()
+    .prepare(
+      `DELETE FROM autonomous_attempt_pending_usage
+        WHERE attempt_id = ?
+          AND usage_event_id = ?`,
+    )
+    .run(attemptId, usageEventId);
+}
+
+export function listAttempts(
+  cycleId: string,
+): AutonomousCampaignBoundedAttempt[] {
   const rows = getDb()
     .prepare(
       `SELECT * FROM autonomous_attempts
@@ -850,7 +996,7 @@ export function scheduleCycleRetry(
 
 export function recordAttemptUsage(
   input: RecordAutonomousAttemptUsageInput,
-): AutonomousCampaignAttempt {
+): AutonomousCampaignBoundedAttempt {
   if (!Number.isFinite(input.turns) || input.turns < 0) {
     throw new RangeError('Usage turns must be a non-negative number');
   }

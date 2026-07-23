@@ -22,13 +22,17 @@ import * as path from 'path';
 import { randomUUID } from 'node:crypto';
 import type {
   AgentRole,
+  AutonomousCampaignAttemptStage,
+  AutonomousCampaignAttemptActionResult,
   Task,
   PipelineStage,
   PipelineStageStatus,
   PipelineState,
 } from '../../../shared/types/index.js';
 import * as store from '../stores/task-store.js';
+import * as campaignStore from '../stores/autonomous-campaign-store.js';
 import * as turnStore from '../stores/turn-store.js';
+import { getEffectivePrice } from '../stores/pricing-store.js';
 import { logger } from '../logger.js';
 import * as git from './git-client.js';
 import { CheckpointWriter } from './checkpoint-writer.js';
@@ -58,6 +62,7 @@ import {
   deleteService,
   listDevPods,
   getPodLogs,
+  isKubernetesInfrastructureUnavailable,
   type DevPodInfo,
 } from './k8s-deployer.js';
 import { syncRoutes, type DevRoute } from './nginx-patcher.js';
@@ -80,12 +85,18 @@ import { recordAndDecide as recordStuck, resetStuckHistory } from './stuck-detec
 import { runGherkinChecks } from './gherkin-runner.js';
 import { triggerPipelineReview, consumeReviewerFeedbackForCoder } from './reviewer-trigger.js';
 import {
+  AutonomousCampaignAttemptManagerError,
+  createAutonomousCampaignAttemptManager,
+} from './autonomous-campaign-attempt-manager.js';
+import {
   rewriteRequest,
   generatePlan,
   critiquePlan,
   composePlanningContext,
   type StageConfig,
 } from './pipeline-stages.js';
+import { getPodId } from './pod-identity.js';
+import { interruptRegisteredTaskSessions } from './task-interrupt-registry.js';
 
 const ACR_NAME = process.env['ACR_NAME'] ?? '';
 const PUBLIC_BASE_URL = process.env['LILIPUT_PUBLIC_URL'] ?? 'https://liliput.crgarcia.com.ar';
@@ -93,6 +104,10 @@ const DEFAULT_REPO = process.env['LILIPUT_DEFAULT_TARGET_REPO'];
 /** How many times to invoke the ops-fixer agent for build/deploy failures. */
 const MAX_BUILD_FIX_ATTEMPTS = parseInt(process.env['MAX_BUILD_FIX_ATTEMPTS'] ?? '2', 10);
 const MAX_DEPLOY_FIX_ATTEMPTS = parseInt(process.env['MAX_DEPLOY_FIX_ATTEMPTS'] ?? '2', 10);
+const CAMPAIGN_KUBERNETES_WAIT_MS = parseInt(
+  process.env['CAMPAIGN_KUBERNETES_WAIT_MS'] ?? '60000',
+  10,
+);
 /**
  * Per-round conflict guard: after each iteration's push, reconcile the branch
  * with the base branch and Copilot-resolve any conflicts. On by default (kill
@@ -355,6 +370,25 @@ interface InFlightAgent {
   spec?: string;
 }
 const inFlightAgents = new Map<string, InFlightAgent>();
+interface ActiveTaskRun {
+  interruptedReason?: 'pause' | 'stop';
+}
+const activeTaskRuns = new Map<string, ActiveTaskRun>();
+const pendingCampaignResumes = new Map<string, SocketServer>();
+
+function beginTaskRun(taskId: string): boolean {
+  if (activeTaskRuns.has(taskId)) return false;
+  activeTaskRuns.set(taskId, {});
+  return true;
+}
+
+function endTaskRun(taskId: string): void {
+  activeTaskRuns.delete(taskId);
+  const resumeIo = pendingCampaignResumes.get(taskId);
+  if (!resumeIo) return;
+  pendingCampaignResumes.delete(taskId);
+  queueMicrotask(() => resumeCampaignTask(resumeIo, taskId));
+}
 
 function registerInFlightAgent(taskId: string, entry: InFlightAgent): void {
   inFlightAgents.set(taskId, entry);
@@ -386,6 +420,402 @@ export function hasInFlightAgent(taskId: string): boolean {
   return inFlightAgents.has(taskId);
 }
 
+export function interruptTaskAgentTurn(
+  taskId: string,
+  reason: 'pause' | 'stop',
+): void {
+  if (campaignTaskAttemptContext(taskId)) {
+    const activeRun = activeTaskRuns.get(taskId);
+    if (activeRun) activeRun.interruptedReason = reason;
+  }
+  const sessions = new Set<AgentSession>();
+  const live = liveSessions.get(taskId);
+  if (live) sessions.add(live.agentSession);
+  const inFlight = inFlightAgents.get(taskId);
+  if (inFlight) {
+    inFlight.pendingChatMessages.length = 0;
+    sessions.add(inFlight.agentSession);
+  }
+  for (const session of sessions) {
+    void abortAgentTurn(session);
+  }
+  const registeredSessions = interruptRegisteredTaskSessions(taskId);
+  logger.info(
+    { taskId, reason, sessions: sessions.size + registeredSessions },
+    'Campaign task interruption requested',
+  );
+}
+
+interface CampaignTaskAttemptContext {
+  campaignId: string;
+  cycleId: string;
+}
+
+const campaignStageByTask = new Map<string, AutonomousCampaignAttemptStage>();
+
+function campaignTaskAttemptContext(
+  taskId: string,
+): CampaignTaskAttemptContext | undefined {
+  const cycle = campaignStore.findActiveCycleByTaskId(taskId);
+  if (!cycle) return undefined;
+  const campaign = campaignStore.getCampaign(cycle.campaignId);
+  if (!campaign || campaign.currentCycleId !== cycle.id) return undefined;
+  return {
+    campaignId: campaign.id,
+    cycleId: cycle.id,
+  };
+}
+
+function campaignAttemptManager() {
+  return createAutonomousCampaignAttemptManager({
+    owner: getPodId(),
+    now: Date.now,
+    interruptTask: interruptTaskAgentTurn,
+  });
+}
+
+export class CampaignTaskStageBlockedError extends Error {
+  constructor(
+    readonly taskId: string,
+    readonly stage: AutonomousCampaignAttemptStage,
+    readonly decision: AutonomousCampaignAttemptActionResult,
+  ) {
+    super(
+      `Autonomous campaign task ${taskId} cannot enter ${stage}: ${decision.reason ?? 'blocked'}`,
+    );
+    this.name = 'CampaignTaskStageBlockedError';
+  }
+}
+
+function campaignTaskRunInterruption(
+    taskId: string,
+    stage: AutonomousCampaignAttemptStage,
+  ): CampaignTaskStageBlockedError | undefined {
+    const reason = activeTaskRuns.get(taskId)?.interruptedReason;
+    const context = reason ? campaignTaskAttemptContext(taskId) : undefined;
+    if (!reason || !context) return undefined;
+    const attempt = campaignStore.getLatestAttempt(context.cycleId);
+    const cycle = campaignStore.getCycle(context.cycleId);
+    if (!attempt || !cycle) return undefined;
+    return new CampaignTaskStageBlockedError(taskId, stage, {
+      allowed: false,
+      reason: reason === 'stop' ? 'stopped' : 'paused',
+      attempt,
+      cycle,
+    });
+}
+
+function isCampaignStageBlockedError(
+  error: unknown,
+): error is CampaignTaskStageBlockedError {
+  return error instanceof CampaignTaskStageBlockedError;
+}
+
+export function guardCampaignTaskStage(
+  taskId: string,
+  stage: AutonomousCampaignAttemptStage,
+): void {
+  campaignStageByTask.set(taskId, stage);
+  const interruption = campaignTaskRunInterruption(taskId, stage);
+  if (interruption) throw interruption;
+  const context = campaignTaskAttemptContext(taskId);
+  if (!context) return;
+
+  const decision = campaignAttemptManager().evaluateBeforeAction(
+    context.campaignId,
+    context.cycleId,
+    stage,
+  );
+  if (!decision.allowed) {
+    throw new CampaignTaskStageBlockedError(taskId, stage, decision);
+  }
+}
+
+function campaignConfiguredModel(
+  taskId: string,
+  role: 'coding' | 'reviewer',
+): string | undefined {
+  const context = campaignTaskAttemptContext(taskId);
+  if (!context) return undefined;
+  return campaignStore.getCampaign(context.campaignId)?.modelConfig[role]?.model;
+}
+
+function guardCampaignModelAction(
+  taskId: string,
+  model = campaignConfiguredModel(taskId, 'coding'),
+): void {
+  guardCampaignTaskStage(taskId, 'agent-turn');
+  const context = campaignTaskAttemptContext(taskId);
+  if (
+    !context ||
+    !model ||
+    getEffectivePrice(model, new Date().toISOString(), 0)
+  ) {
+    return;
+  }
+  waitForCampaignTaskExternal(
+    taskId,
+    'agent-turn',
+    `model-pricing-missing:${model}`,
+  );
+  const decision = campaignAttemptManager().evaluateBeforeAction(
+    context.campaignId,
+    context.cycleId,
+    'agent-turn',
+  );
+  throw new CampaignTaskStageBlockedError(taskId, 'agent-turn', decision);
+}
+
+function recordCampaignTaskUsage(
+  taskId: string,
+  usageEventId: string,
+  turns: number,
+  estimatedCostUsd: number,
+): void {
+  const context = campaignTaskAttemptContext(taskId);
+  if (!context) return;
+  campaignAttemptManager().recordUsage(context.campaignId, context.cycleId, {
+    usageEventId,
+    turns,
+    estimatedCostUsd,
+  });
+}
+
+function recordCampaignModelTurn(taskId: string): void {
+  try {
+    recordCampaignTaskUsage(taskId, `model-turn:${randomUUID()}`, 1, 0);
+  } catch (error) {
+    if (
+      error instanceof AutonomousCampaignAttemptManagerError &&
+      error.code === 'invalid-campaign-attempt-transition'
+    ) {
+      guardCampaignTaskStage(taskId, 'agent-turn');
+    }
+    throw error;
+  }
+}
+
+function waitForCampaignTaskExternal(
+  taskId: string,
+  stage: AutonomousCampaignAttemptStage,
+  message: string,
+): boolean {
+  campaignStageByTask.set(taskId, stage);
+  const context = campaignTaskAttemptContext(taskId);
+  if (!context) return false;
+  const cycle = campaignStore.getCycle(context.cycleId);
+  const attempt = campaignStore.getLatestAttempt(context.cycleId);
+  if (cycle?.status !== 'delivering' || attempt?.status !== 'running') {
+    return false;
+  }
+  campaignAttemptManager().waitForExternal(
+    context.campaignId,
+    context.cycleId,
+    { stage, message },
+  );
+  return true;
+}
+
+function campaignKubernetesWaitError(
+  taskId: string,
+  error: unknown,
+): CampaignTaskStageBlockedError | undefined {
+  if (!isKubernetesInfrastructureUnavailable(error)) return undefined;
+  const message = error instanceof Error ? error.message : String(error);
+  const retryAt =
+    Date.now() +
+    (Number.isFinite(CAMPAIGN_KUBERNETES_WAIT_MS)
+      ? Math.max(1_000, CAMPAIGN_KUBERNETES_WAIT_MS)
+      : 60_000);
+  if (
+    !waitForCampaignTaskExternal(
+      taskId,
+      'deployment',
+      `kubernetes-cluster-unavailable-until=${retryAt}:${message}`,
+    )
+  ) {
+    return undefined;
+  }
+  const context = campaignTaskAttemptContext(taskId);
+  if (!context) return undefined;
+  const decision = campaignAttemptManager().evaluateBeforeAction(
+    context.campaignId,
+    context.cycleId,
+    'deployment',
+  );
+  return new CampaignTaskStageBlockedError(taskId, 'deployment', decision);
+}
+
+function resumeCampaignTaskExternalWait(
+  taskId: string,
+  stage: AutonomousCampaignAttemptStage,
+): void {
+  const context = campaignTaskAttemptContext(taskId);
+  if (!context) return;
+  const cycle = campaignStore.getCycle(context.cycleId);
+  if (cycle?.status === 'waiting_for_external') {
+    campaignAttemptManager().resumeExternalWait(
+      context.campaignId,
+      context.cycleId,
+    );
+    return;
+  }
+  guardCampaignTaskStage(taskId, stage);
+}
+
+function recordPendingCampaignUsage(
+  taskId: string,
+  usageEventId: string,
+  event: {
+    model: string;
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+  },
+  occurredAt: Date,
+): boolean {
+  const context = campaignTaskAttemptContext(taskId);
+  if (!context) return false;
+  const attempt = campaignStore.getLatestAttempt(context.cycleId);
+  if (!attempt) return false;
+  campaignStore.recordPendingAttemptUsage({
+    attemptId: attempt.id,
+    usageEventId,
+    model: event.model,
+    inputTokens: event.inputTokens ?? 0,
+    outputTokens: event.outputTokens ?? 0,
+    cacheReadTokens: event.cacheReadTokens ?? 0,
+    cacheWriteTokens: event.cacheWriteTokens ?? 0,
+    occurredAt: occurredAt.toISOString(),
+  });
+  waitForCampaignTaskExternal(
+    taskId,
+    'agent-turn',
+    `model-pricing-missing:${event.model}`,
+  );
+  return true;
+}
+
+function campaignGitFixerHooks(
+  io: SocketServer,
+  taskId: string,
+  agentId: () => string,
+) {
+  return {
+    beforeFixerTurn: () => guardCampaignModelAction(taskId),
+    onFixerModelTurn: () => recordCampaignModelTurn(taskId),
+    onUsage: (event: Parameters<typeof recordUsageEvent>[3]) =>
+      recordUsageEvent(io, taskId, agentId(), event),
+  };
+}
+
+function estimatedUsageCostUsd(
+  event: {
+    model: string;
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+  },
+  occurredAt: Date,
+): number | undefined {
+  const inputTokens = event.inputTokens ?? 0;
+  const price = getEffectivePrice(
+    event.model,
+    occurredAt.toISOString(),
+    inputTokens,
+  );
+  if (!price) {
+    logger.warn(
+      { model: event.model, occurredAt: occurredAt.toISOString() },
+      'No effective model price found for campaign usage',
+    );
+    return undefined;
+  }
+  const perMillion = 1_000_000;
+  return (
+    (inputTokens * price.inputPerMtok +
+      (event.outputTokens ?? 0) * price.outputPerMtok +
+      (event.cacheReadTokens ?? 0) * (price.cachedInputPerMtok ?? 0) +
+      (event.cacheWriteTokens ?? 0) * (price.cacheWritePerMtok ?? 0)) /
+    perMillion
+  );
+}
+
+function handleCampaignPipelineFailure(
+  io: SocketServer,
+  taskId: string,
+  error: unknown,
+): boolean {
+  if (isCampaignStageBlockedError(error)) {
+    const reason = error.decision.reason ?? 'blocked';
+    logger.info(
+      { taskId, stage: error.stage, reason },
+      'Autonomous campaign task stopped at a safe boundary',
+    );
+    const message = store.addChatMessage(
+      taskId,
+      'system',
+      reason === 'paused'
+        ? `⏸️ Autonomous campaign paused before ${error.stage}.`
+        : reason === 'stopped'
+          ? `⏹️ Autonomous campaign stopped before ${error.stage}.`
+          : `⏳ Autonomous campaign attempt paused before ${error.stage}: ${reason}.`,
+    );
+    if (message) io.to(`task:${taskId}`).emit('chat:message', message);
+    return true;
+  }
+
+  const context = campaignTaskAttemptContext(taskId);
+  if (!context) return false;
+  const infrastructureWait = campaignKubernetesWaitError(taskId, error);
+  if (infrastructureWait) {
+    return handleCampaignPipelineFailure(io, taskId, infrastructureWait);
+  }
+  const stage = campaignStageByTask.get(taskId) ?? 'agent-turn';
+  const message = error instanceof Error ? error.message : String(error);
+  try {
+    const result = campaignAttemptManager().failAttempt(
+      context.campaignId,
+      context.cycleId,
+      {
+      stage,
+      message,
+      },
+    );
+    const retryAt = result.cycle.nextRetryAt;
+    const chatMessage = store.addChatMessage(
+      taskId,
+      'system',
+      retryAt
+        ? `🔄 Autonomous attempt failed during ${stage}. Retry ${result.attempt.attemptNumber + 1} is scheduled for ${retryAt}.`
+        : `❌ Autonomous attempt failed during ${stage}: ${message}`,
+    );
+    if (chatMessage) io.to(`task:${taskId}`).emit('chat:message', chatMessage);
+    return true;
+  } catch (managerError) {
+    if (
+      managerError instanceof AutonomousCampaignAttemptManagerError &&
+      managerError.code === 'invalid-campaign-attempt-transition'
+    ) {
+      return true;
+    }
+    logger.error(
+      {
+        taskId,
+        stage,
+        err:
+          managerError instanceof Error
+            ? managerError.message
+            : String(managerError),
+      },
+      'Failed to persist autonomous campaign attempt failure',
+    );
+    return false;
+  }
+}
+
 /**
  * Drains queued chat messages by running follow-up turns on the same session.
  * Called after each main agent turn so user interruptions are addressed before
@@ -412,6 +842,7 @@ async function drainPendingChatMessages(
       `User sent a new message while you were working. Stop your previous task ` +
       `and address this instead:\n\n${msg}`;
     try {
+      guardCampaignModelAction(taskId);
       const hb = startHeartbeat(io, taskId, agentId);
       let result;
       try {
@@ -435,9 +866,11 @@ async function drainPendingChatMessages(
       } finally {
         hb.stop();
       }
+      recordCampaignModelTurn(taskId);
       const sysMsg = store.addChatMessage(taskId, 'liliput', result.summary);
       if (sysMsg) io.to(`task:${taskId}`).emit('chat:message', sysMsg);
     } catch (err) {
+      if (isCampaignStageBlockedError(err)) throw err;
       const m = err instanceof Error ? err.message : String(err);
       logPhase(io, taskId, agentId, 'warn', `Follow-up turn failed: ${m}`);
     }
@@ -726,6 +1159,14 @@ export async function autoResumeInterruptedTasks(
     const t = store.getTask(taskId);
     if (!t || !t.repository || !t.branch) {
       skipped++;
+      return;
+    }
+    if (t.campaignCycleId) {
+      skipped++;
+      logger.info(
+        { taskId, campaignCycleId: t.campaignCycleId },
+        'autoResume: campaign task recovery is owned by the campaign coordinator',
+      );
       return;
     }
     if (!canIterate(taskId)) {
@@ -1022,16 +1463,19 @@ async function runPreflightStages(
     model: rewriterSdk.model,
     ...(rewriterSdk.reasoningEffort ? { reasoningEffort: rewriterSdk.reasoningEffort } : {}),
     repository: repo,
+    taskId,
   };
   const architectCfg: StageConfig = {
     model: architectSdk.model,
     ...(architectSdk.reasoningEffort ? { reasoningEffort: architectSdk.reasoningEffort } : {}),
     repository: repo,
+    taskId,
   };
   const criticCfg: StageConfig = {
     model: criticSdk.model,
     ...(criticSdk.reasoningEffort ? { reasoningEffort: criticSdk.reasoningEffort } : {}),
     repository: repo,
+    taskId,
   };
 
   // For follow-up iterations the "request" is the chat message, not the
@@ -1046,7 +1490,13 @@ async function runPreflightStages(
   const rewriter = spawnPhase(io, taskId, 'rewriter', 'Rewriter Liliputian');
   setPipelineStage(io, taskId, 'rewrite', 'active');
   try {
-    const rw = await rewriteRequest(requestTitle, requestText, rewriterCfg);
+    guardCampaignModelAction(taskId, rewriterSdk.model);
+    const rw = await rewriteRequest(requestTitle, requestText, {
+      ...rewriterCfg,
+      onUsage: (event) =>
+        recordUsageEvent(io, taskId, rewriter ?? 'pipeline-rewriter', event),
+    });
+    if (rw.ran) recordCampaignModelTurn(taskId);
     if (rw.ran && rw.rewritten.trim() && rw.rewritten.trim() !== requestText.trim()) {
       effectiveRequest = rw.rewritten;
       rewrittenPrompt = rw.rewritten;
@@ -1055,6 +1505,7 @@ async function runPreflightStages(
       logPhase(io, taskId, rewriter, 'info', 'Request is already clear — no rewrite needed.');
     }
   } catch (err) {
+    if (isCampaignStageBlockedError(err)) throw err;
     if (rewriter)
       logPhase(io, taskId, rewriter, 'warn', `Rewrite skipped: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -1066,9 +1517,21 @@ async function runPreflightStages(
   setPipelineStage(io, taskId, 'plan', 'active');
   let planMd: string | null = null;
   try {
-    const pr = await generatePlan(task.title, effectiveRequest, architectCfg, task.spec);
+    guardCampaignModelAction(taskId, architectSdk.model);
+    const pr = await generatePlan(
+      task.title,
+      effectiveRequest,
+      {
+        ...architectCfg,
+        onUsage: (event) =>
+          recordUsageEvent(io, taskId, architect ?? 'pipeline-architect', event),
+      },
+      task.spec,
+    );
+    if (pr.ran) recordCampaignModelTurn(taskId);
     planMd = pr.plan;
   } catch (err) {
+    if (isCampaignStageBlockedError(err)) throw err;
     if (architect)
       logPhase(io, taskId, architect, 'warn', `Plan skipped: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -1085,7 +1548,13 @@ async function runPreflightStages(
     const critic = spawnPhase(io, taskId, 'critic', 'Critic Liliputian');
     setPipelineStage(io, taskId, 'critique', 'active');
     try {
-      const cr = await critiquePlan(task.title, effectiveRequest, planMd, criticCfg);
+      guardCampaignModelAction(taskId, criticSdk.model);
+      const cr = await critiquePlan(task.title, effectiveRequest, planMd, {
+        ...criticCfg,
+        onUsage: (event) =>
+          recordUsageEvent(io, taskId, critic ?? 'pipeline-critic', event),
+      });
+      if (cr.ran) recordCampaignModelTurn(taskId);
       critiqueFeedback = cr.feedback;
       if (critic) {
         if (critiqueFeedback) logPhase(io, taskId, critic, 'info', `Critique of the plan:\n${critiqueFeedback}`);
@@ -1099,6 +1568,7 @@ async function runPreflightStages(
           );
       }
     } catch (err) {
+      if (isCampaignStageBlockedError(err)) throw err;
       if (critic)
         logPhase(io, taskId, critic, 'warn', `Critique skipped: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -1221,25 +1691,54 @@ function recordUsageEvent(
     durationMs?: number;
   },
 ): void {
+  const usageEventId = randomUUID();
+  const occurredAt = new Date();
   // Resolve owning turn from the agent (preferred) or the task's current turn
   // (fallback). Either way, it must exist for legacy data.
   const agent = store.getAgent(taskId, agentId);
   const turnId =
     agent?.turnId ?? turnStore.getCurrentTurn(taskId)?.id ?? turnStore.getLastTurn(taskId)?.id;
-  if (!turnId) return;
-  const updated = turnStore.recordUsage(turnId, {
-    model: event.model,
-    agentId,
-    ...(event.inputTokens != null ? { inputTokens: event.inputTokens } : {}),
-    ...(event.outputTokens != null ? { outputTokens: event.outputTokens } : {}),
-    ...(event.cacheReadTokens != null ? { cacheReadTokens: event.cacheReadTokens } : {}),
-    ...(event.cacheWriteTokens != null ? { cacheWriteTokens: event.cacheWriteTokens } : {}),
-    ...(event.nanoAiu != null ? { nanoAiu: event.nanoAiu } : {}),
-    ...(event.durationMs != null ? { durationMs: event.durationMs } : {}),
-    calls: 1,
-  });
-  if (updated) {
-    io.to(`task:${taskId}`).emit('turn:updated', updated);
+  if (turnId) {
+    const updated = turnStore.recordUsage(turnId, {
+      callId: usageEventId,
+      model: event.model,
+      agentId,
+      ...(event.inputTokens != null ? { inputTokens: event.inputTokens } : {}),
+      ...(event.outputTokens != null ? { outputTokens: event.outputTokens } : {}),
+      ...(event.cacheReadTokens != null ? { cacheReadTokens: event.cacheReadTokens } : {}),
+      ...(event.cacheWriteTokens != null ? { cacheWriteTokens: event.cacheWriteTokens } : {}),
+      ...(event.nanoAiu != null ? { nanoAiu: event.nanoAiu } : {}),
+      ...(event.durationMs != null ? { durationMs: event.durationMs } : {}),
+      calls: 1,
+    });
+    if (updated) {
+      io.to(`task:${taskId}`).emit('turn:updated', updated);
+    }
+  }
+  try {
+    const estimatedCostUsd = estimatedUsageCostUsd(event, occurredAt);
+    if (estimatedCostUsd === undefined) {
+      if (recordPendingCampaignUsage(taskId, usageEventId, event, occurredAt)) {
+        interruptTaskAgentTurn(taskId, 'pause');
+      }
+      return;
+    }
+    recordCampaignTaskUsage(
+      taskId,
+      usageEventId,
+      0,
+      estimatedCostUsd,
+    );
+  } catch (error) {
+    logger.error(
+      {
+        taskId,
+        agentId,
+        model: event.model,
+        err: error instanceof Error ? error.message : String(error),
+      },
+      'Failed to persist autonomous campaign usage',
+    );
   }
 }
 
@@ -1343,6 +1842,7 @@ async function buildWithFixer(ctx: BuildContext): Promise<BuildOutcome> {
   let lastErr: unknown;
   let transientRetries = 0;
   for (let attempt = 1; attempt <= MAX_BUILD_FIX_ATTEMPTS + 1; attempt++) {
+    guardCampaignTaskStage(ctx.taskId, 'image-build');
     const tag = sha.substring(0, 12);
     if (ACR_NAME) {
       store.updateTask(ctx.taskId, {
@@ -1404,7 +1904,17 @@ async function buildWithFixer(ctx: BuildContext): Promise<BuildOutcome> {
           'info',
           `Transient build error detected (Docker Hub rate limit / network); retrying in ${Math.round(TRANSIENT_BUILD_BACKOFF_MS / 1000)}s without invoking the fixer (transient retry ${transientRetries}/${TRANSIENT_BUILD_RETRIES})`,
         );
+        const externalRetryAt =
+          Date.now() + TRANSIENT_BUILD_BACKOFF_MS + 5_000;
+        const waitingForExternal = waitForCampaignTaskExternal(
+          ctx.taskId,
+          'image-build',
+          `transient-image-build-until=${externalRetryAt}:${errMsg.split('\n')[0] ?? errMsg}`,
+        );
         await new Promise<void>((resolve) => setTimeout(resolve, TRANSIENT_BUILD_BACKOFF_MS));
+        if (waitingForExternal) {
+          resumeCampaignTaskExternalWait(ctx.taskId, 'image-build');
+        }
         attempt--; // don't consume a fixer attempt for a transient retry
         continue;
       }
@@ -1416,6 +1926,7 @@ async function buildWithFixer(ctx: BuildContext): Promise<BuildOutcome> {
       if (!fixer) break;
       logPhase(ctx.io, ctx.taskId, fixer, 'info', 'Investigating build failure and proposing fixes…');
       try {
+        guardCampaignModelAction(ctx.taskId);
         await runOpsFixer({
           session: ctx.agentSession,
           phase: 'build',
@@ -1433,7 +1944,9 @@ async function buildWithFixer(ctx: BuildContext): Promise<BuildOutcome> {
           onToolEvent: (event) => recordToolEvent(ctx.io, ctx.taskId, fixer, event),
           onUsage: (event) => recordUsageEvent(ctx.io, ctx.taskId, fixer, event),
         });
+        recordCampaignModelTurn(ctx.taskId);
       } catch (fixerErr) {
+        if (isCampaignStageBlockedError(fixerErr)) throw fixerErr;
         const m = fixerErr instanceof Error ? fixerErr.message : String(fixerErr);
         failPhase(ctx.io, ctx.taskId, fixer, `Fixer turn failed: ${m}`);
         break;
@@ -1449,6 +1962,7 @@ async function buildWithFixer(ctx: BuildContext): Promise<BuildOutcome> {
       logPhase(ctx.io, ctx.taskId, fixer, 'info', `Fixer changed ${changed.length} file(s); committing…`, undefined, changed.join('\n'));
       const newSha = await runGitOpWithFixer<string>({
         agentSession: ctx.agentSession,
+        ...campaignGitFixerHooks(ctx.io, ctx.taskId, () => fixer),
         op: () => git.commitAll(ctx.handle, `fix(agent): build failure recovery (attempt ${attempt})`),
         describe: 'git commit (build-fix)',
         cwd: ctx.handle.cwd,
@@ -1466,6 +1980,7 @@ async function buildWithFixer(ctx: BuildContext): Promise<BuildOutcome> {
       logPhase(ctx.io, ctx.taskId, fixer, 'info', `Commit ${newSha.substring(0, 7)} ready; pushing…`);
       await runGitOpWithFixer<void>({
         agentSession: ctx.agentSession,
+        ...campaignGitFixerHooks(ctx.io, ctx.taskId, () => fixer),
         op: () => git.push(ctx.handle),
         describe: `git push origin ${ctx.handle.branch} (build-fix)`,
         cwd: ctx.handle.cwd,
@@ -1519,6 +2034,7 @@ async function deployWithFixer(ctx: DeployContext): Promise<DeployOutcome> {
   let sha = ctx.initialSha;
   let lastErr: unknown;
   for (let attempt = 1; attempt <= MAX_DEPLOY_FIX_ATTEMPTS + 1; attempt++) {
+    guardCampaignTaskStage(ctx.taskId, 'deployment');
     try {
       logPhase(
         ctx.io,
@@ -1540,6 +2056,8 @@ async function deployWithFixer(ctx: DeployContext): Promise<DeployOutcome> {
       if (!ready) throw new Error('Deployment did not become ready within 3 minutes.');
       return { imageRef, sha };
     } catch (err) {
+      const infrastructureWait = campaignKubernetesWaitError(ctx.taskId, err);
+      if (infrastructureWait) throw infrastructureWait;
       lastErr = err;
       const errMsg = err instanceof Error ? err.message : String(err);
       logPhase(
@@ -1557,6 +2075,7 @@ async function deployWithFixer(ctx: DeployContext): Promise<DeployOutcome> {
       if (!fixer) break;
       logPhase(ctx.io, ctx.taskId, fixer, 'info', 'Investigating deploy failure and proposing fixes…');
       try {
+        guardCampaignModelAction(ctx.taskId);
         await runOpsFixer({
           session: ctx.agentSession,
           phase: 'deploy',
@@ -1575,7 +2094,9 @@ async function deployWithFixer(ctx: DeployContext): Promise<DeployOutcome> {
           onToolEvent: (event) => recordToolEvent(ctx.io, ctx.taskId, fixer, event),
           onUsage: (event) => recordUsageEvent(ctx.io, ctx.taskId, fixer, event),
         });
+        recordCampaignModelTurn(ctx.taskId);
       } catch (fixerErr) {
+        if (isCampaignStageBlockedError(fixerErr)) throw fixerErr;
         const m = fixerErr instanceof Error ? fixerErr.message : String(fixerErr);
         failPhase(ctx.io, ctx.taskId, fixer, `Fixer turn failed: ${m}`);
         break;
@@ -1590,6 +2111,7 @@ async function deployWithFixer(ctx: DeployContext): Promise<DeployOutcome> {
       logPhase(ctx.io, ctx.taskId, fixer, 'info', `Fixer changed ${changed.length} file(s); committing + rebuilding…`, undefined, changed.join('\n'));
       const newSha = await runGitOpWithFixer<string>({
         agentSession: ctx.agentSession,
+        ...campaignGitFixerHooks(ctx.io, ctx.taskId, () => fixer),
         op: () => git.commitAll(ctx.handle, `fix(agent): deploy failure recovery (attempt ${attempt})`),
         describe: 'git commit (deploy-fix)',
         cwd: ctx.handle.cwd,
@@ -1606,6 +2128,7 @@ async function deployWithFixer(ctx: DeployContext): Promise<DeployOutcome> {
       });
       await runGitOpWithFixer<void>({
         agentSession: ctx.agentSession,
+        ...campaignGitFixerHooks(ctx.io, ctx.taskId, () => fixer),
         op: () => git.push(ctx.handle),
         describe: `git push origin ${ctx.handle.branch} (deploy-fix)`,
         cwd: ctx.handle.cwd,
@@ -1911,6 +2434,7 @@ async function validateAndHealLoopInner(ctx: ValidateContext): Promise<ValidateO
   }
 
   for (let attempt = 1; attempt <= MAX_VALIDATE_ATTEMPTS; attempt++) {
+    guardCampaignTaskStage(taskId, 'validate');
     // Chat preempt: the user just typed something while we were healing.
     // The validator is the LAST consumer of pendingChatMessages within this
     // iteration — if we don't handle them here, clearInFlightAgent will wipe
@@ -1971,6 +2495,7 @@ async function validateAndHealLoopInner(ctx: ValidateContext): Promise<ValidateO
             sha = r.sha;
             imageRef = r.imageRef;
           } catch (e) {
+            if (isCampaignStageBlockedError(e)) throw e;
             const m = e instanceof Error ? e.message : String(e);
             logPhase(io, taskId, chatCoder, 'warn', `Chat-drain redeploy failed: ${m}`);
           }
@@ -2045,6 +2570,7 @@ async function validateAndHealLoopInner(ctx: ValidateContext): Promise<ValidateO
           );
         }
       } catch (e) {
+        if (isCampaignStageBlockedError(e)) throw e;
         const m = e instanceof Error ? e.message : String(e);
         logPhase(
           io,
@@ -2136,6 +2662,7 @@ async function validateAndHealLoopInner(ctx: ValidateContext): Promise<ValidateO
     const hb = startHeartbeat(io, taskId, fixer);
     try {
       try {
+        guardCampaignModelAction(taskId);
         await runOpsFixer({
           session: ctx.agentSession,
           phase: 'validate',
@@ -2161,10 +2688,12 @@ async function validateAndHealLoopInner(ctx: ValidateContext): Promise<ValidateO
           },
           onUsage: (event) => recordUsageEvent(io, taskId, fixer, event),
         });
+        recordCampaignModelTurn(taskId);
       } finally {
         hb.stop();
       }
     } catch (fixerErr) {
+      if (isCampaignStageBlockedError(fixerErr)) throw fixerErr;
       const m = fixerErr instanceof Error ? fixerErr.message : String(fixerErr);
       failPhase(io, taskId, fixer, `Validate-fixer turn failed: ${m}`);
       completePhase(io, taskId, tester);
@@ -2252,6 +2781,7 @@ async function commitBuildAndRedeploy(opts: {
 
   const newSha = await runGitOpWithFixer<string>({
     agentSession: ctx.agentSession,
+    ...campaignGitFixerHooks(io, taskId, () => fixerAgentId),
     op: () => git.commitAll(ctx.handle, commitMsg),
     describe: `git commit (${gitOpDescribe})`,
     cwd: ctx.handle.cwd,
@@ -2268,6 +2798,7 @@ async function commitBuildAndRedeploy(opts: {
   });
   await runGitOpWithFixer<void>({
     agentSession: ctx.agentSession,
+    ...campaignGitFixerHooks(io, taskId, () => fixerAgentId),
     op: () => git.push(ctx.handle),
     describe: `git push origin ${ctx.handle.branch} (${gitOpDescribe})`,
     cwd: ctx.handle.cwd,
@@ -2285,6 +2816,7 @@ async function commitBuildAndRedeploy(opts: {
 
   const tag = newSha.substring(0, 12);
   logPhase(io, taskId, fixerAgentId, 'info', `Rebuilding ${ctx.imageName}:${tag}…`);
+  guardCampaignTaskStage(taskId, 'image-build');
   const rebuilt = await acrBuild({
     cwd: ctx.handle.cwd,
     imageName: ctx.imageName,
@@ -2295,6 +2827,7 @@ async function commitBuildAndRedeploy(opts: {
   store.updateTask(taskId, { imageRef });
   logPhase(io, taskId, fixerAgentId, 'info', `Rebuilt: ${imageRef}; rolling out…`);
 
+  guardCampaignTaskStage(taskId, 'deployment');
   await deployApp({
     namespace: ctx.namespace,
     appName: 'app',
@@ -2317,6 +2850,10 @@ async function commitBuildAndRedeploy(opts: {
 }
 
 export function startBuild(io: SocketServer, taskId: string): void {
+  if (!beginTaskRun(taskId)) {
+    logger.info({ taskId }, 'Task pipeline launch skipped because a run is already active');
+    return;
+  }
   void (async () => {
     const MAX_ATTEMPTS = parseInt(process.env['AGENT_MAX_RETRY_ATTEMPTS'] ?? '5', 10);
     const BACKOFF_BASE_MS = 5_000;
@@ -2329,11 +2866,17 @@ export function startBuild(io: SocketServer, taskId: string): void {
           succeeded = true;
           break;
         } catch (err) {
-          lastErr = err;
-          if (!isRecoverableSdkError(err) || attempt === MAX_ATTEMPTS) {
+          lastErr = campaignTaskRunInterruption(
+            taskId,
+            campaignStageByTask.get(taskId) ?? 'agent-turn',
+          ) ?? err;
+          if (isCampaignStageBlockedError(lastErr)) {
             break;
           }
-          const m = err instanceof Error ? err.message : String(err);
+          if (!isRecoverableSdkError(lastErr) || attempt === MAX_ATTEMPTS) {
+            break;
+          }
+          const m = lastErr instanceof Error ? lastErr.message : String(lastErr);
           const backoffMs = BACKOFF_BASE_MS * attempt;
           logger.warn(
             { taskId, attempt, maxAttempts: MAX_ATTEMPTS, backoffMs, err: m },
@@ -2352,17 +2895,22 @@ export function startBuild(io: SocketServer, taskId: string): void {
       }
       if (!succeeded) {
         const message = lastErr instanceof Error ? lastErr.message : String(lastErr);
-        logger.error({ taskId, err: message }, 'Agent pipeline failed after all retry attempts');
-        setTaskStatus(io, taskId, 'failed', { errorMessage: message });
-        const sysMsg = store.addChatMessage(
-          taskId,
-          'system',
-          `❌ Agent pipeline failed after ${MAX_ATTEMPTS} attempts: ${message}`,
-        );
-        if (sysMsg) io.to(`task:${taskId}`).emit('chat:message', sysMsg);
+        const campaignHandled = handleCampaignPipelineFailure(io, taskId, lastErr);
+        if (!campaignHandled) {
+          logger.error({ taskId, err: message }, 'Agent pipeline failed after all retry attempts');
+          setTaskStatus(io, taskId, 'failed', { errorMessage: message });
+          const sysMsg = store.addChatMessage(
+            taskId,
+            'system',
+            `❌ Agent pipeline failed after ${MAX_ATTEMPTS} attempts: ${message}`,
+          );
+          if (sysMsg) io.to(`task:${taskId}`).emit('chat:message', sysMsg);
+        }
       }
     } finally {
       clearInFlightAgent(taskId);
+      campaignStageByTask.delete(taskId);
+      endTaskRun(taskId);
     }
   })();
 }
@@ -2383,6 +2931,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   // multi-agent flow before the heavy clone/coder work begins. The composed
   // planning context is injected into the coder turn below.
   initPipeline(io, taskId);
+  guardCampaignTaskStage(taskId, 'agent-turn');
   const { planningContext } = await runPreflightStages(io, taskId, task, repo);
 
   // Coder (implement stage)
@@ -2535,6 +3084,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   });
   let result;
   try {
+    guardCampaignModelAction(taskId, coderSdk.model);
     result = await runAgentTurn(agentSession, {
       taskTitle: task.title,
       taskDescription: task.description,
@@ -2554,6 +3104,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
       },
       onUsage: (event) => recordUsageEvent(io, taskId, coder, event),
     });
+    recordCampaignModelTurn(taskId);
   } finally {
     hb.stop();
     // Flush any pending checkpoint synchronously so we never lose work
@@ -2607,6 +3158,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   setPipelineStage(io, taskId, 'implement', 'done');
 
   // Builder
+  guardCampaignTaskStage(taskId, 'build');
   setPipelineStage(io, taskId, 'build', 'active');
   const builder = spawnPhase(io, taskId, 'builder', 'Builder Liliputian');
   if (!builder) throw new Error('Failed to register builder agent');
@@ -2649,6 +3201,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   let commitFixerAgent: string | undefined;
   const sha = await runGitOpWithFixer<string>({
     agentSession,
+    ...campaignGitFixerHooks(io, taskId, () => commitFixerAgent ?? builder),
     op: () =>
       git.commitAll(
         handle,
@@ -2684,6 +3237,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   let pushFixerAgent: string | undefined;
   await runGitOpWithFixer<void>({
     agentSession,
+    ...campaignGitFixerHooks(io, taskId, () => pushFixerAgent ?? builder),
     op: () => (didSquash ? git.pushForceWithLease(handle) : git.push(handle)),
     describe: `git push${didSquash ? ' --force-with-lease' : ''} --set-upstream origin ${branch}`,
     cwd: handle.cwd,
@@ -2739,6 +3293,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   setPipelineStage(io, taskId, 'build', 'done');
 
   // Deployer
+  guardCampaignTaskStage(taskId, 'deployment');
   setPipelineStage(io, taskId, 'deploy', 'active');
   setTaskStatus(io, taskId, 'deploying');
   const deployer = spawnPhase(io, taskId, 'deployer', 'Deployer Liliputian');
@@ -2948,18 +3503,29 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   // → validate) check whether anything important was missed. Blocks for up to
   // the reviewer timeout (typically a few seconds). If the reviewer flags
   // something the queued feedback will be picked up by the next coder turn.
+  guardCampaignTaskStage(taskId, 'review');
   setPipelineStage(io, taskId, 'review', 'active');
   try {
-    await triggerPipelineReview(io, taskId, {
-      workspaceRoot: handle.cwd,
-      sha: validateOutcome.sha,
-      kind: 'coder-initial',
-      coderSummary: result.summary,
-      devUrl,
-      validationHealthy: validateOutcome.healthy,
-      validateAttemptsUsed: validateOutcome.attemptsUsed,
-    });
+    const review = await triggerPipelineReview(
+      io,
+      taskId,
+      {
+        workspaceRoot: handle.cwd,
+        sha: validateOutcome.sha,
+        kind: 'coder-initial',
+        coderSummary: result.summary,
+        devUrl,
+        validationHealthy: validateOutcome.healthy,
+        validateAttemptsUsed: validateOutcome.attemptsUsed,
+      },
+      {
+        onUsage: (event) =>
+          recordUsageEvent(io, taskId, reviewer ?? 'pipeline-reviewer', event),
+      },
+    );
+    if (review.ran) recordCampaignModelTurn(taskId);
   } catch (err) {
+    if (isCampaignStageBlockedError(err)) throw err;
     logger.warn({ taskId, err: err instanceof Error ? err.message : String(err) }, 'Pipeline reviewer threw (non-fatal)');
   }
 
@@ -3145,27 +3711,7 @@ export async function cancelTask(io: SocketServer, taskId: string): Promise<Task
 
   // Abort the SDK turn (returns control to the engine immediately) and pop
   // any pending chat messages so they don't replay on the next turn.
-  try {
-    const live = liveSessions.get(taskId);
-    if (live) abortAgentTurn(live.agentSession);
-  } catch (err) {
-    logger.warn(
-      { taskId, err: err instanceof Error ? err.message : String(err) },
-      'cancelTask: abort live session failed (continuing)',
-    );
-  }
-  const inFlight = inFlightAgents.get(taskId);
-  if (inFlight) {
-    inFlight.pendingChatMessages.length = 0;
-    try {
-      void abortAgentTurn(inFlight.agentSession);
-    } catch (err) {
-      logger.warn(
-        { taskId, err: err instanceof Error ? err.message : String(err) },
-        'cancelTask: abort in-flight agent failed (continuing)',
-      );
-    }
-  }
+  interruptTaskAgentTurn(taskId, 'stop');
 
   setTaskStatus(io, taskId, 'failed', {
     errorMessage: 'Cancelled by user — chat to continue.',
@@ -3314,7 +3860,12 @@ export async function purgeOrphanWorkspaces(): Promise<{ removed: number; kept: 
  * a rolling redeploy of the dev preview.
  */
 export function iterateTask(io: SocketServer, taskId: string, message: string): void {
+  if (!beginTaskRun(taskId)) {
+    logger.info({ taskId }, 'Task iteration launch skipped because a run is already active');
+    return;
+  }
   void (async () => {
+    try {
     // Auto-retry on recoverable SDK faults (dead subprocess OR idle-watchdog
     // abort). The user may not be present — Liliput agents are expected to
     // run unattended for hours/days, so we keep trying with backoff rather
@@ -3333,11 +3884,17 @@ export function iterateTask(io: SocketServer, taskId: string, message: string): 
         succeeded = true;
         break;
       } catch (err) {
-        lastErr = err;
-        if (!isRecoverableSdkError(err) || attempt === MAX_ATTEMPTS) {
+        lastErr = campaignTaskRunInterruption(
+          taskId,
+          campaignStageByTask.get(taskId) ?? 'agent-turn',
+        ) ?? err;
+        if (isCampaignStageBlockedError(lastErr)) {
           break;
         }
-        const m = err instanceof Error ? err.message : String(err);
+        if (!isRecoverableSdkError(lastErr) || attempt === MAX_ATTEMPTS) {
+          break;
+        }
+        const m = lastErr instanceof Error ? lastErr.message : String(lastErr);
         const backoffMs = BACKOFF_BASE_MS * attempt;
         logger.warn(
           { taskId, attempt, maxAttempts: MAX_ATTEMPTS, backoffMs, err: m },
@@ -3356,17 +3913,63 @@ export function iterateTask(io: SocketServer, taskId: string, message: string): 
     }
     if (!succeeded) {
       const m = lastErr instanceof Error ? lastErr.message : String(lastErr);
-      logger.error({ taskId, err: m }, 'Iteration failed after all retry attempts');
-      setTaskStatus(io, taskId, 'failed', { errorMessage: m });
-      const sysMsg = store.addChatMessage(
-        taskId,
-        'system',
-        `❌ Iteration failed after ${MAX_ATTEMPTS} attempts: ${m}`,
-      );
-      if (sysMsg) io.to(`task:${taskId}`).emit('chat:message', sysMsg);
+      const campaignHandled = handleCampaignPipelineFailure(io, taskId, lastErr);
+      if (!campaignHandled) {
+        logger.error({ taskId, err: m }, 'Iteration failed after all retry attempts');
+        setTaskStatus(io, taskId, 'failed', { errorMessage: m });
+        const sysMsg = store.addChatMessage(
+          taskId,
+          'system',
+          `❌ Iteration failed after ${MAX_ATTEMPTS} attempts: ${m}`,
+        );
+        if (sysMsg) io.to(`task:${taskId}`).emit('chat:message', sysMsg);
+      }
     }
-    clearInFlightAgent(taskId);
+    } finally {
+      clearInFlightAgent(taskId);
+      campaignStageByTask.delete(taskId);
+      endTaskRun(taskId);
+    }
   })();
+}
+
+export function resumeCampaignTask(
+  io: SocketServer,
+  taskId: string,
+  options: { queueIfActive?: boolean } = {},
+): void {
+  if (activeTaskRuns.has(taskId)) {
+    if (options.queueIfActive) pendingCampaignResumes.set(taskId, io);
+    return;
+  }
+  const context = campaignTaskAttemptContext(taskId);
+  if (context) {
+    const campaign = campaignStore.getCampaign(context.campaignId);
+    const cycle = campaignStore.getCycle(context.cycleId);
+    const attempt = campaignStore.getLatestAttempt(context.cycleId);
+    if (
+      campaign?.status !== 'running' ||
+      cycle?.status !== 'delivering' ||
+      attempt?.status !== 'running'
+    ) {
+      return;
+    }
+  }
+  const task = store.getTask(taskId);
+  if (!task) {
+    logger.warn({ taskId }, 'Cannot resume autonomous campaign task: task not found');
+    return;
+  }
+  if (task.branch) {
+    iterateTask(
+      io,
+      taskId,
+      'Resume the interrupted autonomous campaign delivery from the persisted branch and finish the approved feature.',
+    );
+    return;
+  }
+  setTaskStatus(io, taskId, 'building', { errorMessage: undefined });
+  startBuild(io, taskId);
 }
 
 /**
@@ -3526,6 +4129,7 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   // feed the distilled planning context into the coder turn. Pure rebuild
   // commands returned above, so they correctly skip these LLM stages.
   initPipeline(io, taskId);
+  guardCampaignTaskStage(taskId, 'agent-turn');
   const { planningContext } = await runPreflightStages(io, taskId, task, live.repo, {
     requestTitle: task.title,
     requestText: message,
@@ -3546,6 +4150,7 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   const hb = startHeartbeat(io, taskId, coder);
   let result;
   try {
+    guardCampaignModelAction(taskId, coderSdk.model);
     result = await runAgentTurn(live.agentSession, {
       taskTitle: task.title,
       taskDescription: task.description,
@@ -3566,6 +4171,7 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
       },
       onUsage: (event) => recordUsageEvent(io, taskId, coder, event),
     });
+    recordCampaignModelTurn(taskId);
   } finally {
     hb.stop();
   }
@@ -3596,6 +4202,11 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
     logPhase(io, taskId, coder, 'info', 'No file changes this turn — staying on previous commit.');
     completePhase(io, taskId, coder);
     setPipelineStage(io, taskId, 'implement', 'done');
+    guardCampaignModelAction(
+      taskId,
+      campaignConfiguredModel(taskId, 'reviewer'),
+    );
+    guardCampaignTaskStage(taskId, 'review');
     setPipelineStage(io, taskId, 'review', 'skipped');
     setTaskStatus(io, taskId, 'review');
     const sysMsg = store.addChatMessage(
@@ -3653,6 +4264,7 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   setPipelineStage(io, taskId, 'implement', 'done');
 
   // Commit + push delta.
+  guardCampaignTaskStage(taskId, 'build');
   setPipelineStage(io, taskId, 'build', 'active');
   const builder = spawnPhase(io, taskId, 'builder', 'Builder Liliputian');
   if (!builder) throw new Error('Failed to register builder agent');
@@ -3666,6 +4278,7 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   let iterCommitFixerAgent: string | undefined;
   const sha = await runGitOpWithFixer<string>({
     agentSession: live.agentSession,
+    ...campaignGitFixerHooks(io, taskId, () => iterCommitFixerAgent ?? builder),
     op: () =>
       git.commitAll(
         live.repoHandle,
@@ -3701,6 +4314,7 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   let iterPushFixerAgent: string | undefined;
   await runGitOpWithFixer<void>({
     agentSession: live.agentSession,
+    ...campaignGitFixerHooks(io, taskId, () => iterPushFixerAgent ?? builder),
     op: () => git.push(live.repoHandle),
     describe: `git push origin ${live.branch}`,
     cwd: live.repoHandle.cwd,
@@ -3741,6 +4355,16 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
       ...(task.pullRequestNumber !== undefined ? { prNumber: task.pullRequestNumber } : {}),
       onLog: (level, msg, cmd, out) =>
         logPhase(io, taskId, conflictAgent ?? builder, level, msg, cmd, out),
+      beforeResolverTurn: () => guardCampaignModelAction(taskId),
+      onResolverModelTurn: () => recordCampaignModelTurn(taskId),
+      onUsage: (event) =>
+        recordUsageEvent(
+          io,
+          taskId,
+          conflictAgent ?? 'conflict-resolver',
+          event,
+        ),
+      shouldRethrow: isCampaignStageBlockedError,
       onResolverStart: () => {
         conflictAgent = spawnPhase(io, taskId, 'fixer', 'Conflict Resolver Liliputian');
       },
@@ -3789,6 +4413,7 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
 
   chatStatus(io, taskId, `🚀 Image \`${buildOutcome.imageRef.split('/').pop()}\` built. Rolling preview deployment…`);
 
+  guardCampaignTaskStage(taskId, 'deployment');
   setPipelineStage(io, taskId, 'deploy', 'active');
   setTaskStatus(io, taskId, 'deploying');
   const deployer = spawnPhase(io, taskId, 'deployer', 'Deployer Liliputian');
@@ -3871,18 +4496,33 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   // Reviewer Agent: post-iteration review. Inspects the latest changes plus
   // the validation outcome, posts feedback to chat only if it spots something
   // important. Queued feedback is picked up by the next coder turn.
+  guardCampaignModelAction(
+    taskId,
+    campaignConfiguredModel(taskId, 'reviewer'),
+  );
+  guardCampaignTaskStage(taskId, 'review');
   setPipelineStage(io, taskId, 'review', 'active');
   try {
-    await triggerPipelineReview(io, taskId, {
-      workspaceRoot: live.repoHandle.cwd,
-      sha: iterValidateOutcome.sha,
-      kind: 'coder-iter',
-      coderSummary: result.summary,
-      devUrl,
-      validationHealthy: iterValidateOutcome.healthy,
-      validateAttemptsUsed: iterValidateOutcome.attemptsUsed,
-    });
+    const review = await triggerPipelineReview(
+      io,
+      taskId,
+      {
+        workspaceRoot: live.repoHandle.cwd,
+        sha: iterValidateOutcome.sha,
+        kind: 'coder-iter',
+        coderSummary: result.summary,
+        devUrl,
+        validationHealthy: iterValidateOutcome.healthy,
+        validateAttemptsUsed: iterValidateOutcome.attemptsUsed,
+      },
+      {
+        onUsage: (event) =>
+          recordUsageEvent(io, taskId, 'pipeline-reviewer', event),
+      },
+    );
+    if (review.ran) recordCampaignModelTurn(taskId);
   } catch (err) {
+    if (isCampaignStageBlockedError(err)) throw err;
     logger.warn({ taskId, err: err instanceof Error ? err.message : String(err) }, 'Iter reviewer threw (non-fatal)');
   }
 
@@ -3908,6 +4548,7 @@ async function runRebuildOnly(
   const task = store.getTask(taskId);
   if (!task) throw new Error('Task not found');
 
+  guardCampaignTaskStage(taskId, 'build');
   setPipelineStage(io, taskId, 'build', 'active');
   const builder = spawnPhase(io, taskId, 'builder', 'Builder Liliputian');
   if (!builder) throw new Error('Failed to register builder agent');
@@ -3917,6 +4558,7 @@ async function runRebuildOnly(
   let commitFixer: string | undefined;
   const sha = await runGitOpWithFixer<string>({
     agentSession: live.agentSession,
+    ...campaignGitFixerHooks(io, taskId, () => commitFixer ?? builder),
     op: () =>
       git.commitAll(
         live.repoHandle,
@@ -3952,6 +4594,7 @@ async function runRebuildOnly(
   let pushFixer: string | undefined;
   await runGitOpWithFixer<void>({
     agentSession: live.agentSession,
+    ...campaignGitFixerHooks(io, taskId, () => pushFixer ?? builder),
     op: () => git.push(live.repoHandle),
     describe: `git push origin ${live.branch}`,
     cwd: live.repoHandle.cwd,
@@ -4000,6 +4643,7 @@ async function runRebuildOnly(
 
   chatStatus(io, taskId, `🚀 Image \`${buildOutcome.imageRef.split('/').pop()}\` built. Rolling preview deployment…`);
 
+  guardCampaignTaskStage(taskId, 'deployment');
   setPipelineStage(io, taskId, 'deploy', 'active');
   setTaskStatus(io, taskId, 'deploying');
   const deployer = spawnPhase(io, taskId, 'deployer', 'Deployer Liliputian');
@@ -4076,17 +4720,32 @@ async function runRebuildOnly(
   // Reviewer Agent: even pure-rebuild paths get a final review pass — the
   // app might still have issues that a rebuild surfaces (e.g. the previous
   // commit was already broken on `main`).
+  guardCampaignModelAction(
+    taskId,
+    campaignConfiguredModel(taskId, 'reviewer'),
+  );
+  guardCampaignTaskStage(taskId, 'review');
   try {
-    await triggerPipelineReview(io, taskId, {
-      workspaceRoot: live.repoHandle.cwd,
-      sha: rebuildValidateOutcome.sha,
-      kind: 'deploy',
-      coderSummary: 'Pure rebuild (no agent turn).',
-      devUrl,
-      validationHealthy: rebuildValidateOutcome.healthy,
-      validateAttemptsUsed: rebuildValidateOutcome.attemptsUsed,
-    });
+    const review = await triggerPipelineReview(
+      io,
+      taskId,
+      {
+        workspaceRoot: live.repoHandle.cwd,
+        sha: rebuildValidateOutcome.sha,
+        kind: 'deploy',
+        coderSummary: 'Pure rebuild (no agent turn).',
+        devUrl,
+        validationHealthy: rebuildValidateOutcome.healthy,
+        validateAttemptsUsed: rebuildValidateOutcome.attemptsUsed,
+      },
+      {
+        onUsage: (event) =>
+          recordUsageEvent(io, taskId, 'pipeline-reviewer', event),
+      },
+    );
+    if (review.ran) recordCampaignModelTurn(taskId);
   } catch (err) {
+    if (isCampaignStageBlockedError(err)) throw err;
     logger.warn({ taskId, err: err instanceof Error ? err.message : String(err) }, 'Rebuild reviewer threw (non-fatal)');
   }
 

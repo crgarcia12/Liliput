@@ -1,0 +1,258 @@
+feature: autonomous-campaign-attempt-bounds
+increment: ext-005
+version: "1.0"
+basePath: /api/autonomous-campaigns
+exposure: authenticated-admin-http-and-internal-coordinator
+description: >
+  Extends the existing autonomous campaign controls and serial delivery
+  coordinator with durable per-attempt limit snapshots, usage accounting,
+  safe-boundary pause and stop interruption, explicit external waits, bounded
+  failure evidence, and idempotent retry of the same accepted proposal. No new
+  public route is introduced.
+
+authorization:
+  authentication: jwt-session
+  requiredRole: ADMIN
+  appliesTo:
+    - POST /api/autonomous-campaigns/:id/pause
+    - POST /api/autonomous-campaigns/:id/resume
+    - POST /api/autonomous-campaigns/:id/stop
+
+endpoints:
+  - method: POST
+    path: /api/autonomous-campaigns/:id/pause
+    operationId: pauseAutonomousCampaign
+    precondition: campaign.status == running
+    sideEffects:
+      - Persist the active attempt's elapsed time through the current safe boundary.
+      - Set the active attempt status to paused without clearing usage or limit snapshots.
+      - Set the campaign and current cycle status to paused.
+      - Abort an active Copilot SDK turn without marking the campaign task failed.
+      - Allow an already-running external build or deployment call to reach its nearest safe boundary.
+      - Schedule no later model action or delivery stage.
+      - Preserve proposal, workstream, task, branch, image, preview, pull request, retry, and usage evidence.
+    responses:
+      200:
+        body: AutonomousCampaignDetailResponse
+      403:
+        body: AutonomousCampaignApiError
+      404:
+        body: AutonomousCampaignApiError
+      409:
+        body: AutonomousCampaignApiError
+
+  - method: POST
+    path: /api/autonomous-campaigns/:id/resume
+    operationId: resumeAutonomousCampaign
+    precondition: campaign.status == paused
+    sideEffects:
+      - Set the campaign to running.
+      - Restore the same cycle to the status persisted before pause.
+      - Restore the same attempt to running and start a new active elapsed-time interval.
+      - Retain the attempt's original limit snapshot and accumulated usage.
+      - Reuse the same task and delivery checkpoints.
+    responses:
+      200:
+        body: AutonomousCampaignDetailResponse
+      403:
+        body: AutonomousCampaignApiError
+      404:
+        body: AutonomousCampaignApiError
+      409:
+        body: AutonomousCampaignApiError
+
+  - method: POST
+    path: /api/autonomous-campaigns/:id/stop
+    operationId: stopAutonomousCampaign
+    precondition: campaign.status != stopped
+    sideEffects:
+      - Persist the active attempt's elapsed time through the current safe boundary.
+      - Set the active attempt, current cycle, and campaign to stopped.
+      - Abort an active Copilot SDK turn without deleting task evidence.
+      - Clear next_retry_at and prevent every future retry or cycle.
+      - Preserve all proposal and delivery evidence for inspection.
+    responses:
+      200:
+        body: AutonomousCampaignDetailResponse
+      403:
+        body: AutonomousCampaignApiError
+      404:
+        body: AutonomousCampaignApiError
+      409:
+        body: AutonomousCampaignApiError
+
+internalOperations:
+  - operationId: createAutonomousCampaignAttemptManager
+    input:
+      owner: non-empty coordinator lease owner
+      now: injectable clock
+      interruptTask: task-safe interruption adapter
+    output: AutonomousCampaignAttemptManager
+    behavior:
+      - Resolve the current campaign, cycle, task, and latest attempt from durable state.
+      - Require the caller to own an unexpired campaign lease for coordinator mutations.
+      - Use BEGIN IMMEDIATE transactions for attempt, cycle, and campaign transitions.
+
+  - operationId: evaluateBeforeAction
+    input:
+      campaignId: uuid
+      cycleId: uuid
+      stage: AutonomousCampaignAttemptStage
+    output: AutonomousCampaignAttemptActionResult
+    behavior:
+      - Refresh active elapsed time before checking a limit.
+      - Compare usage against the attempt's immutable limit snapshot.
+      - Return allowed when every limit has remaining capacity and the campaign is runnable.
+      - Before another action, block paused, stopped, retry_wait, or waiting_for_external state.
+      - When turns, elapsed time, or estimated cost reaches its limit, fail the attempt with attempt-limit:<reason> and schedule retry of the same cycle.
+
+  - operationId: recordUsage
+    input:
+      campaignId: uuid
+      cycleId: uuid
+      usageEventId: stable per-SDK-call identifier
+      turns: non-negative integer
+      estimatedCostUsd: non-negative number
+    output: AutonomousCampaignBoundedAttempt
+    behavior:
+      - Count each usageEventId once.
+      - Add usage to the active attempt and cumulative campaign cost.
+      - Reject usage writes for a different campaign, cycle, attempt, or lease owner.
+
+  - operationId: waitForExternal
+    input:
+      campaignId: uuid
+      cycleId: uuid
+      stage: AutonomousCampaignAttemptStage
+      message: non-empty human-readable reason
+    output: AutonomousCampaignAttemptTransitionResult
+    behavior:
+      - Accumulate active elapsed time and stop the active interval.
+      - Move the cycle to waiting_for_external without ending the attempt.
+      - Do not add model turns or estimated cost while waiting.
+
+  - operationId: resumeExternalWait
+    input:
+      campaignId: uuid
+      cycleId: uuid
+    output: AutonomousCampaignAttemptTransitionResult
+    behavior:
+      - Require the same running campaign and active attempt.
+      - Move the cycle back to delivering and start a new active elapsed-time interval.
+      - Preserve prior usage and delivery checkpoints.
+
+  - operationId: failAttempt
+    input:
+      campaignId: uuid
+      cycleId: uuid
+      stage: AutonomousCampaignAttemptStage
+      message: non-empty human-readable failure
+    output: AutonomousCampaignAttemptTransitionResult
+    behavior:
+      - Accumulate active elapsed time.
+      - Persist failed status, exact stage, message, completion timestamp, and usage.
+      - Schedule exponential retry using max(1, previousDelay * 2), capped by retryBackoffCapMinutes.
+      - Keep the same proposal, workstream, task, and remote delivery checkpoints.
+
+  - operationId: startDueRetry
+    input:
+      campaignId: uuid
+      cycleId: uuid
+    output: AutonomousCampaignRetryStartResult
+    behavior:
+      - Return started false before next_retry_at or after pause or stop.
+      - Create exactly one next attempt after next_retry_at.
+      - Snapshot the campaign limits effective when the new attempt starts.
+      - Move the same cycle to delivering and retain all delivery resource identifiers.
+      - Replaying startup reconciliation returns the already-created attempt.
+
+  - operationId: guardCampaignTaskStage
+    input:
+      taskId: uuid
+      stage: AutonomousCampaignAttemptStage
+    output: AutonomousCampaignAttemptActionResult or not-applicable
+    integration:
+      - Call before preflight model work.
+      - Call before each coder or fixer model turn.
+      - Call before build, deploy, validate, and review stage entry.
+      - Manual tasks without campaignCycleId return not-applicable and preserve current behavior.
+
+persistence:
+  autonomous_attempts:
+    additiveColumns:
+      - name: max_turns
+        type: INTEGER
+        nullable: false
+        source: campaign.max_turns_per_attempt at attempt creation
+      - name: max_elapsed_ms
+        type: INTEGER
+        nullable: false
+        source: campaign.max_minutes_per_attempt multiplied by 60000 at attempt creation
+      - name: max_estimated_cost_usd
+        type: REAL
+        nullable: false
+        source: campaign.max_cost_usd_per_attempt at attempt creation
+      - name: active_started_at
+        type: TEXT
+        nullable: true
+        source: attempt start or latest resume timestamp
+    existingColumns:
+      - status
+      - turns_used
+      - elapsed_ms
+      - estimated_cost_usd
+      - completed_at
+      - failure_stage
+      - failure_message
+    migration:
+      - Add columns without rebuilding or deleting existing attempt rows.
+      - Backfill existing rows from their owning campaign's current configured limits.
+      - Leave active_started_at null for non-running attempts.
+
+  autonomous_cycles:
+    existingColumns:
+      - status
+      - next_retry_at
+      - retry_delay_minutes
+      - proposal_json
+      - workstream_id
+      - task_id
+      - branch_name
+      - image_ref
+      - preview_namespace
+      - preview_url
+      - pull_request_url
+      - pull_request_number
+      - last_error
+
+errors:
+  campaign-attempt-not-found:
+    description: The current cycle has no active or latest attempt.
+  campaign-attempt-limit:
+    description: A model or stage action was blocked by turns, elapsed time, or estimated cost.
+  campaign-attempt-conflict:
+    description: Attempt state, cycle state, or lease ownership changed before the transaction committed.
+  invalid-campaign-attempt-transition:
+    description: Pause, resume, stop, external wait, failure, or retry is not legal from persisted state.
+
+scenarioMappings:
+  - scenario: Attempt limit blocks another model action
+    operations: [evaluateBeforeAction, guardCampaignTaskStage]
+  - scenario: Failed attempt retries the same feature after backoff
+    operations: [recordUsage, failAttempt, startDueRetry]
+  - scenario: Repeated failures keep retrying with a capped delay
+    operations: [failAttempt, startDueRetry]
+  - scenario: Infrastructure wait does not spend model budget
+    operations: [waitForExternal, resumeExternalWait]
+  - scenario: Pause interrupts work at the next safe boundary
+    operations: [pauseAutonomousCampaign, guardCampaignTaskStage]
+  - scenario: Paused delivery resumes the same attempt after restart
+    operations: [resumeAutonomousCampaign]
+  - scenario: Stopped campaign schedules no future work
+    operations: [stopAutonomousCampaign, startDueRetry]
+  - scenario: Restart during retry wait creates only the due attempt
+    operations: [startDueRetry]
+  - scenario: Attempt failure retains its exact stage and usage
+    operations: [recordUsage, failAttempt]
+  - scenario: Changed limits apply to the next attempt
+    operations: [failAttempt, startDueRetry]
