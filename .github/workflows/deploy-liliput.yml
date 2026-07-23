@@ -8,6 +8,12 @@ on:
       - 'k8s/**'
       - '.github/workflows/deploy-liliput.yml'
   workflow_dispatch:
+    inputs:
+      restart_cluster:
+        description: Force an AKS control-plane restart before deployment
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   id-token: write
@@ -61,6 +67,44 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Ensure AKS control plane is reachable
+        env:
+          FORCE_RESTART: ${{ github.event_name == 'workflow_dispatch' && inputs.restart_cluster }}
+        run: |
+          fqdn="$(az aks show --resource-group "$RG" --name "$AKS" --query fqdn -o tsv)"
+          reachable=false
+          for attempt in {1..6}; do
+            if getent hosts "$fqdn" >/dev/null 2>&1; then
+              reachable=true
+              break
+            fi
+            echo "AKS API DNS is not ready (attempt $attempt/6)."
+            sleep 10
+          done
+
+          if [ "$FORCE_RESTART" = "true" ] || [ "$reachable" != "true" ]; then
+            state="$(az aks show --resource-group "$RG" --name "$AKS" --query powerState.code -o tsv)"
+            echo "Restarting AKS control plane from power state: $state"
+            if [ "$state" = "Running" ]; then
+              az aks stop --resource-group "$RG" --name "$AKS" --no-wait
+              az aks wait --resource-group "$RG" --name "$AKS" --custom "powerState.code=='Stopped' && provisioningState=='Succeeded'" --interval 15 --timeout 1800
+            fi
+            az aks start --resource-group "$RG" --name "$AKS" --no-wait
+            az aks wait --resource-group "$RG" --name "$AKS" --custom "powerState.code=='Running' && provisioningState=='Succeeded'" --interval 15 --timeout 1800
+
+            fqdn="$(az aks show --resource-group "$RG" --name "$AKS" --query fqdn -o tsv)"
+            for attempt in {1..60}; do
+              if getent hosts "$fqdn" >/dev/null 2>&1; then
+                echo "AKS API DNS is reachable: $fqdn"
+                exit 0
+              fi
+              echo "Waiting for AKS API DNS after restart (attempt $attempt/60)."
+              sleep 10
+            done
+            echo "::error::AKS API DNS did not recover after restart."
+            exit 1
+          fi
 
       - name: Build API image
         if: steps.flags.outputs.build_api == 'true'
