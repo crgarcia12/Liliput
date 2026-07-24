@@ -92,16 +92,16 @@
       "id": "ext-006",
       "type": "extension",
       "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
-      "status": "in-progress"
+      "status": "done"
     },
     {
       "id": "ext-007",
       "type": "extension",
       "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
-      "status": "planned"
+      "status": "in-progress"
     }
   ],
-  "currentIncrement": "ext-006",
+  "currentIncrement": "ext-007",
   "increments": {
     "ext-pre-001": {
       "type": "extension-prerequisite",
@@ -1740,7 +1740,7 @@
     },
     "ext-006": {
       "type": "extension",
-      "status": "in-progress",
+      "status": "done",
       "featureFiles": [
         "specs/features/autonomous-workstream-campaign-handoff.feature"
       ],
@@ -1866,13 +1866,93 @@
           "completedAt": "2026-07-24T11:33:36Z"
         },
         "verification": {
-          "status": "pending"
+          "status": "done",
+          "pullRequest": {
+            "status": "merged",
+            "url": "https://github.com/crgarcia12/Liliput/pull/108",
+            "ci": "https://github.com/crgarcia12/Liliput/actions/runs/30090279047",
+            "sourceCommitSha": "870b84beecdc29dcfcfc1356ec4725cc2ceed353",
+            "mergeCommitSha": "d28f81becd76611ef389732226252ad7a0b73dd8",
+            "mergedAt": "2026-07-24T11:41:42Z"
+          },
+          "deployment": {
+            "status": "done",
+            "environment": "production",
+            "platform": "aks",
+            "url": "https://liliput.crgarcia.com.ar",
+            "workflow": "https://github.com/crgarcia12/Liliput/actions/runs/30090443618",
+            "commitSha": "d28f81becd76611ef389732226252ad7a0b73dd8",
+            "apiImage": "crgarliliputacr.azurecr.io/liliput-api:d28f81becd76611ef389732226252ad7a0b73dd8",
+            "webImage": "crgarliliputacr.azurecr.io/liliput-web:d28f81becd76611ef389732226252ad7a0b73dd8",
+            "deployedAt": "2026-07-24T11:49:24Z"
+          },
+          "smokeTests": {
+            "status": "done",
+            "rootStatus": 200,
+            "apiHealthStatus": 200,
+            "loginStatus": 200,
+            "https": true,
+            "productionPlaywright": {
+              "pass": 6,
+              "fail": 0
+            },
+            "cluster": {
+              "powerState": "Running",
+              "readyNodes": 4,
+              "api": "1/1",
+              "web": "1/1",
+              "gateway": "1/1"
+            },
+            "startupErrors": 0,
+            "verifiedAt": "2026-07-24T12:06:57Z"
+          },
+          "liveCampaign": {
+            "status": "pass",
+            "campaignId": "ea8d97fc-f17b-4ba1-bea5-40370617f090",
+            "repository": "crgarcia12/obelisco",
+            "campaignStatus": "running",
+            "cycleOne": {
+              "id": "814c0bcc-5b71-47cd-beca-1bcf32413e3f",
+              "status": "succeeded",
+              "workstreamId": "1f511c46-d629-4a0b-b4a3-e057a0120308",
+              "workstreamName": "[Campaign crgarcia12/obelisco #1] Create a spec-first MVP definition for the 2D Obelisco game",
+              "taskId": "0edaa890-2975-4656-85af-4afa18626d53",
+              "pullRequest": "https://github.com/crgarcia12/obelisco/pull/1",
+              "reviewedHeadSha": "bb3495eed028176d6437f5146429c95e3356ebb4",
+              "mergeSha": "4abd4e109a9aa1f205338653eaea763d45e9a6f5",
+              "checkRunCount": 0,
+              "checkDiscoverySettled": true,
+              "completedAt": "2026-07-24T11:55:50.217Z"
+            },
+            "cooldownMinutes": 5,
+            "cycleTwo": {
+              "id": "e8f856a4-1260-4811-9034-c4ff01986b3c",
+              "status": "delivering",
+              "workstreamId": "46ab940d-56d8-4a7f-8933-63ea9956fdbc",
+              "workstreamName": "[Campaign crgarcia12/obelisco #2] Add an executable spec validation and acceptance-test harness",
+              "taskId": "7478d9d9-405a-4b28-8a4d-1fabd87aad12",
+              "pullRequest": "https://github.com/crgarcia12/obelisco/pull/2",
+              "workstreamCreatedAt": "2026-07-24T12:02:00.848Z"
+            },
+            "serialInvariant": {
+              "oneWorkstreamPerCycle": true,
+              "firstPullRequestMergedBeforeSecondCycle": true,
+              "exactlyOneNextCycleCreated": true
+            },
+            "verifiedAt": "2026-07-24T12:06:57Z"
+          },
+          "humanApproval": {
+            "status": "approved",
+            "approvedAt": "2026-07-24T12:06:57Z",
+            "approvalSource": "explicit-user-expectation-and-unattended-continuation"
+          },
+          "completedAt": "2026-07-24T12:06:57Z"
         }
       }
     },
     "ext-007": {
       "type": "extension",
-      "status": "planned"
+      "status": "in-progress"
     }
   },
   "humanGates": {
@@ -1916,7 +1996,7 @@
     "ext-005-deployment-approved": true,
     "ext-006-tests-approved": true,
     "ext-006-implementation-approved": true,
-    "ext-006-deployment-approved": false
+    "ext-006-deployment-approved": true
   },
   "testsStatus": {
     "reviewerConfigAndCliAuth": {
@@ -2036,7 +2116,11 @@
       "cucumber": "75-scenarios-554-steps-pass",
       "playwright": "6-pass",
       "codeReview": "pass",
-      "deployment": "pending"
+      "deployment": "pass",
+      "productionPlaywright": "6-pass",
+      "cluster": "running-4-nodes",
+      "startupErrors": 0,
+      "obeliscoSerialRelease": "cycle-1-merged-cycle-2-workstream-active"
     }
   },
   "extensions": {
