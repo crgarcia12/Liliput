@@ -335,14 +335,17 @@ export async function commitAllIfChanges(
  */
 export async function pushForceWithLease(
   handle: RepoHandle,
-  opts: { onLog?: RetryLog } = {},
+  opts: { onLog?: RetryLog; expectedRemoteSha?: string } = {},
 ): Promise<void> {
   const log = opts.onLog;
+  const lease = opts.expectedRemoteSha
+    ? `--force-with-lease=refs/heads/${handle.branch}:${opts.expectedRemoteSha}`
+    : '--force-with-lease';
   await runWithRetry(
     () =>
       run(
         'git',
-        ['push', '--force-with-lease', '--set-upstream', 'origin', handle.branch],
+        ['push', lease, '--set-upstream', 'origin', handle.branch],
         { cwd: handle.cwd },
       ),
     {
@@ -416,6 +419,18 @@ export async function isBranchUpToDateWithRemote(handle: RepoHandle): Promise<bo
   } catch {
     return false;
   }
+}
+
+export async function remoteBranchSha(handle: RepoHandle): Promise<string> {
+  await run('git', ['fetch', '--quiet', 'origin', handle.branch], {
+    cwd: handle.cwd,
+  });
+  const { stdout } = await run(
+    'git',
+    ['rev-parse', `origin/${handle.branch}`],
+    { cwd: handle.cwd },
+  );
+  return stdout.trim();
 }
 
 /** Run an arbitrary git command in the workdir. Used by ad-hoc tooling. */

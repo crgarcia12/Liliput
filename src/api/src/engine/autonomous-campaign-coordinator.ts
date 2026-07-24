@@ -112,6 +112,8 @@ export interface CampaignCoordinatorOptions {
   now: () => number;
   startTaskPipeline: (taskId: string) => void;
   resumeTaskPipeline?: (taskId: string) => void;
+  revalidateTaskPipeline?: (taskId: string, headSha: string) => void;
+  isTaskPipelineActive?: (taskId: string) => boolean;
   interruptTask?: (
     taskId: string,
     reason: AutonomousCampaignTaskInterruptReason,
@@ -487,6 +489,21 @@ export function createAutonomousCampaignCoordinator(
         commitSha,
         branch: baseBranch,
       }));
+  const launchHeadRevalidation = (taskId: string, headSha: string): void => {
+    if (!options.revalidateTaskPipeline) return;
+    try {
+      options.revalidateTaskPipeline(taskId, headSha);
+    } catch (err) {
+      logger.error(
+        {
+          campaignTaskId: taskId,
+          headSha,
+          err: err instanceof Error ? err.message : String(err),
+        },
+        'Failed to launch campaign pull-request head revalidation',
+      );
+    }
+  };
 
   const handoffAcceptedProposal = async (
     campaignId: string,
@@ -670,6 +687,16 @@ export function createAutonomousCampaignCoordinator(
     }
     task = taskStore.getTask(task.id) ?? task;
     if (
+      task.status === 'building' &&
+      task.commitSha &&
+      cycle.releaseGates?.['revalidationRequired'] === true &&
+      options.revalidateTaskPipeline &&
+      options.isTaskPipelineActive &&
+      !options.isTaskPipelineActive(task.id)
+    ) {
+      launchHeadRevalidation(task.id, task.commitSha);
+    }
+    if (
       task.status === 'failed' &&
       taskPassedReleaseReview(task)
     ) {
@@ -805,6 +832,31 @@ export function createAutonomousCampaignCoordinator(
       );
     }
     if (!taskPassedReleaseReview(task)) {
+      if (
+        task.status === 'building' &&
+        task.commitSha &&
+        options.revalidateTaskPipeline
+      ) {
+        const invalidatedReview: AutonomousCampaignJsonObject = {
+          status: 'invalidated',
+          source: 'pull-request-head',
+          taskId: task.id,
+          liveHeadSha: task.commitSha,
+          evaluatedAt: new Date(options.now()).toISOString(),
+        };
+        const delivering = campaignStore.updateCycleDelivery({
+          campaignId,
+          cycleId,
+          leaseOwner: options.owner,
+          nowMs: options.now(),
+          expectedStatus: cycle.status,
+          status: 'delivering',
+          reviewDecision: invalidatedReview,
+          lastError: null,
+        });
+        launchHeadRevalidation(task.id, task.commitSha);
+        return { outcome: 'active', cycle: delivering, task };
+      }
       const pendingReview: AutonomousCampaignJsonObject = {
         status: 'pending',
         source: 'pipeline-reviewer',
@@ -856,6 +908,64 @@ export function createAutonomousCampaignCoordinator(
       pullRequestNumber,
     );
     const reviewedHeadSha = acceptedReview.reviewedSha;
+    if (
+      !pullRequest.merged &&
+      pullRequest.state === 'open' &&
+      pullRequest.head.sha !== reviewedHeadSha &&
+      options.revalidateTaskPipeline
+    ) {
+      const liveHeadSha = pullRequest.head.sha;
+      const revalidationPipeline = task.pipeline
+        ? {
+            ...task.pipeline,
+            stages: {
+              ...task.pipeline.stages,
+              build: 'pending' as const,
+              deploy: 'pending' as const,
+              validate: 'pending' as const,
+              review: 'pending' as const,
+            },
+            updatedAt: new Date(options.now()).toISOString(),
+          }
+        : undefined;
+      const updatedTask =
+        taskStore.updateTask(task.id, {
+          status: 'building',
+          commitSha: liveHeadSha,
+          campaignReleaseReview: undefined,
+          pipeline: revalidationPipeline,
+          errorMessage: undefined,
+        }) ?? task;
+      const invalidatedReview: AutonomousCampaignJsonObject = {
+        status: 'invalidated',
+        source: 'pull-request-head',
+        taskId: task.id,
+        reviewedHeadSha,
+        liveHeadSha,
+        evaluatedAt: new Date(options.now()).toISOString(),
+      };
+      const invalidatedGates: AutonomousCampaignJsonObject = {
+        pipelineComplete: false,
+        reviewerAccepted: false,
+        reviewedHeadMatches: false,
+        reviewedHeadSha,
+        pullRequestHeadSha: liveHeadSha,
+        revalidationRequired: true,
+      };
+      const delivering = campaignStore.updateCycleDelivery({
+        campaignId,
+        cycleId,
+        leaseOwner: options.owner,
+        nowMs: options.now(),
+        expectedStatus: cycle.status,
+        status: 'delivering',
+        reviewDecision: invalidatedReview,
+        releaseGates: invalidatedGates,
+        lastError: null,
+      });
+      launchHeadRevalidation(task.id, liveHeadSha);
+      return { outcome: 'active', cycle: delivering, task: updatedTask };
+    }
     const checks = await listCheckRuns(
       campaign.repository,
       pullRequest.head.sha,
@@ -1430,6 +1540,8 @@ export function createAutonomousCampaignCoordinator(
 export interface StartAutonomousCampaignCoordinatorOptions {
   startTaskPipeline: (taskId: string) => void;
   resumeTaskPipeline?: (taskId: string) => void;
+  revalidateTaskPipeline?: (taskId: string, headSha: string) => void;
+  isTaskPipelineActive?: (taskId: string) => boolean;
   shipTask?: (taskId: string) => Promise<unknown>;
   interruptTask?: CampaignCoordinatorOptions['interruptTask'];
   findPullRequest?: CampaignCoordinatorOptions['findPullRequest'];
@@ -1467,6 +1579,12 @@ export function startAutonomousCampaignCoordinator(
     startTaskPipeline: options.startTaskPipeline,
     ...(options.resumeTaskPipeline
       ? { resumeTaskPipeline: options.resumeTaskPipeline }
+      : {}),
+    ...(options.revalidateTaskPipeline
+      ? { revalidateTaskPipeline: options.revalidateTaskPipeline }
+      : {}),
+    ...(options.isTaskPipelineActive
+      ? { isTaskPipelineActive: options.isTaskPipelineActive }
       : {}),
     ...(options.shipTask ? { shipTask: options.shipTask } : {}),
     ...(options.interruptTask

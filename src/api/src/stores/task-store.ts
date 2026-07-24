@@ -835,7 +835,7 @@ export function reconcileOrphanedRuns(): {
        WHERE id = ?`,
     );
     const replayableCampaignStmt = db.prepare(
-      `SELECT 1
+      `SELECT cycle.release_gates_json AS release_gates_json
          FROM autonomous_cycles cycle
          JOIN autonomous_campaigns campaign ON campaign.id = cycle.campaign_id
         WHERE cycle.id = ?
@@ -847,9 +847,45 @@ export function reconcileOrphanedRuns(): {
     for (const row of taskRows) {
       const task = JSON.parse(row.data) as Task;
       const campaignCycleId = row.campaign_cycle_id ?? task.campaignCycleId;
-      const campaignCanResume =
-        campaignCycleId !== undefined &&
-        replayableCampaignStmt.get(campaignCycleId) !== undefined;
+      const replayableCampaign =
+        campaignCycleId !== undefined
+          ? (replayableCampaignStmt.get(campaignCycleId) as
+              | { release_gates_json: string | null }
+              | undefined)
+          : undefined;
+      const campaignCanResume = replayableCampaign !== undefined;
+      let revalidationRequired = false;
+      if (replayableCampaign?.release_gates_json) {
+        try {
+          const releaseGates = JSON.parse(
+            replayableCampaign.release_gates_json,
+          ) as Record<string, unknown>;
+          revalidationRequired = releaseGates['revalidationRequired'] === true;
+        } catch {
+          revalidationRequired = false;
+        }
+      }
+      if (
+        campaignCanResume &&
+        revalidationRequired
+      ) {
+        const recoverable = {
+          ...task,
+          campaignCycleId,
+          status: 'building' as const,
+          errorMessage: undefined,
+          updatedAt: ts,
+        };
+        updateTaskStmt.run(
+          'building',
+          JSON.stringify(recoverable),
+          ts,
+          podId,
+          leaseExpiresAt,
+          row.id,
+        );
+        continue;
+      }
       const shouldReplayCampaignHandoff =
         campaignCanResume &&
         (row.status === 'clarifying' ||

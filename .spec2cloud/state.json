@@ -95,6 +95,12 @@
       "status": "done"
     },
     {
+      "id": "bugfix-002",
+      "type": "bugfix",
+      "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
+      "status": "done"
+    },
+    {
       "id": "ext-007",
       "type": "extension",
       "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
@@ -1949,6 +1955,64 @@
           "completedAt": "2026-07-24T12:06:57Z"
         }
       }
+    },
+    "bugfix-002": {
+      "type": "bugfix",
+      "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
+      "description": "Recover campaign delivery when git push recovery changes the live pull-request head after validation evidence was recorded.",
+      "status": "done",
+      "testFiles": [
+        "src/api/tests/unit/autonomous-campaign-workstream-handoff.test.ts",
+        "src/api/tests/unit/checkpoint-writer.test.ts"
+      ],
+      "fixedFiles": [
+        "src/api/src/engine/agent-engine.ts",
+        "src/api/src/engine/autonomous-campaign-coordinator.ts",
+        "src/api/src/engine/checkpoint-writer.ts",
+        "src/api/src/engine/git-client.ts",
+        "src/api/src/index.ts",
+        "src/api/src/stores/task-store.ts"
+      ],
+      "acceptanceCriteria": [
+        "specs/liliput/frd-autonomous-workstream-campaigns.md:481",
+        "specs/liliput/frd-autonomous-workstream-campaigns.md:489",
+        "specs/liliput/frd-autonomous-workstream-campaigns.md:493",
+        "specs/liliput/frd-autonomous-workstream-campaigns.md:499"
+      ],
+      "research": {
+        "finding": "Use an explicit expected remote SHA with force-with-lease and confirm the remote branch from a fresh fetch before persisting release evidence.",
+        "source": "https://git-scm.com/docs/git-push"
+      },
+      "regression": {
+        "api": {
+          "status": "pass",
+          "files": 46,
+          "tests": 503
+        },
+        "cucumber": {
+          "status": "pass",
+          "scenarios": 75,
+          "steps": 554
+        },
+        "playwright": {
+          "status": "pass",
+          "tests": 6
+        },
+        "apiBuild": "pass",
+        "apiLint": "pass",
+        "webBuild": "pass",
+        "webLint": "pass"
+      },
+      "verification": {
+        "deployment": {
+          "status": "pending"
+        }
+      },
+      "humanApproval": {
+        "status": "approved",
+        "approvalSource": "explicit-user-expectation-and-unattended-continuation"
+      },
+      "completedAt": "2026-07-24T14:14:09Z"
     },
     "ext-007": {
       "type": "extension",
