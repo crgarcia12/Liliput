@@ -402,35 +402,25 @@ export async function isWorkingTreeClean(handle: RepoHandle): Promise<boolean> {
  * "Everything up-to-date" so we treat this state as success instead.
  */
 export async function isBranchUpToDateWithRemote(handle: RepoHandle): Promise<boolean> {
-  // Refresh remote tracking refs so the comparison reflects reality.
   try {
-    await run('git', ['fetch', '--quiet', 'origin', handle.branch], { cwd: handle.cwd });
-  } catch {
-    // Fetch failure (transient network, etc.) — fall through to local check.
-  }
-  try {
-    const { stdout: local } = await run('git', ['rev-parse', 'HEAD'], { cwd: handle.cwd });
-    const { stdout: remote } = await run(
-      'git',
-      ['rev-parse', `origin/${handle.branch}`],
-      { cwd: handle.cwd },
-    );
-    return local.trim() === remote.trim() && local.trim() !== '';
+    const [local, remote] = await Promise.all([headSha(handle), remoteBranchSha(handle)]);
+    return local === remote && local !== '';
   } catch {
     return false;
   }
 }
 
 export async function remoteBranchSha(handle: RepoHandle): Promise<string> {
-  await run('git', ['fetch', '--quiet', 'origin', handle.branch], {
-    cwd: handle.cwd,
-  });
   const { stdout } = await run(
     'git',
-    ['rev-parse', `origin/${handle.branch}`],
+    ['ls-remote', '--exit-code', 'origin', `refs/heads/${handle.branch}`],
     { cwd: handle.cwd },
   );
-  return stdout.trim();
+  const [sha] = stdout.trim().split(/\s+/u);
+  if (!sha) {
+    throw new Error(`Remote branch ${handle.branch} did not resolve to a commit`);
+  }
+  return sha;
 }
 
 /** Run an arbitrary git command in the workdir. Used by ad-hoc tooling. */

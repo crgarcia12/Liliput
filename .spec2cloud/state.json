@@ -117,6 +117,12 @@
       "type": "extension",
       "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
       "status": "in-progress"
+    },
+    {
+      "id": "bugfix-005",
+      "type": "bugfix",
+      "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
+      "status": "done"
     }
   ],
   "currentIncrement": "ext-007",
@@ -2195,6 +2201,56 @@
     "ext-007": {
       "type": "extension",
       "status": "in-progress"
+    },
+    "bugfix-005": {
+      "type": "bugfix",
+      "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
+      "description": "Resolve pushed task branch SHAs directly from the remote when shallow single-branch clones do not create origin task-branch tracking refs.",
+      "status": "done",
+      "testFile": "src/api/tests/unit/git-client.test.ts",
+      "fixedFiles": [
+        "src/api/src/engine/git-client.ts"
+      ],
+      "acceptanceCriteria": [
+        "specs/liliput/frd-autonomous-workstream-campaigns.md:481"
+      ],
+      "productionFailure": {
+        "taskId": "e226889d-519b-425d-a9d2-4159a02e2061",
+        "repository": "crgarcia12/obelisco",
+        "branch": "liliput/task-e226889d",
+        "remoteSha": "2322052b275d7cbcc576c431911b17cb26191829",
+        "error": "git rev-parse origin/liliput/task-e226889d exited with 128"
+      },
+      "research": {
+        "finding": "Use git ls-remote --exit-code with the exact refs/heads task branch so strict SHA confirmation does not depend on a single-branch clone's restricted remote tracking refspec.",
+        "sources": [
+          "https://git-scm.com/docs/git-ls-remote",
+          "https://git-scm.com/docs/git-clone"
+        ],
+        "packageUpdates": []
+      },
+      "regression": {
+        "redBaseline": {
+          "status": "confirmed",
+          "error": "git rev-parse origin/liliput/task-e226889d exited with 128"
+        },
+        "targeted": {
+          "status": "pass",
+          "tests": 1
+        },
+        "api": {
+          "status": "pass",
+          "files": 48,
+          "tests": 506
+        },
+        "apiBuild": "pass",
+        "apiLint": "pass"
+      },
+      "humanApproval": {
+        "status": "approved",
+        "approvalSource": "explicit-test-contract-approval"
+      },
+      "completedAt": "2026-07-24T21:53:11Z"
     }
   },
   "humanGates": {
