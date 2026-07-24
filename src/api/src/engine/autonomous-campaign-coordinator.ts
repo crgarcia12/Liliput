@@ -697,6 +697,16 @@ export function createAutonomousCampaignCoordinator(
       launchHeadRevalidation(task.id, task.commitSha);
     }
     if (
+      task.status === 'review' &&
+      task.campaignReleaseReview?.status === 'changes-requested' &&
+      (task.pendingReviewerFeedback?.length ?? 0) > 0 &&
+      options.resumeTaskPipeline &&
+      options.isTaskPipelineActive &&
+      !options.isTaskPipelineActive(task.id)
+    ) {
+      options.resumeTaskPipeline(task.id);
+    }
+    if (
       task.status === 'failed' &&
       taskPassedReleaseReview(task)
     ) {
