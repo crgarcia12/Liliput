@@ -302,6 +302,7 @@ export interface PullRequestData {
   head: { sha: string; ref: string };
   base: { ref: string };
   user: { login: string } | null;
+  merge_commit_sha?: string | null;
 }
 
 /** GET /repos/{repo}/pulls/{n}. Includes mergeable + mergeable_state which
@@ -510,6 +511,7 @@ export interface PullSummary {
   state: 'open' | 'closed';
   draft: boolean;
   title: string;
+  body?: string | null;
   html_url: string;
   labels: Array<{ name: string }>;
   head: { sha: string };
@@ -559,6 +561,35 @@ export async function getRepositoryBranchSha(
     );
   }
   return body.commit.sha;
+}
+
+export interface IsCommitReachableFromBranchOptions {
+  repo: string;
+  commitSha: string;
+  branch: string;
+  fetchImpl?: FetchImpl;
+}
+
+export async function isCommitReachableFromBranch(
+  opts: IsCommitReachableFromBranchOptions,
+): Promise<boolean> {
+  const f = opts.fetchImpl ?? fetch;
+  const base = encodeURIComponent(opts.commitSha);
+  const head = encodeURIComponent(opts.branch);
+  const res = await f(`${API}/repos/${opts.repo}/compare/${base}...${head}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    throw new GitHubApiError(
+      res.status,
+      `GET /compare/${opts.commitSha}...${opts.branch}`,
+      await res.text(),
+    );
+  }
+  const body = (await res.json()) as {
+    status?: 'ahead' | 'behind' | 'diverged' | 'identical';
+  };
+  return body.status === 'ahead' || body.status === 'identical';
 }
 
 export interface RepositoryTreeEntry {

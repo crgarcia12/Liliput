@@ -13,6 +13,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { resetDb } from '../../src/stores/db.js';
 import * as workstreamStore from '../../src/stores/workstream-store.js';
 import * as featureStore from '../../src/stores/feature-store.js';
+import * as taskStore from '../../src/stores/task-store.js';
 import {
   runRmReview,
   buildChecklist,
@@ -110,6 +111,32 @@ describe('pure helpers', () => {
     expect(extractClosesIssueNumber('Resolves #99\nblah')).toBe(99);
     expect(extractClosesIssueNumber('no link here')).toBeNull();
     expect(extractClosesIssueNumber('mentions #5 but no keyword')).toBeNull();
+  });
+
+  describe('campaign ownership', () => {
+    it('skips pull requests owned by the autonomous campaign coordinator', async () => {
+      const task = taskStore.createTask(
+        'Campaign delivery',
+        'Autonomous delivery',
+        'owner/repo',
+        { campaignCycleId: 'campaign-cycle-1' },
+      );
+      taskStore.updateTask(task.id, { pullRequestNumber: 42 });
+      const { fetchImpl, calls } = makeFetch([
+        {
+          match: (method, url) => method === 'GET' && url === PR_URL,
+          respond: () => ({ status: 200, body: happyPathPr() }),
+        },
+      ]);
+
+      const decision = await runRmReview('owner/repo', 42, { fetchImpl });
+
+      expect(decision).toMatchObject({
+        action: 'skip',
+        reasons: ['campaign-managed PR'],
+      });
+      expect(calls).toHaveLength(1);
+    });
   });
 
   it('countAttempts returns the max marker N seen in any comment', () => {

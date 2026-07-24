@@ -1740,7 +1740,135 @@
     },
     "ext-006": {
       "type": "extension",
-      "status": "in-progress"
+      "status": "in-progress",
+      "featureFiles": [
+        "specs/features/autonomous-workstream-campaign-handoff.feature"
+      ],
+      "steps": {
+        "tests": {
+          "status": "approved",
+          "e2eFiles": [
+            "e2e/campaign-workstream-visibility.spec.ts"
+          ],
+          "cucumberSteps": [
+            "tests/features/step-definitions/autonomous-campaign-workstream-handoff.steps.ts"
+          ],
+          "vitestFiles": [
+            "src/api/tests/unit/autonomous-campaign-workstream-handoff.test.ts",
+            "src/api/tests/unit/github-pr.test.ts",
+            "src/api/tests/unit/github-rest.test.ts",
+            "src/api/tests/unit/loop-reconciler.test.ts",
+            "src/api/tests/unit/rm-review.test.ts",
+            "src/api/tests/unit/webhook-dispatcher.test.ts"
+          ],
+          "approvedAt": "2026-07-24T11:33:36Z",
+          "approvalSource": "explicit-user-expectation-and-unattended-continuation"
+        },
+        "contracts": {
+          "status": "done",
+          "sharedTypes": [
+            "src/shared/types/autonomous-campaign-delivery.ts",
+            "src/shared/types/index.ts"
+          ],
+          "infraUpdated": false,
+          "newEnvironmentVariables": [
+            "CAMPAIGN_CHECK_DISCOVERY_SETTLE_MS"
+          ],
+          "completedAt": "2026-07-24T11:33:36Z"
+        },
+        "implementation": {
+          "status": "done",
+          "research": {
+            "mergeSafety": "Lock every campaign squash merge to the explicitly reviewed pull-request head SHA.",
+            "reviewEvidence": "Persist reviewer acceptance, validation health, reviewed SHA, and review time on the campaign task.",
+            "baseConfirmation": "Confirm the merge commit is reachable from the configured base branch, not merely equal to its current tip.",
+            "checkDiscovery": "Wait 30 seconds for GitHub check runs to register before treating a zero-check repository as having no CI.",
+            "serialization": "Advance cooldown to exactly one next cycle in one immediate SQLite transaction.",
+            "packageUpdates": []
+          },
+          "slices": {
+            "api": {
+              "status": "done",
+              "modifiedFiles": [
+                "src/api/src/engine/agent-engine.ts",
+                "src/api/src/engine/autonomous-campaign-coordinator.ts",
+                "src/api/src/engine/github-pr.ts",
+                "src/api/src/engine/github-rest.ts",
+                "src/api/src/engine/loop-reconciler.ts",
+                "src/api/src/engine/rm-review.ts",
+                "src/api/src/engine/webhook-dispatcher.ts",
+                "src/api/src/index.ts",
+                "src/api/src/stores/autonomous-campaign-store.ts",
+                "src/api/src/stores/task-store.ts",
+                "src/api/src/stores/workstream-store.ts"
+              ],
+              "failingTests": [],
+              "lastTestRun": {
+                "pass": 501,
+                "fail": 0
+              },
+              "iteration": 6
+            },
+            "web": {
+              "status": "done",
+              "modifiedFiles": [
+                "src/web/src/app/dashboard/page.tsx",
+                "src/web/src/app/m/page.tsx"
+              ],
+              "failingTests": [],
+              "lastTestRun": {
+                "playwrightPass": 6,
+                "playwrightFail": 0
+              },
+              "iteration": 2
+            },
+            "integration": {
+              "status": "done",
+              "modifiedFiles": [
+                "e2e/campaign-workstream-visibility.spec.ts",
+                "tests/features/step-definitions/autonomous-campaign-workstream-handoff.steps.ts"
+              ],
+              "failingTests": [],
+              "lastTestRun": {
+                "cucumberPass": 75,
+                "cucumberFail": 0,
+                "cucumberSteps": 554
+              },
+              "iteration": 3
+            }
+          },
+          "codeReview": {
+            "status": "pass",
+            "highConfidenceFindings": 0,
+            "reviewPasses": 2
+          },
+          "regression": {
+            "api": {
+              "status": "pass",
+              "files": 46,
+              "tests": 501
+            },
+            "cucumber": {
+              "status": "pass",
+              "scenarios": 75,
+              "steps": 554
+            },
+            "playwright": {
+              "status": "pass",
+              "tests": 6
+            },
+            "apiBuild": "pass",
+            "apiLint": "pass",
+            "webBuild": "pass",
+            "webLint": "pass",
+            "skippedTests": 0
+          },
+          "completedAt": "2026-07-24T11:33:36Z"
+        },
+        "verification": {
+          "status": "pending"
+        }
+      }
     },
     "ext-007": {
       "type": "extension",
@@ -1785,7 +1913,10 @@
     "ext-005-gherkin-approved": true,
     "ext-005-tests-approved": true,
     "ext-005-implementation-approved": true,
-    "ext-005-deployment-approved": true
+    "ext-005-deployment-approved": true,
+    "ext-006-tests-approved": true,
+    "ext-006-implementation-approved": true,
+    "ext-006-deployment-approved": false
   },
   "testsStatus": {
     "reviewerConfigAndCliAuth": {
@@ -1895,6 +2026,17 @@
       "productionPlaywright": "4-pass",
       "cluster": "running-4-nodes",
       "startupErrors": 0
+    },
+    "autonomousCampaignRelease": {
+      "apiBuild": "pass",
+      "webBuild": "pass",
+      "apiLint": "pass",
+      "webLint": "pass",
+      "apiTests": "501-pass",
+      "cucumber": "75-scenarios-554-steps-pass",
+      "playwright": "6-pass",
+      "codeReview": "pass",
+      "deployment": "pending"
     }
   },
   "extensions": {
@@ -1986,5 +2128,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-24T07:45:54Z"
+  "lastUpdated": "2026-07-24T11:33:36Z"
 }

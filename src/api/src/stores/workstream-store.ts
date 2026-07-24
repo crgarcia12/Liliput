@@ -107,7 +107,38 @@ export function ensureCampaignWorkstream(input: {
       .prepare('SELECT * FROM workstreams WHERE campaign_cycle_id = ?')
       .get(input.campaignCycleId) as WorkstreamRow | undefined;
     if (existing) {
-      return { workstream: hydrate(existing), created: false };
+      const current = hydrate(existing);
+      const description = input.description ?? current.description;
+      if (
+        current.repository === input.repository &&
+        current.name === input.name &&
+        current.description === description
+      ) {
+        return { workstream: current, created: false };
+      }
+      const ts = now();
+      const reconciled: Workstream = {
+        ...current,
+        repository: input.repository,
+        name: input.name,
+        ...(description ? { description } : {}),
+        updatedAt: ts,
+      };
+      db.prepare(
+        `UPDATE workstreams
+            SET repository = ?,
+                name = ?,
+                data = ?,
+                updated_at = ?
+          WHERE id = ?`,
+      ).run(
+        reconciled.repository,
+        reconciled.name,
+        JSON.stringify(reconciled),
+        ts,
+        reconciled.id,
+      );
+      return { workstream: reconciled, created: false };
     }
     return {
       workstream: createWorkstream(

@@ -12,6 +12,7 @@ import {
   addComment,
   GitHubApiError,
   getGitHubToken,
+  isCommitReachableFromBranch,
 } from '../../src/engine/github-rest.js';
 
 beforeEach(() => {
@@ -136,6 +137,43 @@ describe('github-rest', () => {
       }) as typeof fetch;
       await addComment({ repo: 'o/r', issueNumber: 1, body: 'hello', fetchImpl });
       expect(JSON.parse(sentBody)).toEqual({ body: 'hello' });
+    });
+  });
+
+  describe('isCommitReachableFromBranch', () => {
+    it('should accept a commit that is an ancestor of the branch tip', async () => {
+      let calledUrl = '';
+      const fetchImpl = (async (input: RequestInfo | URL) => {
+        calledUrl =
+          typeof input === 'string' ? input : (input as URL).toString();
+        return makeResponse(200, { status: 'ahead' });
+      }) as typeof fetch;
+
+      await expect(
+        isCommitReachableFromBranch({
+          repo: 'o/r',
+          commitSha: 'merge-sha',
+          branch: 'release/main',
+          fetchImpl,
+        }),
+      ).resolves.toBe(true);
+      expect(calledUrl).toContain(
+        '/compare/merge-sha...release%2Fmain',
+      );
+    });
+
+    it('should reject a commit that is not on the branch history', async () => {
+      const fetchImpl = (async () =>
+        makeResponse(200, { status: 'diverged' })) as typeof fetch;
+
+      await expect(
+        isCommitReachableFromBranch({
+          repo: 'o/r',
+          commitSha: 'merge-sha',
+          branch: 'main',
+          fetchImpl,
+        }),
+      ).resolves.toBe(false);
     });
   });
 });

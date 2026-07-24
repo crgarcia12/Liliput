@@ -26,6 +26,7 @@ export interface PullRequestDescriptionOptions {
   previewUrl?: string;
   validationHealthy?: boolean;
   originalPrompt?: string;
+  campaignCycleId?: string;
 }
 
 export interface PullRequest {
@@ -103,8 +104,22 @@ export function buildPullRequestDescription(
   if (delivery.length > 0) {
     sections.push('', '## Delivery', ...delivery);
   }
+  if (options.campaignCycleId) {
+    sections.push(
+      '',
+      `<!-- liliput:campaign-cycle=${options.campaignCycleId} -->`,
+    );
+  }
 
   return sections.join('\n');
+}
+
+export function extractCampaignCycleMarker(
+  body: string | null | undefined,
+): string | undefined {
+  return body?.match(
+    /<!--\s*liliput:campaign-cycle=([a-zA-Z0-9-]+)\s*-->/,
+  )?.[1];
 }
 
 function getToken(): string {

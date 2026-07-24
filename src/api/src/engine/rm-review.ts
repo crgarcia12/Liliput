@@ -31,7 +31,9 @@ import {
   type CheckRun,
   type FetchImpl,
 } from './github-rest.js';
+import { extractCampaignCycleMarker } from './github-pr.js';
 import * as featureStore from '../stores/feature-store.js';
+import * as taskStore from '../stores/task-store.js';
 import { logger } from '../logger.js';
 
 /** Marker used to count attempts via comment listing — no extra DB column. */
@@ -81,6 +83,18 @@ export async function runRmReview(
       return { action: 'skip', reasons: ['PR not found'], checks: [], attempt: 0 };
     }
     throw err;
+  }
+  if (
+    extractCampaignCycleMarker(pr.body) ||
+    taskStore.findCampaignTaskByPullRequest(repo, prNumber)
+  ) {
+    return {
+      action: 'skip',
+      reasons: ['campaign-managed PR'],
+      checks: [],
+      attempt: 0,
+      headSha: pr.head.sha,
+    };
   }
 
   // 2. Fast skips — closed/merged/draft.

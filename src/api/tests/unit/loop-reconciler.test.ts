@@ -10,6 +10,7 @@ import { resetDb } from '../../src/stores/db.js';
 import * as workstreamStore from '../../src/stores/workstream-store.js';
 import * as featureStore from '../../src/stores/feature-store.js';
 import * as targetRepoStore from '../../src/stores/target-repo-store.js';
+import * as taskStore from '../../src/stores/task-store.js';
 import { reconcileTargetRepo, reconcileAllRepos } from '../../src/engine/loop-reconciler.js';
 
 beforeEach(() => {
@@ -287,6 +288,50 @@ describe('reconcileTargetRepo', () => {
     expect(res.prsReviewed).toBe(1);
     expect(rm).toHaveBeenCalledTimes(1);
     expect(rm).toHaveBeenCalledWith('owner/repo', 10);
+  });
+
+  it('does not send campaign-managed pull requests to the RM loop', async () => {
+    const task = taskStore.createTask(
+      'Campaign delivery',
+      'Autonomous delivery',
+      'owner/repo',
+      { campaignCycleId: 'campaign-cycle-1' },
+    );
+    taskStore.updateTask(task.id, { pullRequestNumber: 44 });
+    const rm = vi.fn();
+    const { fetchImpl } = makeFetch([
+      {
+        match: (m, u) => m === 'GET' && u === ISSUES_URL,
+        respond: () => ({ status: 200, body: [] }),
+      },
+      {
+        match: (m, u) => m === 'GET' && u === PULLS_URL,
+        respond: () => ({
+          status: 200,
+          body: [
+            {
+              number: 44,
+              state: 'open',
+              draft: false,
+              title: 'campaign',
+              html_url: 'x/44',
+              labels: [{ name: 'rm:review' }],
+              head: { sha: 'campaignsha' },
+            },
+          ],
+        }),
+      },
+    ]);
+
+    const result = await reconcileTargetRepo('owner/repo', null, {
+      fetchImpl,
+      spawnDevTask: vi.fn(),
+      runRmReview: rm,
+    });
+
+    expect(result.prsScanned).toBe(1);
+    expect(result.prsReviewed).toBe(0);
+    expect(rm).not.toHaveBeenCalled();
   });
 
   it('counts an error and continues when listIssuesByLabel fails', async () => {

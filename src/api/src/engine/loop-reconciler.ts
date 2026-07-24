@@ -29,6 +29,7 @@ import type { Server as SocketServer } from 'socket.io';
 import { v4 as uuid } from 'uuid';
 import { listIssuesByLabel, listPulls, type FetchImpl } from './github-rest.js';
 import { runRmReview } from './rm-review.js';
+import { extractCampaignCycleMarker } from './github-pr.js';
 import { extractFeatureIdMarker } from './pm-issue-flow.js';
 import * as featureStore from '../stores/feature-store.js';
 import { listTargetRepos } from '../stores/target-repo-store.js';
@@ -181,6 +182,16 @@ export async function reconcileTargetRepo(
       result.prsScanned++;
       if (pr.draft) continue;
       if (!pr.labels.some((l) => l.name === 'rm:review')) continue;
+      if (
+        extractCampaignCycleMarker(pr.body) ||
+        taskStore.findCampaignTaskByPullRequest(repo, pr.number)
+      ) {
+        logger.info(
+          { repo, prNumber: pr.number },
+          'reconciler: campaign-managed PR — skipping RM',
+        );
+        continue;
+      }
 
       // Use the SHA-scoped state_key so re-pushes (different SHA) get a fresh
       // review even via the reconciler.

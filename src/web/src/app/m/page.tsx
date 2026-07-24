@@ -20,6 +20,7 @@ interface WsRow {
   key: string;
   name: string;
   taskCount: number;
+  isCampaign: boolean;
 }
 
 interface RepoGroup {
@@ -63,7 +64,18 @@ export default function MobileRootPage() {
   }, [refresh]);
 
   const groups: RepoGroup[] = useMemo(() => {
-    const filtered = showInactive ? tasks : tasks.filter((t) => ACTIVE_STATUSES.has(t.status));
+    const campaignWorkstreamIds = new Set(
+      workstreams
+        .filter((workstream) => workstream.campaignCycleId)
+        .map((workstream) => workstream.id),
+    );
+    const filtered = showInactive
+      ? tasks
+      : tasks.filter(
+          (task) =>
+            campaignWorkstreamIds.has(task.workstreamId ?? '') ||
+            ACTIVE_STATUSES.has(task.status),
+        );
 
     const wsById = new Map(workstreams.map((w) => [w.id, w]));
     const wsByRepo = new Map<string, Workstream[]>();
@@ -91,8 +103,13 @@ export default function MobileRootPage() {
       m.set(key, (m.get(key) ?? 0) + 1);
     }
 
-    if (showInactive) {
-      for (const repo of wsByRepo.keys()) ensure(repo);
+    for (const [repo, repoWorkstreams] of wsByRepo) {
+      if (
+        showInactive ||
+        repoWorkstreams.some((workstream) => workstream.campaignCycleId)
+      ) {
+        ensure(repo);
+      }
     }
 
     const out: RepoGroup[] = [];
@@ -100,12 +117,22 @@ export default function MobileRootPage() {
       const rows: WsRow[] = [];
       const unassignedCount = m.get(UNASSIGNED_KEY) ?? 0;
       if (unassignedCount > 0 || showInactive) {
-        rows.push({ key: UNASSIGNED_KEY, name: '(unassigned)', taskCount: unassignedCount });
+        rows.push({
+          key: UNASSIGNED_KEY,
+          name: '(unassigned)',
+          taskCount: unassignedCount,
+          isCampaign: false,
+        });
       }
       for (const w of wsByRepo.get(repo) ?? []) {
         const c = m.get(w.id) ?? 0;
-        if (c === 0 && !showInactive) continue;
-        rows.push({ key: w.id, name: w.name, taskCount: c });
+        if (c === 0 && !showInactive && !w.campaignCycleId) continue;
+        rows.push({
+          key: w.id,
+          name: w.name,
+          taskCount: c,
+          isCampaign: Boolean(w.campaignCycleId),
+        });
       }
       rows.sort((a, b) => {
         if (a.key === UNASSIGNED_KEY) return -1;
@@ -232,6 +259,11 @@ export default function MobileRootPage() {
                             >
                               {w.name}
                             </span>
+                            {w.isCampaign && (
+                              <span className="rounded border border-purple-500/30 bg-purple-500/10 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-purple-300 shrink-0">
+                                Campaign
+                              </span>
+                            )}
                             <span className="inline-flex items-center justify-center min-w-[1.5rem] h-5 px-1.5 rounded-md border border-cyan-500/30 bg-cyan-500/10 text-[11px] text-cyan-300 shrink-0">
                               {w.taskCount}
                             </span>

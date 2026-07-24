@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { buildPullRequestDescription } from '../../src/engine/github-pr.js';
+import {
+  buildPullRequestDescription,
+  extractCampaignCycleMarker,
+} from '../../src/engine/github-pr.js';
 
 describe('buildPullRequestDescription', () => {
   it('should describe completed work without exposing the original user prompt', () => {
@@ -43,5 +46,16 @@ describe('buildPullRequestDescription', () => {
     expect(body).not.toContain('```evidence');
     expect(body).not.toContain('VERDICT:');
     expect(body.match(/`src\/api\/src\/routes\/tasks\.ts`/g)).toHaveLength(1);
+  });
+
+  it('should persist a machine-readable autonomous campaign marker', () => {
+    const body = buildPullRequestDescription({
+      implementationNotes: ['Implemented the accepted campaign proposal.'],
+      campaignCycleId: 'cycle-123',
+    });
+
+    expect(body).toContain('<!-- liliput:campaign-cycle=cycle-123 -->');
+    expect(extractCampaignCycleMarker(body)).toBe('cycle-123');
+    expect(extractCampaignCycleMarker('ordinary PR')).toBeUndefined();
   });
 });

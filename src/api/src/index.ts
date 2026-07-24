@@ -16,6 +16,7 @@ import {
   interruptTaskAgentTurn,
   iterateTask,
   resumeCampaignTask,
+  shipTask,
   startBuild,
 } from './engine/agent-engine.js';
 import { runDeletingSweeper } from './routes/workstreams.js';
@@ -160,6 +161,7 @@ const stopCampaignCoordinator = startAutonomousCampaignCoordinator({
       taskId,
       'Resume the same autonomous campaign delivery attempt from its persisted branch and checkpoints.',
     ),
+  shipTask: (taskId) => shipTask(io, taskId),
   interruptTask: interruptTaskAgentTurn,
   findPullRequest: findPullRequestByHead,
 });

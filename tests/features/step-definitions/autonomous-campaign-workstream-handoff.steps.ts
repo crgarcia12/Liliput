@@ -258,7 +258,19 @@ function setTaskDeliveryState(
     devUrl: 'https://liliput.example/dev/cycle-3',
     pullRequestUrl: 'https://github.com/crgarcia12/Liliput/pull/104',
     pullRequestNumber: 104,
+    commitSha: 'reviewed-head',
     pipeline: completedPipeline(),
+    ...(status !== 'failed'
+      ? {
+          campaignReleaseReview: {
+            status: 'accepted' as const,
+            reviewedSha: 'reviewed-head',
+            validationHealthy: true,
+            reviewerRan: true,
+            reviewedAt: new Date(state.nowMs).toISOString(),
+          },
+        }
+      : {}),
     ...(errorMessage ? { errorMessage } : {}),
   });
   assert.ok(updated, 'campaign task update must succeed');

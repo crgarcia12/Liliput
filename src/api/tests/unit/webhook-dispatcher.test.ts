@@ -20,6 +20,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { resetDb } from '../../src/stores/db.js';
 import * as workstreamStore from '../../src/stores/workstream-store.js';
 import * as featureStore from '../../src/stores/feature-store.js';
+import * as taskStore from '../../src/stores/task-store.js';
 import { createWebhookDispatcher } from '../../src/engine/webhook-dispatcher.js';
 import { getDb } from '../../src/stores/db.js';
 
@@ -327,6 +328,41 @@ describe('createWebhookDispatcher', () => {
           pull_request: { number: 999, draft: false, head: { sha: 'ddd' } },
         },
       });
+      expect(listJobs()).toHaveLength(0);
+    });
+
+    it('skips campaign-managed pull requests even if RM labels are present', async () => {
+      seedFeatureWithPr();
+      const task = taskStore.createTask(
+        'Campaign delivery',
+        'Autonomous delivery',
+        'owner/repo',
+        { campaignCycleId: 'campaign-cycle-1' },
+      );
+      taskStore.updateTask(task.id, { pullRequestNumber: 33 });
+      const rm = vi.fn();
+      const dispatch = createWebhookDispatcher(fakeIo, {
+        spawnDevTask: vi.fn(),
+        runRmReview: rm,
+      });
+
+      await dispatch({
+        deliveryId: 'campaign-pr',
+        event: 'pull_request',
+        action: 'labeled',
+        repository: 'owner/repo',
+        payload: {
+          action: 'labeled',
+          label: { name: 'rm:review' },
+          pull_request: {
+            number: 33,
+            draft: false,
+            head: { sha: 'campaignsha' },
+          },
+        },
+      });
+
+      expect(rm).not.toHaveBeenCalled();
       expect(listJobs()).toHaveLength(0);
     });
 

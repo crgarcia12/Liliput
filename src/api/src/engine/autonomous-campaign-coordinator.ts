@@ -4,6 +4,7 @@ import type {
   AutonomousCampaignDeliveryErrorCode,
   AutonomousCampaignDeliveryOutcome,
   AutonomousCampaignCoordinatorTickResult,
+  AutonomousCampaignJsonObject,
   AutonomousCampaignReasoningEffort,
   Task,
   Workstream,
@@ -15,7 +16,20 @@ import {
   AUTONOMOUS_CAMPAIGN_TASK_NOT_FOUND,
 } from '../../../shared/types/autonomous-campaign-delivery.js';
 import type { AcceptedCampaignProposal } from '../../../shared/types/autonomous-campaign-proposal.js';
-import type { PullRequest } from './github-pr.js';
+import {
+  markPullRequestReady as markGitHubPullRequestReady,
+  type PullRequest,
+} from './github-pr.js';
+import {
+  getPullRequest as getGitHubPullRequest,
+  getRepositoryBranchSha,
+  isCommitReachableFromBranch,
+  listCheckRunsForRef,
+  mergePullRequest as mergeGitHubPullRequest,
+  type CheckRun,
+  type MergeResult,
+  type PullRequestData,
+} from './github-rest.js';
 import { logger } from '../logger.js';
 import * as campaignStore from '../stores/autonomous-campaign-store.js';
 import { getEffectivePrice } from '../stores/pricing-store.js';
@@ -34,6 +48,10 @@ import { getPodId } from './pod-identity.js';
 const DEFAULT_COORDINATOR_INTERVAL_MS = 5_000;
 const DEFAULT_COORDINATOR_INITIAL_DELAY_MS = 30_000;
 const DEFAULT_COORDINATOR_LEASE_TTL_MS = 60_000;
+const CHECK_DISCOVERY_SETTLE_MS = parseInt(
+  process.env['CAMPAIGN_CHECK_DISCOVERY_SETTLE_MS'] ?? '30000',
+  10,
+);
 
 function pendingUsageCostUsd(
   usage: campaignStore.AutonomousCampaignPendingUsage,
@@ -103,6 +121,33 @@ export interface CampaignCoordinatorOptions {
     branch: string,
     baseBranch: string,
   ) => Promise<PullRequest | undefined>;
+  shipTask?: (taskId: string) => Promise<unknown>;
+  markPullRequestReady?: (
+    repository: string,
+    pullRequestNumber: number,
+  ) => Promise<void>;
+  getPullRequest?: (
+    repository: string,
+    pullRequestNumber: number,
+  ) => Promise<PullRequestData>;
+  listCheckRuns?: (
+    repository: string,
+    ref: string,
+  ) => Promise<CheckRun[]>;
+  mergePullRequest?: (
+    repository: string,
+    pullRequestNumber: number,
+    headSha: string,
+  ) => Promise<MergeResult>;
+  getBaseBranchSha?: (
+    repository: string,
+    baseBranch: string,
+  ) => Promise<string>;
+  isCommitReachableFromBaseBranch?: (
+    repository: string,
+    commitSha: string,
+    baseBranch: string,
+  ) => Promise<boolean>;
   prepareProposal?: (
     campaign: AutonomousCampaign,
     cycle: AutonomousCampaignCycle,
@@ -333,14 +378,49 @@ function recoverTask(cycle: AutonomousCampaignCycle): Task | undefined {
   return taskStore.getTaskByCampaignCycleId(cycle.id);
 }
 
-function recoverWorkstream(
+function campaignWorkstreamName(
+  campaign: AutonomousCampaign,
   cycle: AutonomousCampaignCycle,
-): Workstream | undefined {
-  if (cycle.workstreamId) {
-    const byId = workstreamStore.getWorkstream(cycle.workstreamId);
-    if (byId) return byId;
-  }
-  return workstreamStore.getWorkstreamByCampaignCycleId(cycle.id);
+  title: string,
+): string {
+  return `[Campaign ${campaign.repository} #${cycle.sequence}] ${title}`;
+}
+
+function taskPassedReleaseReview(task: Task): boolean {
+  if (!task.pipeline) return false;
+  const review = task.campaignReleaseReview;
+  const pipelineComplete = Object.values(task.pipeline.stages).every(
+    (status) => status === 'done' || status === 'skipped',
+  );
+  return (
+    pipelineComplete &&
+    review?.status === 'accepted' &&
+    review.reviewerRan &&
+    review.validationHealthy &&
+    review.reviewedSha === task.commitSha &&
+    (task.pendingReviewerFeedback?.length ?? 0) === 0 &&
+    task.pullRequestNumber !== undefined
+  );
+}
+
+function checksPassed(checks: CheckRun[]): boolean {
+  return checks.every(
+    (check) =>
+      check.status === 'completed' &&
+      (check.conclusion === 'success' ||
+        check.conclusion === 'neutral' ||
+        check.conclusion === 'skipped'),
+  );
+}
+
+function pullRequestReadyAtMs(
+  cycle: AutonomousCampaignCycle,
+  nowMs: number,
+): number {
+  const value = cycle.releaseGates?.['pullRequestReadyAt'];
+  if (typeof value !== 'string') return nowMs;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : nowMs;
 }
 
 export function createAutonomousCampaignCoordinator(
@@ -373,6 +453,40 @@ export function createAutonomousCampaignCoordinator(
     });
   const cancelProposal =
     options.cancelProposal ?? cancelAutonomousCampaignProposal;
+  const markPullRequestReady =
+    options.markPullRequestReady ?? markGitHubPullRequestReady;
+  const getPullRequest =
+    options.getPullRequest ??
+    ((repository: string, pullRequestNumber: number) =>
+      getGitHubPullRequest({
+        repo: repository,
+        number: pullRequestNumber,
+      }));
+  const listCheckRuns =
+    options.listCheckRuns ??
+    ((repository: string, ref: string) =>
+      listCheckRunsForRef({ repo: repository, ref }));
+  const mergePullRequest =
+    options.mergePullRequest ??
+    ((repository: string, pullRequestNumber: number, headSha: string) =>
+      mergeGitHubPullRequest({
+        repo: repository,
+        number: pullRequestNumber,
+        sha: headSha,
+        mergeMethod: 'squash',
+      }));
+  const getBaseBranchSha =
+    options.getBaseBranchSha ??
+    ((repository: string, baseBranch: string) =>
+      getRepositoryBranchSha({ repo: repository, branch: baseBranch }));
+  const isCommitReachableFromBaseBranch =
+    options.isCommitReachableFromBaseBranch ??
+    ((repository: string, commitSha: string, baseBranch: string) =>
+      isCommitReachableFromBranch({
+        repo: repository,
+        commitSha,
+        branch: baseBranch,
+      }));
 
   const handoffAcceptedProposal = async (
     campaignId: string,
@@ -393,18 +507,14 @@ export function createAutonomousCampaignCoordinator(
     }
     const proposal = parseAcceptedProposal(cycle);
 
-    let workstream = recoverWorkstream(cycle);
-    let workstreamCreated = false;
-    if (!workstream) {
-      const result = workstreamStore.ensureCampaignWorkstream({
-        campaignCycleId: cycle.id,
-        repository: campaign.repository,
-        name: proposal.title,
-        description: proposal.problem,
-      });
-      workstream = result.workstream;
-      workstreamCreated = result.created;
-    }
+    const workstreamResult = workstreamStore.ensureCampaignWorkstream({
+      campaignCycleId: cycle.id,
+      repository: campaign.repository,
+      name: campaignWorkstreamName(campaign, cycle, proposal.title),
+      description: proposal.problem,
+    });
+    const workstream = workstreamResult.workstream;
+    const workstreamCreated = workstreamResult.created;
     if (cycle.workstreamId !== workstream.id) {
       cycle = campaignStore.updateCycleDelivery({
         campaignId,
@@ -516,12 +626,19 @@ export function createAutonomousCampaignCoordinator(
     cycleId: string,
   ): Promise<CampaignDeliveryReconciliation> => {
     const nowMs = options.now();
-    const { cycle } = requireOwnedCampaignCycle(
+    const { campaign, cycle } = requireOwnedCampaignCycle(
       campaignId,
       cycleId,
       options.owner,
       nowMs,
     );
+    const proposal = parseAcceptedProposal(cycle);
+    const workstream = workstreamStore.ensureCampaignWorkstream({
+      campaignCycleId: cycle.id,
+      repository: campaign.repository,
+      name: campaignWorkstreamName(campaign, cycle, proposal.title),
+      description: proposal.problem,
+    }).workstream;
     let task = recoverTask(cycle);
     if (!task) {
       throw new AutonomousCampaignDeliveryError(
@@ -552,14 +669,23 @@ export function createAutonomousCampaignCoordinator(
       }
     }
     task = taskStore.getTask(task.id) ?? task;
-    const workstream = recoverWorkstream(cycle);
+    if (
+      task.status === 'failed' &&
+      taskPassedReleaseReview(task)
+    ) {
+      task =
+        taskStore.updateTask(task.id, {
+          status: 'review',
+          errorMessage: undefined,
+        }) ?? task;
+    }
     let outcome: AutonomousCampaignDeliveryOutcome = 'active';
     let status: AutonomousCampaignCycle['status'] = 'delivering';
     let lastError: string | undefined;
-    if (task.status === 'review') {
+    if (task.status === 'review' && taskPassedReleaseReview(task)) {
       outcome = 'ready-to-release';
       status = 'ready_to_release';
-    } else if (task.status === 'completed') {
+    } else if (task.status === 'completed' && taskPassedReleaseReview(task)) {
       outcome = 'awaiting-merge-confirmation';
       status = 'ready_to_release';
     } else if (
@@ -591,9 +717,331 @@ export function createAutonomousCampaignCoordinator(
       ...(task.pullRequestNumber !== undefined
         ? { pullRequestNumber: task.pullRequestNumber }
         : {}),
-      ...(lastError ? { lastError } : {}),
+      lastError: lastError ?? null,
     });
     return { outcome, cycle: updated, task };
+  };
+
+  const confirmMergedCycle = async (
+    campaign: AutonomousCampaign,
+    cycle: AutonomousCampaignCycle,
+    task: Task,
+    mergeSha: string,
+  ): Promise<CampaignDeliveryReconciliation> => {
+    const baseBranchSha = await getBaseBranchSha(
+      campaign.repository,
+      campaign.baseBranch,
+    );
+    const baseBranchConfirmed =
+      baseBranchSha === mergeSha ||
+      (await isCommitReachableFromBaseBranch(
+        campaign.repository,
+        mergeSha,
+        campaign.baseBranch,
+      ));
+    const releaseGates: AutonomousCampaignJsonObject = {
+      ...(cycle.releaseGates ?? {}),
+      baseBranch: campaign.baseBranch,
+      baseBranchSha,
+      baseBranchConfirmed,
+      mergeSha,
+      confirmedAt: new Date(options.now()).toISOString(),
+    };
+    if (!baseBranchConfirmed) {
+      const releasing = campaignStore.updateCycleDelivery({
+        campaignId: campaign.id,
+        cycleId: cycle.id,
+        leaseOwner: options.owner,
+        nowMs: options.now(),
+        expectedStatus: cycle.status,
+        status: 'releasing',
+        mergeSha,
+        releaseGates,
+        lastError: null,
+      });
+      return {
+        outcome: 'awaiting-merge-confirmation',
+        cycle: releasing,
+        task,
+      };
+    }
+
+    const completedAt = new Date(options.now()).toISOString();
+    const nextRetryAt = new Date(
+      options.now() + campaign.successCooldownMinutes * 60_000,
+    ).toISOString();
+    const cooling = campaignStore.updateCycleDelivery({
+      campaignId: campaign.id,
+      cycleId: cycle.id,
+      leaseOwner: options.owner,
+      nowMs: options.now(),
+      expectedStatus: cycle.status,
+      status: 'cooldown',
+      mergeSha,
+      releaseGates,
+      completedAt,
+      nextRetryAt,
+      lastError: null,
+    });
+    return { outcome: 'cooldown', cycle: cooling, task };
+  };
+
+  const releaseCycle = async (
+    campaignId: string,
+    cycleId: string,
+  ): Promise<CampaignDeliveryReconciliation> => {
+    const owned = requireOwnedCampaignCycle(
+      campaignId,
+      cycleId,
+      options.owner,
+      options.now(),
+    );
+    let { campaign, cycle } = owned;
+    let task = recoverTask(cycle);
+    if (!task) {
+      throw new AutonomousCampaignDeliveryError(
+        AUTONOMOUS_CAMPAIGN_TASK_NOT_FOUND,
+        `No campaign task exists for release cycle ${cycleId}`,
+      );
+    }
+    if (!taskPassedReleaseReview(task)) {
+      const pendingReview: AutonomousCampaignJsonObject = {
+        status: 'pending',
+        source: 'pipeline-reviewer',
+        taskId: task.id,
+        evaluatedAt: new Date(options.now()).toISOString(),
+      };
+      const waiting = campaignStore.updateCycleDelivery({
+        campaignId,
+        cycleId,
+        leaseOwner: options.owner,
+        nowMs: options.now(),
+        expectedStatus: cycle.status,
+        status: 'ready_to_release',
+        reviewDecision: pendingReview,
+        lastError: null,
+      });
+      return { outcome: 'ready-to-release', cycle: waiting, task };
+    }
+
+    const acceptedReview = task.campaignReleaseReview!;
+    const reviewDecision: AutonomousCampaignJsonObject = {
+      status: 'accepted',
+      source: 'pipeline-reviewer',
+      taskId: task.id,
+      reviewedAt: acceptedReview.reviewedAt,
+      reviewedHeadSha: acceptedReview.reviewedSha,
+    };
+    if (task.status === 'review' && options.shipTask) {
+      await options.shipTask(task.id);
+      task = taskStore.getTask(task.id) ?? task;
+    }
+    const pullRequestNumber =
+      task.pullRequestNumber ?? cycle.pullRequestNumber;
+    if (pullRequestNumber === undefined) {
+      const waiting = campaignStore.updateCycleDelivery({
+        campaignId,
+        cycleId,
+        leaseOwner: options.owner,
+        nowMs: options.now(),
+        expectedStatus: cycle.status,
+        status: 'ready_to_release',
+        reviewDecision,
+        lastError: 'Campaign release is waiting for a pull request number',
+      });
+      return { outcome: 'ready-to-release', cycle: waiting, task };
+    }
+    const pullRequest = await getPullRequest(
+      campaign.repository,
+      pullRequestNumber,
+    );
+    const reviewedHeadSha = acceptedReview.reviewedSha;
+    const checks = await listCheckRuns(
+      campaign.repository,
+      pullRequest.head.sha,
+    );
+    const readyAtMs = pullRequestReadyAtMs(cycle, options.now());
+    const pullRequestReadyAt = new Date(readyAtMs).toISOString();
+    const checkDiscoverySettled =
+      checks.length > 0 ||
+      options.now() - readyAtMs >= CHECK_DISCOVERY_SETTLE_MS;
+    const pipelineComplete = taskPassedReleaseReview(task);
+    const reviewerAccepted = reviewDecision['status'] === 'accepted';
+    const baseBranchMatches =
+      pullRequest.base.ref === campaign.baseBranch;
+    const reviewedHeadMatches =
+      reviewedHeadSha === pullRequest.head.sha;
+    const passingChecks =
+      checkDiscoverySettled && checksPassed(checks);
+    if (pullRequest.merged) {
+      const mergeSha = pullRequest.merge_commit_sha ?? cycle.mergeSha;
+      const mergeShaMatches =
+        !cycle.mergeSha || cycle.mergeSha === pullRequest.merge_commit_sha;
+      const mergedGatesPassed =
+        pipelineComplete &&
+        reviewerAccepted &&
+        baseBranchMatches &&
+        reviewedHeadMatches &&
+        passingChecks &&
+        mergeShaMatches;
+      const releaseGates: AutonomousCampaignJsonObject = {
+        pipelineComplete,
+        reviewerAccepted,
+        pullRequestReady: true,
+        pullRequestOpen: false,
+        pullRequestMerged: true,
+        baseBranchMatches,
+        reviewedHeadMatches,
+        checksPassing: passingChecks,
+        checkDiscoverySettled,
+        mergeShaMatches,
+        checkRunCount: checks.length,
+        pullRequestReadyAt,
+        reviewedHeadSha: pullRequest.head.sha,
+        evaluatedAt: new Date(options.now()).toISOString(),
+        baseBranchConfirmed: false,
+      };
+      if (!mergeSha || !mergedGatesPassed) {
+        const waiting = campaignStore.updateCycleDelivery({
+          campaignId,
+          cycleId,
+          leaseOwner: options.owner,
+          nowMs: options.now(),
+          expectedStatus: cycle.status,
+          status: 'releasing',
+          reviewDecision,
+          releaseGates,
+          lastError: !mergeSha
+            ? 'Merged pull request did not expose its merge commit SHA'
+            : 'Merged pull request does not match the accepted campaign release evidence',
+        });
+        return {
+          outcome: 'awaiting-merge-confirmation',
+          cycle: waiting,
+          task,
+        };
+      }
+      cycle = campaignStore.updateCycleDelivery({
+        campaignId,
+        cycleId,
+        leaseOwner: options.owner,
+        nowMs: options.now(),
+        expectedStatus: cycle.status,
+        status: 'releasing',
+        reviewDecision,
+        releaseGates,
+        mergeSha,
+        lastError: null,
+      });
+      return confirmMergedCycle(campaign, cycle, task, mergeSha);
+    }
+    if (cycle.mergeSha) {
+      const waiting = campaignStore.updateCycleDelivery({
+        campaignId,
+        cycleId,
+        leaseOwner: options.owner,
+        nowMs: options.now(),
+        expectedStatus: cycle.status,
+        status: 'releasing',
+        reviewDecision,
+        lastError:
+          'Campaign cycle has a merge SHA but GitHub does not report the pull request as merged',
+      });
+      return {
+        outcome: 'awaiting-merge-confirmation',
+        cycle: waiting,
+        task,
+      };
+    }
+    if (pullRequest.draft) {
+      await markPullRequestReady(campaign.repository, pullRequestNumber);
+      const releaseGates: AutonomousCampaignJsonObject = {
+        pullRequestReady: false,
+        checksEvaluated: false,
+        reviewedHeadSha: pullRequest.head.sha,
+        pullRequestReadyAt: new Date(options.now()).toISOString(),
+        evaluatedAt: new Date(options.now()).toISOString(),
+      };
+      const waiting = campaignStore.updateCycleDelivery({
+        campaignId,
+        cycleId,
+        leaseOwner: options.owner,
+        nowMs: options.now(),
+        expectedStatus: cycle.status,
+        status: 'ready_to_release',
+        reviewDecision,
+        releaseGates,
+        lastError: null,
+      });
+      return { outcome: 'ready-to-release', cycle: waiting, task };
+    }
+
+    const pullRequestOpen = pullRequest.state === 'open';
+    const pullRequestMergeable =
+      pullRequest.mergeable === true &&
+      pullRequest.mergeable_state !== 'dirty' &&
+      pullRequest.mergeable_state !== 'unknown';
+    const allGatesPassed =
+      pipelineComplete &&
+      reviewerAccepted &&
+      pullRequestOpen &&
+      baseBranchMatches &&
+      reviewedHeadMatches &&
+      pullRequestMergeable &&
+      passingChecks;
+    const releaseGates: AutonomousCampaignJsonObject = {
+      pipelineComplete,
+      reviewerAccepted,
+      pullRequestReady: true,
+      pullRequestOpen,
+      baseBranchMatches,
+      reviewedHeadMatches,
+      pullRequestMergeable,
+      checksPassing: passingChecks,
+      checkDiscoverySettled,
+      checkRunCount: checks.length,
+      reviewedHeadSha: pullRequest.head.sha,
+      pullRequestReadyAt,
+      evaluatedAt: new Date(options.now()).toISOString(),
+      baseBranchConfirmed: false,
+    };
+    cycle = campaignStore.updateCycleDelivery({
+      campaignId,
+      cycleId,
+      leaseOwner: options.owner,
+      nowMs: options.now(),
+      expectedStatus: cycle.status,
+      status: allGatesPassed ? 'releasing' : 'ready_to_release',
+      reviewDecision,
+      releaseGates,
+      lastError: null,
+    });
+    if (!allGatesPassed) {
+      return { outcome: 'ready-to-release', cycle, task };
+    }
+
+    const merge = await mergePullRequest(
+      campaign.repository,
+      pullRequestNumber,
+      pullRequest.head.sha,
+    );
+    if (!merge.merged || !merge.sha) {
+      throw new Error(
+        `GitHub did not merge campaign pull request #${pullRequestNumber}: ${merge.message}`,
+      );
+    }
+    cycle = campaignStore.updateCycleDelivery({
+      campaignId,
+      cycleId,
+      leaseOwner: options.owner,
+      nowMs: options.now(),
+      expectedStatus: 'releasing',
+      status: 'releasing',
+      mergeSha: merge.sha,
+      lastError: null,
+    });
+    campaign = campaignStore.getCampaign(campaignId) ?? campaign;
+    return confirmMergedCycle(campaign, cycle, task, merge.sha);
   };
 
   const renewLease = async (
@@ -832,9 +1280,7 @@ export function createAutonomousCampaignCoordinator(
         !pendingCycle.proposalFingerprint ||
         pendingCycle.status === 'succeeded' ||
         pendingCycle.status === 'stopped' ||
-        pendingCycle.status === 'paused' ||
-        pendingCycle.status === 'cooldown' ||
-        pendingCycle.status === 'releasing'
+        pendingCycle.status === 'paused'
       ) {
         continue;
       }
@@ -880,11 +1326,47 @@ export function createAutonomousCampaignCoordinator(
         cycle.status === 'succeeded' ||
         cycle.status === 'stopped' ||
         cycle.status === 'paused' ||
-        cycle.status === 'cooldown' ||
-        cycle.status === 'waiting_for_external' ||
-        cycle.status === 'releasing'
+        cycle.status === 'waiting_for_external'
       ) {
         continue;
+      }
+      lastProcessedCampaignId = candidate.id;
+      if (cycle.status === 'cooldown') {
+        const cooldownDueAt = cycle.nextRetryAt
+          ? Date.parse(cycle.nextRetryAt)
+          : Number.POSITIVE_INFINITY;
+        const nextBaseSha =
+          Number.isFinite(cooldownDueAt) && cooldownDueAt <= options.now()
+            ? await getBaseBranchSha(
+                candidate.repository,
+                candidate.baseBranch,
+              )
+            : undefined;
+        const advanced = campaignStore.advanceCampaignAfterCooldown({
+          campaignId: candidate.id,
+          cycleId: cycle.id,
+          leaseOwner: options.owner,
+          nowMs: options.now(),
+          ...(nextBaseSha ? { baseSha: nextBaseSha } : {}),
+        });
+        return {
+          outcome: advanced.advanced ? 'idle' : 'cooldown',
+          campaignId: candidate.id,
+          cycleId: advanced.nextCycle?.id ?? cycle.id,
+          ...(cycle.taskId ? { taskId: cycle.taskId } : {}),
+        };
+      }
+      if (
+        cycle.status === 'ready_to_release' ||
+        cycle.status === 'releasing'
+      ) {
+        const released = await releaseCycle(candidate.id, cycle.id);
+        return {
+          outcome: released.outcome,
+          campaignId: candidate.id,
+          cycleId: cycle.id,
+          taskId: released.task.id,
+        };
       }
       if (
         cycle.status === 'delivering' &&
@@ -899,7 +1381,6 @@ export function createAutonomousCampaignCoordinator(
           nowMs: options.now(),
         });
       }
-      lastProcessedCampaignId = candidate.id;
       const linkedTask = recoverTask(cycle);
       if (
         (cycle.status === 'proposing' || cycle.status === 'delivering') &&
@@ -949,6 +1430,7 @@ export function createAutonomousCampaignCoordinator(
 export interface StartAutonomousCampaignCoordinatorOptions {
   startTaskPipeline: (taskId: string) => void;
   resumeTaskPipeline?: (taskId: string) => void;
+  shipTask?: (taskId: string) => Promise<unknown>;
   interruptTask?: CampaignCoordinatorOptions['interruptTask'];
   findPullRequest?: CampaignCoordinatorOptions['findPullRequest'];
   owner?: string;
@@ -986,6 +1468,7 @@ export function startAutonomousCampaignCoordinator(
     ...(options.resumeTaskPipeline
       ? { resumeTaskPipeline: options.resumeTaskPipeline }
       : {}),
+    ...(options.shipTask ? { shipTask: options.shipTask } : {}),
     ...(options.interruptTask
       ? { interruptTask: options.interruptTask }
       : {}),
