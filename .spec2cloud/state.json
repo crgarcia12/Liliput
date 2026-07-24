@@ -101,6 +101,12 @@
       "status": "done"
     },
     {
+      "id": "bugfix-003",
+      "type": "bugfix",
+      "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
+      "status": "done"
+    },
+    {
       "id": "ext-007",
       "type": "extension",
       "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
@@ -2005,7 +2011,42 @@
       },
       "verification": {
         "deployment": {
-          "status": "pending"
+          "status": "success",
+          "workflow": "https://github.com/crgarcia12/Liliput/actions/runs/30100556309",
+          "commit": "33f7bc32c9b47a9a250b405e219a5ec0ebc2c470",
+          "apiImage": "crgarliliputacr.azurecr.io/liliput-api:33f7bc32c9b47a9a250b405e219a5ec0ebc2c470"
+        },
+        "mainCi": {
+          "status": "success",
+          "workflow": "https://github.com/crgarcia12/Liliput/actions/runs/30100556272"
+        },
+        "productionEndpoints": {
+          "root": 200,
+          "apiHealth": 200,
+          "login": 200,
+          "https": true
+        },
+        "cluster": {
+          "readyNodes": 4,
+          "totalNodes": 4,
+          "api": "1/1",
+          "web": "1/1",
+          "gateway": "1/1",
+          "criticalLogMatches": 0
+        },
+        "productionPlaywright": {
+          "status": "pass",
+          "tests": 6
+        },
+        "campaignRecovery": {
+          "status": "revalidation-started",
+          "campaignId": "ea8d97fc-f17b-4ba1-bea5-40370617f090",
+          "cycleId": "e8f856a4-1260-4811-9034-c4ff01986b3c",
+          "staleReviewedHead": "d06a70601c2bdd61e89609e889782a3e0ccc3655",
+          "livePullRequestHead": "deb575e2b6706c22b98d11c53037f5865344d4b7",
+          "reviewInvalidated": true,
+          "revalidationRequired": true,
+          "observedAt": "2026-07-24T14:28:21Z"
         }
       },
       "humanApproval": {
@@ -2013,6 +2054,39 @@
         "approvalSource": "explicit-user-expectation-and-unattended-continuation"
       },
       "completedAt": "2026-07-24T14:14:09Z"
+    },
+    "bugfix-003": {
+      "type": "bugfix",
+      "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
+      "description": "Preserve a repository-supplied Dockerfile.liliput instead of overwriting it with a generic Node entrypoint during preview rebuilds.",
+      "status": "done",
+      "testFile": "src/api/tests/unit/dockerfile-detector.test.ts",
+      "fixedFiles": [
+        "src/api/src/engine/dockerfile-detector.ts"
+      ],
+      "acceptanceCriteria": [
+        "specs/liliput/frd-autonomous-workstream-campaigns.md:362",
+        "specs/liliput/frd-autonomous-workstream-campaigns.md:481"
+      ],
+      "regression": {
+        "api": {
+          "status": "pass",
+          "files": 47,
+          "tests": 504
+        },
+        "apiBuild": "pass",
+        "apiLint": "pass"
+      },
+      "verification": {
+        "deployment": {
+          "status": "pending"
+        }
+      },
+      "humanApproval": {
+        "status": "approved",
+        "approvalSource": "explicit-user-expectation-and-unattended-continuation"
+      },
+      "completedAt": "2026-07-24T14:35:18Z"
     },
     "ext-007": {
       "type": "extension",
