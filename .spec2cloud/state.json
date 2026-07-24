@@ -107,6 +107,12 @@
       "status": "done"
     },
     {
+      "id": "bugfix-004",
+      "type": "bugfix",
+      "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
+      "status": "done"
+    },
+    {
       "id": "ext-007",
       "type": "extension",
       "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
@@ -2079,7 +2085,14 @@
       },
       "verification": {
         "deployment": {
-          "status": "pending"
+          "status": "success",
+          "workflow": "https://github.com/crgarcia12/Liliput/actions/runs/30102019191",
+          "commit": "d97f7d6dd527f5c09dfdb8687afe336af4715478",
+          "apiImage": "crgarliliputacr.azurecr.io/liliput-api:d97f7d6dd527f5c09dfdb8687afe336af4715478"
+        },
+        "mainCi": {
+          "status": "success",
+          "workflow": "https://github.com/crgarcia12/Liliput/actions/runs/30102019287"
         }
       },
       "humanApproval": {
@@ -2087,6 +2100,44 @@
         "approvalSource": "explicit-user-expectation-and-unattended-continuation"
       },
       "completedAt": "2026-07-24T14:35:18Z"
+    },
+    "bugfix-004": {
+      "type": "bugfix",
+      "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
+      "description": "Automatically resume a campaign coder when the release reviewer requests changes, without starting duplicate task pipelines.",
+      "status": "done",
+      "testFile": "src/api/tests/unit/autonomous-campaign-workstream-handoff.test.ts",
+      "fixedFiles": [
+        "src/api/src/engine/autonomous-campaign-coordinator.ts"
+      ],
+      "acceptanceCriteria": [
+        "specs/liliput/frd-autonomous-workstream-campaigns.md:484",
+        "specs/liliput/frd-autonomous-workstream-campaigns.md:486",
+        "specs/liliput/frd-autonomous-workstream-campaigns.md:489"
+      ],
+      "regression": {
+        "campaignHandoff": {
+          "status": "pass",
+          "tests": 25
+        },
+        "api": {
+          "status": "pass",
+          "files": 47,
+          "tests": 505
+        },
+        "apiBuild": "pass",
+        "apiLint": "pass"
+      },
+      "verification": {
+        "deployment": {
+          "status": "pending"
+        }
+      },
+      "humanApproval": {
+        "status": "approved",
+        "approvalSource": "explicit-user-expectation-and-unattended-continuation"
+      },
+      "completedAt": "2026-07-24T14:50:34Z"
     },
     "ext-007": {
       "type": "extension",

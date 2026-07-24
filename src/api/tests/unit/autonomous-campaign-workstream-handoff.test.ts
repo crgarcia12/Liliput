@@ -751,6 +751,60 @@ describe('autonomous campaign workstream handoff', () => {
     expect(reconciled.cycle.status).toBe('delivering');
   });
 
+  it('should resume the coder when a campaign reviewer requests changes', async () => {
+    // Validates: frd-autonomous-workstream-campaigns.md, AC 486 and AC 489.
+    const accepted = createAcceptedCycle();
+    let taskPipelineActive = false;
+    const resumeTaskPipeline = vi.fn(() => {
+      taskPipelineActive = true;
+    });
+    const coordinator = createCoordinator({
+      resumeTaskPipeline,
+      isTaskPipelineActive: () => taskPipelineActive,
+    });
+    const handoff = await coordinator.handoffAcceptedProposal(
+      accepted.campaignId,
+      accepted.cycleId,
+    );
+    setTaskDeliveryState(handoff.task.id, 'review');
+    updateTask(handoff.task.id, {
+      campaignReleaseReview: {
+        status: 'changes-requested',
+        reviewedSha: 'reviewed-head',
+        validationHealthy: true,
+        reviewerRan: true,
+        reviewedAt: new Date(nowMs).toISOString(),
+      },
+      pendingReviewerFeedback: [
+        {
+          id: 'review-feedback-1',
+          kind: 'deploy',
+          text: 'Require FRD IDs to be attached to executable scenarios.',
+          sha: 'reviewed-head',
+          createdAt: new Date(nowMs).toISOString(),
+          attempts: 0,
+        },
+      ],
+    });
+
+    expect(
+      await coordinator.reconcileDelivery(
+        accepted.campaignId,
+        accepted.cycleId,
+      ),
+    ).toMatchObject({
+      outcome: 'active',
+      cycle: { status: 'delivering' },
+    });
+    expect(resumeTaskPipeline).toHaveBeenCalledWith(handoff.task.id);
+
+    await coordinator.reconcileDelivery(
+      accepted.campaignId,
+      accepted.cycleId,
+    );
+    expect(resumeTaskPipeline).toHaveBeenCalledTimes(1);
+  });
+
   it('should recover a failed task with a completed pipeline and pull request', async () => {
     const accepted = createAcceptedCycle();
     const coordinator = createCoordinator();
