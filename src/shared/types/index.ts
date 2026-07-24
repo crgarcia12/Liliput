@@ -151,6 +151,7 @@ export interface Task {
    *  Once a kind hits the cap (default 3), the reviewer's next feedback is
    *  shown to the user as unresolved instead of being auto-injected. */
   reviewerAttempts?: Partial<Record<ReviewerFeedbackKind, number>>;
+  campaignReleaseReview?: CampaignReleaseReview;
   agents: Agent[];
   chatHistory: ChatMessage[];
   activityHistory?: ActivityEntry[];
@@ -229,6 +230,18 @@ export interface PipelineState {
 /** What kind of action the reviewer was reviewing when it emitted feedback.
  *  Drives display, retry caps, and which prompt template was used. */
 export type ReviewerFeedbackKind = 'spec' | 'coder-initial' | 'coder-iter' | 'deploy' | 'plan';
+
+export interface CampaignReleaseReview {
+  status:
+    | 'accepted'
+    | 'changes-requested'
+    | 'validation-failed'
+    | 'not-run';
+  reviewedSha: string;
+  validationHealthy: boolean;
+  reviewerRan: boolean;
+  reviewedAt: string;
+}
 
 /** A single piece of feedback emitted by the reviewer. Lives on the Task
  *  until consumed by a follow-up coder turn (or surfaced to the user as

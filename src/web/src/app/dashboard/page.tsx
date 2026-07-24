@@ -127,9 +127,15 @@ export default function RequestsPage() {
   }
 
   const tree: RepoBucket[] = useMemo(() => {
+    const campaignWorkstreamIds = new Set(
+      workstreams
+        .filter((workstream) => workstream.campaignCycleId)
+        .map((workstream) => workstream.id),
+    );
     const filtered = showInactive
       ? tasks
       : tasks.filter((t) =>
+          campaignWorkstreamIds.has(t.workstreamId ?? '') ||
           ['clarifying', 'specifying', 'building', 'deploying', 'review', 'shipping'].includes(
             t.status,
           ),
@@ -144,14 +150,22 @@ export default function RequestsPage() {
     }
 
     const byRepo = new Map<string, Map<string, WsBucket>>();
-    const ensureRepo = (repo: string): Map<string, WsBucket> => {
+    const ensureRepo = (
+      repo: string,
+      includeInactiveWorkstreams = false,
+    ): Map<string, WsBucket> => {
       let m = byRepo.get(repo);
       if (!m) {
         m = new Map();
-        for (const w of wsByRepo.get(repo) ?? []) {
+        byRepo.set(repo, m);
+      }
+      for (const w of wsByRepo.get(repo) ?? []) {
+        if (
+          (includeInactiveWorkstreams || w.campaignCycleId) &&
+          !m.has(w.id)
+        ) {
           m.set(w.id, { key: w.id, name: w.name, workstream: w, tasks: [] });
         }
-        byRepo.set(repo, m);
       }
       return m;
     };
@@ -161,7 +175,17 @@ export default function RequestsPage() {
       const wsMap = ensureRepo(repo);
       const wsId = t.workstreamId;
       if (wsId && wsById.has(wsId)) {
-        const bucket = wsMap.get(wsId)!;
+        let bucket = wsMap.get(wsId);
+        if (!bucket) {
+          const workstream = wsById.get(wsId)!;
+          bucket = {
+            key: workstream.id,
+            name: workstream.name,
+            workstream,
+            tasks: [],
+          };
+          wsMap.set(wsId, bucket);
+        }
         bucket.tasks.push(t);
       } else {
         let bucket = wsMap.get(UNASSIGNED_KEY);
@@ -173,8 +197,13 @@ export default function RequestsPage() {
       }
     }
 
-    if (showInactive) {
-      for (const repo of wsByRepo.keys()) ensureRepo(repo);
+    for (const [repo, repoWorkstreams] of wsByRepo) {
+      if (
+        showInactive ||
+        repoWorkstreams.some((workstream) => workstream.campaignCycleId)
+      ) {
+        ensureRepo(repo, showInactive);
+      }
     }
 
     const result: RepoBucket[] = [];
@@ -204,9 +233,18 @@ export default function RequestsPage() {
   useEffect(() => {
     const newOnes = tree.map((b) => b.repo).filter((r) => !seenReposRef.current.has(r));
     if (newOnes.length === 0) return;
+    const campaignRepos = new Set(
+      tree
+        .filter((bucket) =>
+          bucket.workstreams.some((workstream) => workstream.workstream?.campaignCycleId),
+        )
+        .map((bucket) => bucket.repo),
+    );
     setCollapsedRepos((prev) => {
       const next = new Set(prev);
-      for (const r of newOnes) next.add(r);
+      for (const r of newOnes) {
+        if (!campaignRepos.has(r)) next.add(r);
+      }
       return next;
     });
     for (const r of newOnes) seenReposRef.current.add(r);
@@ -361,6 +399,11 @@ export default function RequestsPage() {
                             >
                               {bucket.name}
                             </span>
+                            {bucket.workstream?.campaignCycleId && (
+                              <span className="rounded border border-purple-500/30 bg-purple-500/10 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-purple-300">
+                                Campaign
+                              </span>
+                            )}
                             {bucket.workstream && (
                               <>
                                 <TokenBadge rollup={usage.workstreams[bucket.workstream.id]} compact />

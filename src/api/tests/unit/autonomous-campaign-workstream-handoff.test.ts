@@ -50,7 +50,8 @@ type CampaignDeliveryOutcome =
   | 'active'
   | 'ready-to-release'
   | 'failed'
-  | 'awaiting-merge-confirmation';
+  | 'awaiting-merge-confirmation'
+  | 'cooldown';
 
 interface CampaignDeliveryReconciliation {
   outcome: CampaignDeliveryOutcome;
@@ -88,6 +89,56 @@ interface CampaignCoordinatorOptions {
   now: () => number;
   startTaskPipeline: (taskId: string) => void;
   resumeTaskPipeline?: (taskId: string) => void;
+  shipTask?: (taskId: string) => Promise<void>;
+  markPullRequestReady?: (repository: string, pullRequestNumber: number) => Promise<void>;
+  getPullRequest?: (
+    repository: string,
+    pullRequestNumber: number,
+  ) => Promise<{
+    number: number;
+    state: 'open' | 'closed';
+    draft: boolean;
+    merged: boolean;
+    mergeable: boolean | null;
+    mergeable_state: string;
+    title: string;
+    head: { sha: string; ref: string };
+    base: { ref: string };
+    merge_commit_sha?: string | null;
+  }>;
+  listCheckRuns?: (
+    repository: string,
+    ref: string,
+  ) => Promise<
+    Array<{
+      name: string;
+      status: 'queued' | 'in_progress' | 'completed';
+      conclusion:
+        | 'success'
+        | 'failure'
+        | 'neutral'
+        | 'cancelled'
+        | 'timed_out'
+        | 'action_required'
+        | 'stale'
+        | 'skipped'
+        | null;
+    }>
+  >;
+  mergePullRequest?: (
+    repository: string,
+    pullRequestNumber: number,
+    headSha: string,
+  ) => Promise<{ merged: boolean; sha: string; message: string }>;
+  getBaseBranchSha?: (
+    repository: string,
+    baseBranch: string,
+  ) => Promise<string>;
+  isCommitReachableFromBaseBranch?: (
+    repository: string,
+    commitSha: string,
+    baseBranch: string,
+  ) => Promise<boolean>;
   prepareProposal?: (
     campaign: AutonomousCampaign,
     cycle: AutonomousCampaignCycle,
@@ -268,7 +319,10 @@ function setTaskDeliveryState(
   taskId: string,
   status: Task['status'],
   errorMessage?: string,
+  options: { releaseReviewed?: boolean } = {},
 ): Task {
+  const releaseReviewed =
+    options.releaseReviewed ?? status !== 'failed';
   const updated = updateTask(taskId, {
     status,
     branch: 'liliput/campaign-cycle-3',
@@ -277,7 +331,19 @@ function setTaskDeliveryState(
     devUrl: 'https://liliput.example/dev/cycle-3',
     pullRequestUrl: 'https://github.com/crgarcia12/Liliput/pull/104',
     pullRequestNumber: 104,
+    commitSha: 'reviewed-head',
     pipeline: completedPipeline(),
+    ...(releaseReviewed
+      ? {
+          campaignReleaseReview: {
+            status: 'accepted' as const,
+            reviewedSha: 'reviewed-head',
+            validationHealthy: true,
+            reviewerRan: true,
+            reviewedAt: new Date(nowMs).toISOString(),
+          },
+        }
+      : {}),
     ...(errorMessage ? { errorMessage } : {}),
   });
   expect(updated).toBeDefined();
@@ -352,7 +418,7 @@ describe('autonomous campaign workstream handoff', () => {
     expect(countRows('tasks')).toBe(1);
     expect(result.workstream).toMatchObject({
       repository,
-      name: proposal.title,
+      name: `[Campaign ${repository} #3] ${proposal.title}`,
     });
     expect((result.workstream as CampaignLinkedWorkstream).campaignCycleId).toBe(
       accepted.cycleId,
@@ -404,6 +470,35 @@ describe('autonomous campaign workstream handoff', () => {
     expect(countRows('workstreams')).toBe(1);
     expect(countRows('tasks')).toBe(1);
     expect(startTaskPipeline).toHaveBeenCalledTimes(1);
+  });
+
+  it('should reconcile a legacy campaign workstream name during replay', async () => {
+    const accepted = createAcceptedCycle();
+    const coordinator = createCoordinator();
+    const first = await coordinator.handoffAcceptedProposal(
+      accepted.campaignId,
+      accepted.cycleId,
+    );
+    const legacy = { ...first.workstream, name: proposal.title };
+    getDb()
+      .prepare(
+        `UPDATE workstreams
+            SET name = ?,
+                data = ?
+          WHERE id = ?`,
+      )
+      .run(proposal.title, JSON.stringify(legacy), first.workstream.id);
+
+    const replayed = await coordinator.handoffAcceptedProposal(
+      accepted.campaignId,
+      accepted.cycleId,
+    );
+
+    expect(replayed.workstream.id).toBe(first.workstream.id);
+    expect(replayed.workstream.name).toBe(
+      `[Campaign ${repository} #3] ${proposal.title}`,
+    );
+    expect(countRows('workstreams')).toBe(1);
   });
 
   it('should keep the current cycle serial while its task is active', async () => {
@@ -626,6 +721,57 @@ describe('autonomous campaign workstream handoff', () => {
     );
   });
 
+  it('should require an explicit accepted reviewer decision for release', async () => {
+    const accepted = createAcceptedCycle();
+    const coordinator = createCoordinator();
+    const handoff = await coordinator.handoffAcceptedProposal(
+      accepted.campaignId,
+      accepted.cycleId,
+    );
+    setTaskDeliveryState(handoff.task.id, 'review');
+    updateTask(handoff.task.id, {
+      campaignReleaseReview: {
+        status: 'not-run',
+        reviewedSha: 'reviewed-head',
+        validationHealthy: true,
+        reviewerRan: false,
+        reviewedAt: new Date(nowMs).toISOString(),
+      },
+    });
+
+    const reconciled = await coordinator.reconcileDelivery(
+      accepted.campaignId,
+      accepted.cycleId,
+    );
+
+    expect(reconciled.outcome).toBe('active');
+    expect(reconciled.cycle.status).toBe('delivering');
+  });
+
+  it('should recover a failed task with a completed pipeline and pull request', async () => {
+    const accepted = createAcceptedCycle();
+    const coordinator = createCoordinator();
+    const handoff = await coordinator.handoffAcceptedProposal(
+      accepted.campaignId,
+      accepted.cycleId,
+    );
+    setTaskDeliveryState(
+      handoff.task.id,
+      'failed',
+      'coordinator restarted after the pipeline had already completed',
+      { releaseReviewed: true },
+    );
+
+    const reconciled = await coordinator.reconcileDelivery(
+      accepted.campaignId,
+      accepted.cycleId,
+    );
+
+    expect(reconciled.outcome).toBe('ready-to-release');
+    expect(reconciled.cycle.status).toBe('ready_to_release');
+    expect(reconciled.task.status).toBe('review');
+  });
+
   it('should not treat completed task status as confirmed merge success', async () => {
     const accepted = createAcceptedCycle();
     const coordinator = createCoordinator();
@@ -645,6 +791,271 @@ describe('autonomous campaign workstream handoff', () => {
     expect(reconciled.cycle.mergeSha).toBeUndefined();
     expect(reconciled.cycle.completedAt).toBeUndefined();
     expect(countRows('autonomous_cycles')).toBe(1);
+  });
+
+  it('should merge the reviewed head before creating exactly one next cycle', async () => {
+    const accepted = createAcceptedCycle();
+    let draft = true;
+    let merged = false;
+    let baseSha = proposal.baseSha;
+    let mergeReachable = false;
+    const shipTask = vi.fn(async (taskId: string) => {
+      updateTask(taskId, { status: 'completed' });
+    });
+    const markPullRequestReady = vi.fn(async () => {
+      draft = false;
+    });
+    const getPullRequest = vi.fn(async () => ({
+      number: 104,
+      state: merged ? ('closed' as const) : ('open' as const),
+      draft,
+      merged,
+      mergeable: true,
+      mergeable_state: 'clean',
+      title: proposal.title,
+      head: { sha: 'reviewed-head', ref: 'liliput/campaign-cycle-3' },
+      base: { ref: baseBranch },
+      ...(merged ? { merge_commit_sha: 'merged-sha' } : {}),
+    }));
+    const listCheckRuns = vi.fn(async () => [
+      {
+        name: 'tests',
+        status: 'completed' as const,
+        conclusion: 'success' as const,
+      },
+    ]);
+    const mergePullRequest = vi.fn(
+      async (
+        _repository: string,
+        _pullRequestNumber: number,
+        headSha: string,
+      ) => {
+        expect(headSha).toBe('reviewed-head');
+        merged = true;
+        return { merged: true, sha: 'merged-sha', message: 'merged' };
+      },
+    );
+    const getBaseBranchSha = vi.fn(async () => baseSha ?? '');
+    const isCommitReachableFromBaseBranch = vi.fn(
+      async () => mergeReachable,
+    );
+    const coordinator = createCoordinator({
+      shipTask,
+      markPullRequestReady,
+      getPullRequest,
+      listCheckRuns,
+      mergePullRequest,
+      getBaseBranchSha,
+      isCommitReachableFromBaseBranch,
+    });
+    const handoff = await coordinator.handoffAcceptedProposal(
+      accepted.campaignId,
+      accepted.cycleId,
+    );
+    setTaskDeliveryState(handoff.task.id, 'review');
+
+    expect(await coordinator.runOnce()).toMatchObject({
+      outcome: 'ready-to-release',
+      cycleId: accepted.cycleId,
+    });
+    expect(countRows('autonomous_cycles')).toBe(1);
+
+    expect(await coordinator.runOnce()).toMatchObject({
+      outcome: 'ready-to-release',
+      cycleId: accepted.cycleId,
+    });
+    expect(shipTask).toHaveBeenCalledWith(handoff.task.id);
+    expect(markPullRequestReady).toHaveBeenCalledWith(repository, 104);
+    expect(mergePullRequest).not.toHaveBeenCalled();
+    expect(countRows('autonomous_cycles')).toBe(1);
+
+    expect(await coordinator.runOnce()).toMatchObject({
+      outcome: 'awaiting-merge-confirmation',
+      cycleId: accepted.cycleId,
+    });
+    expect(mergePullRequest).toHaveBeenCalledWith(
+      repository,
+      104,
+      'reviewed-head',
+    );
+    expect(campaignStore.getCycle(accepted.cycleId)).toMatchObject({
+      status: 'releasing',
+      mergeSha: 'merged-sha',
+    });
+    expect(countRows('autonomous_cycles')).toBe(1);
+
+    baseSha = 'base-advanced-after-merge';
+    mergeReachable = true;
+    expect(await coordinator.runOnce()).toMatchObject({
+      outcome: 'cooldown',
+      cycleId: accepted.cycleId,
+    });
+    const cooling = campaignStore.getCycle(accepted.cycleId);
+    expect(cooling).toMatchObject({
+      status: 'cooldown',
+      mergeSha: 'merged-sha',
+    });
+    expect(cooling?.reviewDecision).toMatchObject({ status: 'accepted' });
+    expect(cooling?.releaseGates).toMatchObject({
+      checksPassing: true,
+      reviewedHeadSha: 'reviewed-head',
+      baseBranchConfirmed: true,
+    });
+    expect(countRows('autonomous_cycles')).toBe(1);
+
+    nowMs = Date.parse(cooling?.nextRetryAt ?? '');
+    expect(await coordinator.runOnce()).toMatchObject({
+      outcome: 'idle',
+      campaignId: accepted.campaignId,
+    });
+    const nextCycle = campaignStore.getCurrentCycle(accepted.campaignId);
+    expect(nextCycle).toMatchObject({
+      sequence: 4,
+      status: 'proposing',
+      baseSha: 'base-advanced-after-merge',
+    });
+    expect(nextCycle?.id).not.toBe(accepted.cycleId);
+    expect(campaignStore.getCycle(accepted.cycleId)?.status).toBe('succeeded');
+    expect(countRows('autonomous_cycles')).toBe(2);
+
+    expect(await coordinator.runOnce()).toMatchObject({
+      outcome: 'idle',
+      campaignId: accepted.campaignId,
+      cycleId: nextCycle?.id,
+    });
+    expect(mergePullRequest).toHaveBeenCalledTimes(1);
+    expect(countRows('autonomous_cycles')).toBe(2);
+  });
+
+  it('should reject an already merged pull request whose head was not reviewed', async () => {
+    const accepted = createAcceptedCycle();
+    const getPullRequest = vi.fn(async () => ({
+      number: 104,
+      state: 'closed' as const,
+      draft: false,
+      merged: true,
+      mergeable: true,
+      mergeable_state: 'clean',
+      title: proposal.title,
+      head: {
+        sha: 'unreviewed-head',
+        ref: 'liliput/campaign-cycle-3',
+      },
+      base: { ref: baseBranch },
+      merge_commit_sha: 'merged-unreviewed-sha',
+    }));
+    const coordinator = createCoordinator({
+      getPullRequest,
+      listCheckRuns: vi.fn(async () => []),
+      getBaseBranchSha: vi.fn(async () => 'merged-unreviewed-sha'),
+      isCommitReachableFromBaseBranch: vi.fn(async () => true),
+    });
+    const handoff = await coordinator.handoffAcceptedProposal(
+      accepted.campaignId,
+      accepted.cycleId,
+    );
+    setTaskDeliveryState(handoff.task.id, 'completed');
+
+    expect(await coordinator.runOnce()).toMatchObject({
+      outcome: 'awaiting-merge-confirmation',
+    });
+    expect(await coordinator.runOnce()).toMatchObject({
+      outcome: 'awaiting-merge-confirmation',
+    });
+
+    expect(campaignStore.getCycle(accepted.cycleId)).toMatchObject({
+      status: 'releasing',
+      lastError:
+        'Merged pull request does not match the accepted campaign release evidence',
+    });
+    expect(
+      campaignStore.getCycle(accepted.cycleId)?.releaseGates,
+    ).toMatchObject({
+      reviewedHeadMatches: false,
+      baseBranchMatches: true,
+      checksPassing: false,
+      checkDiscoverySettled: false,
+    });
+    expect(campaignStore.getCurrentCycle(accepted.campaignId)?.id).toBe(
+      accepted.cycleId,
+    );
+    expect(countRows('autonomous_cycles')).toBe(1);
+  });
+
+  it('should wait for check discovery before merging a repository with no checks', async () => {
+    const accepted = createAcceptedCycle();
+    let merged = false;
+    const shipTask = vi.fn(async (taskId: string) => {
+      updateTask(taskId, { status: 'completed' });
+    });
+    const mergePullRequest = vi.fn(async () => {
+      merged = true;
+      return { merged: true, sha: 'merged-sha', message: 'merged' };
+    });
+    const coordinator = createCoordinator({
+      shipTask,
+      getPullRequest: vi.fn(async () => ({
+        number: 104,
+        state: merged ? ('closed' as const) : ('open' as const),
+        draft: false,
+        merged,
+        mergeable: true,
+        mergeable_state: 'clean',
+        title: proposal.title,
+        head: {
+          sha: 'reviewed-head',
+          ref: 'liliput/campaign-cycle-3',
+        },
+        base: { ref: baseBranch },
+        ...(merged ? { merge_commit_sha: 'merged-sha' } : {}),
+      })),
+      listCheckRuns: vi.fn(async () => []),
+      mergePullRequest,
+      getBaseBranchSha: vi.fn(
+        async () => (merged ? 'merged-sha' : proposal.baseSha),
+      ),
+      isCommitReachableFromBaseBranch: vi.fn(async () => false),
+    });
+    const handoff = await coordinator.handoffAcceptedProposal(
+      accepted.campaignId,
+      accepted.cycleId,
+    );
+    setTaskDeliveryState(handoff.task.id, 'review');
+
+    expect(await coordinator.runOnce()).toMatchObject({
+      outcome: 'ready-to-release',
+    });
+    expect(await coordinator.runOnce()).toMatchObject({
+      outcome: 'ready-to-release',
+    });
+    expect(mergePullRequest).not.toHaveBeenCalled();
+    expect(
+      campaignStore.getCycle(accepted.cycleId)?.releaseGates,
+    ).toMatchObject({
+      checkRunCount: 0,
+      checkDiscoverySettled: false,
+      checksPassing: false,
+    });
+
+    nowMs += 29_999;
+    expect(await coordinator.runOnce()).toMatchObject({
+      outcome: 'ready-to-release',
+    });
+    expect(mergePullRequest).not.toHaveBeenCalled();
+
+    nowMs += 2;
+    expect(await coordinator.runOnce()).toMatchObject({
+      outcome: 'cooldown',
+    });
+    expect(mergePullRequest).toHaveBeenCalledTimes(1);
+    expect(
+      campaignStore.getCycle(accepted.cycleId)?.releaseGates,
+    ).toMatchObject({
+      checkRunCount: 0,
+      checkDiscoverySettled: true,
+      checksPassing: true,
+      baseBranchConfirmed: true,
+    });
   });
 
   it('should retain the same feature and local resources when delivery fails', async () => {

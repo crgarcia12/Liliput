@@ -270,6 +270,23 @@ export function getTaskByCampaignCycleId(
   return row ? hydrateTask(row) : undefined;
 }
 
+export function findCampaignTaskByPullRequest(
+  repository: string,
+  pullRequestNumber: number,
+): Task | undefined {
+  const rows = getDb()
+    .prepare(
+      `SELECT *
+         FROM tasks
+        WHERE repository = ?
+          AND campaign_cycle_id IS NOT NULL`,
+    )
+    .all(repository) as TaskRow[];
+  return rows
+    .map((row) => hydrateTask(row))
+    .find((task) => task.pullRequestNumber === pullRequestNumber);
+}
+
 export function getTasks(): Task[] {
   const rows = getDb()
     .prepare("SELECT * FROM tasks WHERE status != 'deleting' ORDER BY updated_at DESC")
@@ -309,6 +326,7 @@ export function updateTask(
       | 'reviewerEnabled'
       | 'pendingReviewerFeedback'
       | 'reviewerAttempts'
+      | 'campaignReleaseReview'
       | 'pipeline'
       | 'title'
     >

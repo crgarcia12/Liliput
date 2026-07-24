@@ -306,7 +306,7 @@ async function collectImplementationFiles(
 }
 
 function taskPullRequestDescription(
-  task: Pick<Task, 'description'>,
+  task: Pick<Task, 'description' | 'campaignCycleId'>,
   options: {
     implementationNotes?: readonly string[];
     changedFiles?: readonly string[];
@@ -318,12 +318,18 @@ function taskPullRequestDescription(
   return buildPullRequestDescription({
     ...options,
     originalPrompt: task.description,
+    ...(task.campaignCycleId
+      ? { campaignCycleId: task.campaignCycleId }
+      : {}),
   });
 }
 
 async function refreshPullRequestDescription(
   taskId: string,
-  task: Pick<Task, 'description' | 'repository' | 'pullRequestNumber'>,
+  task: Pick<
+    Task,
+    'description' | 'repository' | 'pullRequestNumber' | 'campaignCycleId'
+  >,
   options: {
     implementationNotes?: readonly string[];
     changedFiles?: readonly string[];
@@ -334,10 +340,18 @@ async function refreshPullRequestDescription(
 ): Promise<void> {
   if (!task.repository || task.pullRequestNumber === undefined) return;
   try {
+    const campaignCycleId =
+      task.campaignCycleId ?? store.getTask(taskId)?.campaignCycleId;
     await updatePullRequestBody(
       task.repository,
       task.pullRequestNumber,
-      taskPullRequestDescription(task, options),
+      taskPullRequestDescription(
+        {
+          ...task,
+          ...(campaignCycleId ? { campaignCycleId } : {}),
+        },
+        options,
+      ),
     );
   } catch (err) {
     logger.warn(
@@ -593,6 +607,32 @@ function recordCampaignModelTurn(taskId: string): void {
     }
     throw error;
   }
+}
+
+function recordCampaignReleaseReview(
+  taskId: string,
+  reviewedSha: string,
+  validationHealthy: boolean,
+  review: { feedback: string | null; ran: boolean },
+): void {
+  const task = store.getTask(taskId);
+  if (!task?.campaignCycleId) return;
+  const status = !validationHealthy
+    ? 'validation-failed'
+    : review.feedback
+      ? 'changes-requested'
+      : review.ran
+        ? 'accepted'
+        : 'not-run';
+  store.updateTask(taskId, {
+    campaignReleaseReview: {
+      status,
+      reviewedSha,
+      validationHealthy,
+      reviewerRan: review.ran,
+      reviewedAt: new Date().toISOString(),
+    },
+  });
 }
 
 function waitForCampaignTaskExternal(
@@ -3524,6 +3564,12 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
       },
     );
     if (review.ran) recordCampaignModelTurn(taskId);
+    recordCampaignReleaseReview(
+      taskId,
+      validateOutcome.sha,
+      validateOutcome.healthy,
+      review,
+    );
   } catch (err) {
     if (isCampaignStageBlockedError(err)) throw err;
     logger.warn({ taskId, err: err instanceof Error ? err.message : String(err) }, 'Pipeline reviewer threw (non-fatal)');
@@ -4521,6 +4567,12 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
       },
     );
     if (review.ran) recordCampaignModelTurn(taskId);
+    recordCampaignReleaseReview(
+      taskId,
+      iterValidateOutcome.sha,
+      iterValidateOutcome.healthy,
+      review,
+    );
   } catch (err) {
     if (isCampaignStageBlockedError(err)) throw err;
     logger.warn({ taskId, err: err instanceof Error ? err.message : String(err) }, 'Iter reviewer threw (non-fatal)');
@@ -4744,6 +4796,12 @@ async function runRebuildOnly(
       },
     );
     if (review.ran) recordCampaignModelTurn(taskId);
+    recordCampaignReleaseReview(
+      taskId,
+      rebuildValidateOutcome.sha,
+      rebuildValidateOutcome.healthy,
+      review,
+    );
   } catch (err) {
     if (isCampaignStageBlockedError(err)) throw err;
     logger.warn({ taskId, err: err instanceof Error ? err.message : String(err) }, 'Rebuild reviewer threw (non-fatal)');

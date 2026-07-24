@@ -4,7 +4,8 @@ export type AutonomousCampaignDeliveryOutcome =
   | 'active'
   | 'ready-to-release'
   | 'failed'
-  | 'awaiting-merge-confirmation';
+  | 'awaiting-merge-confirmation'
+  | 'cooldown';
 
 export interface AutonomousCampaignDeliveryResourceIds {
   workstreamId?: string;

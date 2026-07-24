@@ -541,7 +541,12 @@ export interface UpdateAutonomousCampaignDeliveryInput {
   previewUrl?: string;
   pullRequestUrl?: string;
   pullRequestNumber?: number;
-  lastError?: string;
+  reviewDecision?: AutonomousCampaignJsonObject;
+  releaseGates?: AutonomousCampaignJsonObject;
+  mergeSha?: string;
+  nextRetryAt?: string;
+  completedAt?: string;
+  lastError?: string | null;
 }
 
 export function updateCycleDelivery(
@@ -578,6 +583,9 @@ export function updateCycleDelivery(
     }
     const current = hydrateCycle(row);
     const ts = new Date(nowMs).toISOString();
+    const lastError = Object.prototype.hasOwnProperty.call(input, 'lastError')
+      ? input.lastError ?? null
+      : current.lastError ?? null;
     db.prepare(
       `UPDATE autonomous_cycles
           SET status = ?,
@@ -589,6 +597,11 @@ export function updateCycleDelivery(
               preview_url = ?,
               pull_request_url = ?,
               pull_request_number = ?,
+              review_decision_json = ?,
+              release_gates_json = ?,
+              merge_sha = ?,
+              next_retry_at = ?,
+              completed_at = ?,
               last_error = ?,
               updated_at = ?
         WHERE id = ?`,
@@ -602,13 +615,137 @@ export function updateCycleDelivery(
       input.previewUrl ?? current.previewUrl ?? null,
       input.pullRequestUrl ?? current.pullRequestUrl ?? null,
       input.pullRequestNumber ?? current.pullRequestNumber ?? null,
-      input.lastError ?? current.lastError ?? null,
+      input.reviewDecision
+        ? JSON.stringify(input.reviewDecision)
+        : current.reviewDecision
+          ? JSON.stringify(current.reviewDecision)
+          : null,
+      input.releaseGates
+        ? JSON.stringify(input.releaseGates)
+        : current.releaseGates
+          ? JSON.stringify(current.releaseGates)
+          : null,
+      input.mergeSha ?? current.mergeSha ?? null,
+      input.nextRetryAt ?? current.nextRetryAt ?? null,
+      input.completedAt ?? current.completedAt ?? null,
+      lastError,
       ts,
       input.cycleId,
     );
     return hydrateCycle(requireCycleRow(input.cycleId));
   });
   return update.immediate();
+}
+
+export interface AdvanceAutonomousCampaignAfterCooldownInput {
+  campaignId: string;
+  cycleId: string;
+  leaseOwner: string;
+  nowMs: number;
+  baseSha?: string;
+}
+
+export interface AdvanceAutonomousCampaignAfterCooldownResult {
+  advanced: boolean;
+  campaign: AutonomousCampaign;
+  previousCycle: AutonomousCampaignCycle;
+  nextCycle?: AutonomousCampaignCycle;
+}
+
+export function advanceCampaignAfterCooldown(
+  input: AdvanceAutonomousCampaignAfterCooldownInput,
+): AdvanceAutonomousCampaignAfterCooldownResult {
+  const db = getDb();
+  const advance = db.transaction(() => {
+    const campaign = requireCampaignRow(input.campaignId);
+    assertActiveLeaseOwner(campaign, input.leaseOwner, input.nowMs);
+    const cycle = requireCycleRow(input.cycleId);
+    if (cycle.campaign_id !== campaign.id) {
+      throw new AutonomousCampaignConflictError(
+        `Cycle ${cycle.id} does not belong to campaign ${campaign.id}`,
+      );
+    }
+    if (
+      campaign.current_cycle_id !== cycle.id ||
+      cycle.status !== 'cooldown' ||
+      !cycle.merge_sha
+    ) {
+      return {
+        advanced: false,
+        campaign: hydrateCampaign(campaign),
+        previousCycle: hydrateCycle(cycle),
+      };
+    }
+    const retryAt = cycle.next_retry_at
+      ? Date.parse(cycle.next_retry_at)
+      : Number.POSITIVE_INFINITY;
+    if (!Number.isFinite(retryAt) || retryAt > input.nowMs) {
+      return {
+        advanced: false,
+        campaign: hydrateCampaign(campaign),
+        previousCycle: hydrateCycle(cycle),
+      };
+    }
+
+    const ts = new Date(input.nowMs).toISOString();
+    const sequence = campaign.next_sequence;
+    const nextCycle: AutonomousCampaignCycle = {
+      id: uuid(),
+      campaignId: campaign.id,
+      sequence,
+      title: `Autonomous feature proposal ${sequence}`,
+      status: 'proposing',
+      baseSha: input.baseSha ?? cycle.merge_sha,
+      startedAt: ts,
+      createdAt: ts,
+      updatedAt: ts,
+    };
+    db.prepare(
+      `UPDATE autonomous_cycles
+          SET status = 'succeeded',
+              completed_at = COALESCE(completed_at, ?),
+              updated_at = ?
+        WHERE id = ?
+          AND status = 'cooldown'`,
+    ).run(ts, ts, cycle.id);
+    db.prepare(
+      `INSERT INTO autonomous_cycles (
+         id, campaign_id, sequence, title, status, base_sha,
+         started_at, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      nextCycle.id,
+      nextCycle.campaignId,
+      nextCycle.sequence,
+      nextCycle.title,
+      nextCycle.status,
+      nextCycle.baseSha,
+      nextCycle.startedAt,
+      nextCycle.createdAt,
+      nextCycle.updatedAt,
+    );
+    db.prepare(
+      `UPDATE autonomous_campaigns
+          SET current_cycle_id = ?,
+              next_sequence = ?,
+              updated_at = ?
+        WHERE id = ?
+          AND current_cycle_id = ?`,
+    ).run(
+      nextCycle.id,
+      sequence + 1,
+      ts,
+      campaign.id,
+      cycle.id,
+    );
+    return {
+      advanced: true,
+      campaign: hydrateCampaign(requireCampaignRow(campaign.id)),
+      previousCycle: hydrateCycle(requireCycleRow(cycle.id)),
+      nextCycle,
+    };
+  });
+  return advance.immediate();
 }
 
 export function createAttempt(

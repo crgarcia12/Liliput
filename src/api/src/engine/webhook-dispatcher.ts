@@ -26,6 +26,7 @@ import { getDb } from '../stores/db.js';
 import { extractFeatureIdMarker } from './pm-issue-flow.js';
 import { startBuild } from './agent-engine.js';
 import { runRmReview as realRunRmReview } from './rm-review.js';
+import { extractCampaignCycleMarker } from './github-pr.js';
 import { logger } from '../logger.js';
 import type { WebhookDispatcher } from '../routes/github-webhook.js';
 
@@ -235,6 +236,16 @@ export function createWebhookDispatcher(
         (action === 'synchronize' && pr.draft !== true) ||
         action === 'reopened';
       if (!interesting) return;
+      if (
+        extractCampaignCycleMarker(pr.body) ||
+        taskStore.findCampaignTaskByPullRequest(repo, pr.number)
+      ) {
+        logger.info(
+          { deliveryId, repo, prNumber: pr.number, action },
+          'dispatcher: campaign-managed PR — skipping RM',
+        );
+        return;
+      }
 
       // Map PR -> Feature.
       const feature = featureStore.findByGithubPr(repo, pr.number);
