@@ -2250,7 +2250,39 @@
         "status": "approved",
         "approvalSource": "explicit-test-contract-approval"
       },
-      "completedAt": "2026-07-24T21:53:11Z"
+      "delivery": {
+        "sourceCommit": "f8c2ee24462f43c26ef6baf34c9569b63e4cc5e4",
+        "pullRequest": "https://github.com/crgarcia12/Liliput/pull/112",
+        "mergeCommit": "59ca7d318ce25a385322a2151f00b57d02bd1366",
+        "pullRequestCi": "https://github.com/crgarcia12/Liliput/actions/runs/30129307648",
+        "mainCi": "https://github.com/crgarcia12/Liliput/actions/runs/30129448299",
+        "deployment": "https://github.com/crgarcia12/Liliput/actions/runs/30129448304",
+        "apiImage": "crgarliliputacr.azurecr.io/liliput-api:59ca7d318ce25a385322a2151f00b57d02bd1366"
+      },
+      "productionVerification": {
+        "clusterPowerState": "Running",
+        "readyNodes": 4,
+        "api": "1/1",
+        "web": "1/1",
+        "gateway": "1/1",
+        "rootHttp": 200,
+        "apiHealthHttp": 200,
+        "loginHttp": 200,
+        "playwrightPassed": 6
+      },
+      "taskRecovery": {
+        "taskId": "e226889d-519b-425d-a9d2-4159a02e2061",
+        "status": "review",
+        "commitSha": "f9a0be4fd8ee236f52b07dd9b6002a7eb5b51d6b",
+        "remoteBranchSha": "f9a0be4fd8ee236f52b07dd9b6002a7eb5b51d6b",
+        "imageRef": "crgarliliputacr.azurecr.io/liliput-app-crgarcia12-obelisco:f9a0be4fd8ee",
+        "devUrl": "https://liliput.crgarcia.com.ar/dev/crgarcia12/obelisco/liliput-task-e226889d/",
+        "previewHttp": 200,
+        "validationAttempts": 2,
+        "repeatedGitErrorMatches": 0
+      },
+      "completedAt": "2026-07-24T21:53:11Z",
+      "verifiedAt": "2026-07-24T22:21:01Z"
     }
   },
   "humanGates": {
