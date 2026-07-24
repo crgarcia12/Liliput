@@ -1948,14 +1948,14 @@
     "resourceGroup": "crgar-liliput-rg",
     "cluster": "crgar-liliput-aks",
     "clusterPowerState": "Running",
-    "clusterVerifiedAt": "2026-07-23T14:53:07Z",
+    "clusterVerifiedAt": "2026-07-24T07:45:54Z",
     "namespace": "liliput",
     "url": "https://liliput.crgarcia.com.ar",
     "commitSha": "abd3d9b7b1295d1d7c3bb3a0054f421bc255ce3e",
     "apiImage": "crgarliliputacr.azurecr.io/liliput-api:abd3d9b7b1295d1d7c3bb3a0054f421bc255ce3e",
     "webImage": "crgarliliputacr.azurecr.io/liliput-web:abd3d9b7b1295d1d7c3bb3a0054f421bc255ce3e",
     "deployedAt": "2026-07-23T14:49:07Z",
-    "verifiedAt": "2026-07-23T14:53:07Z",
+    "verifiedAt": "2026-07-24T07:45:54Z",
     "aiFoundry": {
       "account": "crgar-liliput-ai",
       "resourceGroup": "crgar-ai-rg",
@@ -1986,5 +1986,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-23T14:53:07Z"
+  "lastUpdated": "2026-07-24T07:45:54Z"
 }

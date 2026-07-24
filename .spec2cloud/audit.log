@@ -222,3 +222,5 @@
 [2026-07-23T14:53:07Z] increment=bugfix-001 step=verification action=production-playwright result=pass:5/fail:0
 [2026-07-23T14:53:07Z] increment=bugfix-001 step=verification action=cluster-verification result=pass powerState=Running readyNodes=4 api=1/1 web=1/1 gateway=1/1 startupErrors=0
 [2026-07-23T14:53:07Z] increment=bugfix-001 step=verification action=obelisco-workstream-handoff result=success campaign=ea8d97fc-f17b-4ba1-bea5-40370617f090 cycle=814c0bcc-5b71-47cd-beca-1bcf32413e3f workstream=1f511c46-d629-4a0b-b4a3-e057a0120308 task=0edaa890-2975-4656-85af-4afa18626d53 taskStatus=building activeStage=implement
+[2026-07-24T07:45:54Z] phase=deployment action=aks-start result=success cluster=crgar-liliput-aks previousPowerState=Stopped powerState=Running provisioningState=Succeeded
+[2026-07-24T07:45:54Z] phase=deployment action=cluster-verification result=pass readyNodes=4 api=1/1 web=1/1 gateway=1/1 root=200 apiHealth=200 startupErrors=0
