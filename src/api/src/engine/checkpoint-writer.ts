@@ -88,7 +88,7 @@ export class CheckpointWriter {
   private timer: NodeJS.Timeout | undefined;
   private lastCheckpointAt = 0;
   private firstPendingEventAt = 0;
-  private inflight = false;
+  private inflightPromise: Promise<void> | undefined;
   private pendingWhileInflight = false;
   private stopped = false;
 
@@ -121,6 +121,7 @@ export class CheckpointWriter {
 
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
+      this.timer = undefined;
       void this.commitAndPush();
     }, this.debounceMs);
   }
@@ -130,11 +131,17 @@ export class CheckpointWriter {
    * never lose work waiting for a debounce window to elapse.
    */
   async flush(): Promise<void> {
+    const hadPendingTimer = this.timer !== undefined;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = undefined;
     }
     this.stopped = true;
+    if (this.inflightPromise) {
+      await this.inflightPromise;
+      if (!hadPendingTimer && !this.pendingWhileInflight) return;
+      this.pendingWhileInflight = false;
+    }
     await this.commitAndPush();
   }
 
@@ -148,16 +155,22 @@ export class CheckpointWriter {
   private scheduleNow(): void {
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
+      this.timer = undefined;
       void this.commitAndPush();
     }, 0);
   }
 
-  private async commitAndPush(): Promise<void> {
-    if (this.inflight) {
+  private commitAndPush(): Promise<void> {
+    if (this.inflightPromise) {
       this.pendingWhileInflight = true;
-      return;
+      return this.inflightPromise;
     }
-    this.inflight = true;
+    const operation = this.performCommitAndPush();
+    this.inflightPromise = operation;
+    return operation;
+  }
+
+  private async performCommitAndPush(): Promise<void> {
     try {
       const message = `wip: liliput checkpoint ${new Date().toISOString()}`;
       const sha = await git.commitAllIfChanges(this.handle, message);
@@ -185,8 +198,9 @@ export class CheckpointWriter {
       logger.warn({ branch: this.handle.branch, err: m }, 'Checkpoint commit failed');
       this.onLog('warn', `Checkpoint failed: ${m.split('\n').pop()?.trim() ?? ''}`);
     } finally {
-      this.inflight = false;
+      this.inflightPromise = undefined;
       if (this.pendingWhileInflight) {
+        if (this.stopped) return;
         this.pendingWhileInflight = false;
         // Coalesce the queued event into one immediate retry.
         this.scheduleNow();

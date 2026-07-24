@@ -25,6 +25,7 @@ import {
   createTask,
   getTask,
   getTasks,
+  reconcileOrphanedRuns,
   resetStore,
   updateTask,
 } from '../../src/stores/task-store.js';
@@ -89,6 +90,8 @@ interface CampaignCoordinatorOptions {
   now: () => number;
   startTaskPipeline: (taskId: string) => void;
   resumeTaskPipeline?: (taskId: string) => void;
+  revalidateTaskPipeline?: (taskId: string, headSha: string) => void;
+  isTaskPipelineActive?: (taskId: string) => boolean;
   shipTask?: (taskId: string) => Promise<void>;
   markPullRequestReady?: (repository: string, pullRequestNumber: number) => Promise<void>;
   getPullRequest?: (
@@ -980,6 +983,83 @@ describe('autonomous campaign workstream handoff', () => {
       accepted.cycleId,
     );
     expect(countRows('autonomous_cycles')).toBe(1);
+  });
+
+  it('should revalidate an open pull request when its head differs from reviewed evidence', async () => {
+    // Validates: frd-autonomous-workstream-campaigns.md, AC release gates and restart recovery.
+    const accepted = createAcceptedCycle();
+    let taskPipelineActive = false;
+    const revalidateTaskPipeline = vi.fn(() => {
+      taskPipelineActive = true;
+    });
+    const coordinator = createCoordinator({
+      revalidateTaskPipeline,
+      isTaskPipelineActive: () => taskPipelineActive,
+      getPullRequest: vi.fn(async () => ({
+        number: 104,
+        state: 'open' as const,
+        draft: false,
+        merged: false,
+        mergeable: true,
+        mergeable_state: 'clean',
+        title: proposal.title,
+        head: {
+          sha: 'live-pull-request-head',
+          ref: 'liliput/campaign-cycle-3',
+        },
+        base: { ref: baseBranch },
+      })),
+      listCheckRuns: vi.fn(async () => []),
+    });
+    const handoff = await coordinator.handoffAcceptedProposal(
+      accepted.campaignId,
+      accepted.cycleId,
+    );
+    setTaskDeliveryState(handoff.task.id, 'review');
+
+    expect(await coordinator.runOnce()).toMatchObject({
+      outcome: 'ready-to-release',
+      cycleId: accepted.cycleId,
+    });
+    expect(await coordinator.runOnce()).toMatchObject({
+      outcome: 'active',
+      cycleId: accepted.cycleId,
+    });
+
+    expect(revalidateTaskPipeline).toHaveBeenCalledWith(
+      handoff.task.id,
+      'live-pull-request-head',
+    );
+    expect(getTask(handoff.task.id)).toMatchObject({
+      status: 'building',
+      commitSha: 'live-pull-request-head',
+    });
+    expect(getTask(handoff.task.id)?.campaignReleaseReview).toBeUndefined();
+    expect(campaignStore.getCycle(accepted.cycleId)).toMatchObject({
+      status: 'delivering',
+      lastError: undefined,
+    });
+
+    expect(await coordinator.runOnce()).toMatchObject({
+      outcome: 'active',
+      cycleId: accepted.cycleId,
+    });
+    expect(revalidateTaskPipeline).toHaveBeenCalledTimes(1);
+
+    taskPipelineActive = false;
+    updateTask(handoff.task.id, { status: 'deploying' });
+    const restart = reconcileOrphanedRuns();
+    expect(restart.resumable).not.toContain(handoff.task.id);
+    expect(getTask(handoff.task.id)?.status).toBe('building');
+    const restartedCoordinator = createCoordinator({
+      revalidateTaskPipeline,
+      isTaskPipelineActive: () => taskPipelineActive,
+    });
+    expect(await restartedCoordinator.runOnce()).toMatchObject({
+      outcome: 'active',
+      cycleId: accepted.cycleId,
+    });
+    expect(revalidateTaskPipeline).toHaveBeenCalledTimes(2);
   });
 
   it('should wait for check discovery before merging a repository with no checks', async () => {

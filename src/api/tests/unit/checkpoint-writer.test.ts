@@ -72,6 +72,33 @@ describe('CheckpointWriter', () => {
     expect(commitSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('should wait for an in-flight checkpoint before flush completes', async () => {
+    // Validates: frd-autonomous-workstream-campaigns.md, AC restart recovery.
+    let resolveCommit: ((sha: string) => void) | undefined;
+    commitSpy.mockReturnValueOnce(
+      new Promise<string>((resolve) => {
+        resolveCommit = resolve;
+      }),
+    );
+    const w = new CheckpointWriter({ handle, debounceMs: 100 });
+    w.observe(evt('edit'));
+    await vi.advanceTimersByTimeAsync(100);
+
+    let flushed = false;
+    const flushPromise = w.flush().then(() => {
+      flushed = true;
+    });
+    await Promise.resolve();
+    expect(flushed).toBe(false);
+
+    resolveCommit?.('abcdef1234567890abcdef1234567890abcdef12');
+    await flushPromise;
+    await vi.runAllTimersAsync();
+
+    expect(commitSpy).toHaveBeenCalledTimes(1);
+    expect(pushSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('swallows commit errors as warnings (never throws)', async () => {
     commitSpy.mockRejectedValueOnce(new Error('disk full'));
     const warnings: string[] = [];

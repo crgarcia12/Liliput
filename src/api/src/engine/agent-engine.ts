@@ -396,6 +396,10 @@ function beginTaskRun(taskId: string): boolean {
   return true;
 }
 
+export function isTaskPipelineActive(taskId: string): boolean {
+  return activeTaskRuns.has(taskId);
+}
+
 function endTaskRun(taskId: string): void {
   activeTaskRuns.delete(taskId);
   const resumeIo = pendingCampaignResumes.get(taskId);
@@ -1873,6 +1877,19 @@ function isTransientBuildError(msg: string): boolean {
 const TRANSIENT_BUILD_RETRIES = 3;
 const TRANSIENT_BUILD_BACKOFF_MS = 30_000;
 
+async function confirmedPushedHead(handle: git.RepoHandle): Promise<string> {
+  const [localSha, remoteSha] = await Promise.all([
+    git.headSha(handle),
+    git.remoteBranchSha(handle),
+  ]);
+  if (localSha !== remoteSha) {
+    throw new Error(
+      `Local branch ${handle.branch} does not match its remote after push recovery`,
+    );
+  }
+  return localSha;
+}
+
 /**
  * Run `acrBuild` with fixer-driven recovery. On failure: spawn fixer,
  * commit/push any edits, retry. Returns the image ref of the successful build.
@@ -2034,7 +2051,7 @@ async function buildWithFixer(ctx: BuildContext): Promise<BuildOutcome> {
         },
         onLog: (level, msg, cmd, out) => logPhase(ctx.io, ctx.taskId, fixer, level, msg, cmd, out),
       });
-      sha = newSha;
+      sha = await confirmedPushedHead(ctx.handle);
       store.updateTask(ctx.taskId, { commitSha: sha });
       completePhase(ctx.io, ctx.taskId, fixer);
     }
@@ -2149,7 +2166,7 @@ async function deployWithFixer(ctx: DeployContext): Promise<DeployOutcome> {
         break;
       }
       logPhase(ctx.io, ctx.taskId, fixer, 'info', `Fixer changed ${changed.length} file(s); committing + rebuilding…`, undefined, changed.join('\n'));
-      const newSha = await runGitOpWithFixer<string>({
+      await runGitOpWithFixer<string>({
         agentSession: ctx.agentSession,
         ...campaignGitFixerHooks(ctx.io, ctx.taskId, () => fixer),
         op: () => git.commitAll(ctx.handle, `fix(agent): deploy failure recovery (attempt ${attempt})`),
@@ -2182,7 +2199,7 @@ async function deployWithFixer(ctx: DeployContext): Promise<DeployOutcome> {
         },
         onLog: (level, msg, cmd, out) => logPhase(ctx.io, ctx.taskId, fixer, level, msg, cmd, out),
       });
-      sha = newSha;
+      sha = await confirmedPushedHead(ctx.handle);
       store.updateTask(ctx.taskId, { commitSha: sha });
 
       // Rebuild the image with the new SHA so the next deploy picks up the fix.
@@ -2819,7 +2836,7 @@ async function commitBuildAndRedeploy(opts: {
   const { io, taskId, fixerAgentId, ctx, commitMsg, gitOpDescribe } = opts;
   let imageRef = opts.imageRef;
 
-  const newSha = await runGitOpWithFixer<string>({
+  await runGitOpWithFixer<string>({
     agentSession: ctx.agentSession,
     ...campaignGitFixerHooks(io, taskId, () => fixerAgentId),
     op: () => git.commitAll(ctx.handle, commitMsg),
@@ -2852,9 +2869,10 @@ async function commitBuildAndRedeploy(opts: {
     },
     onLog: (level, msg, cmd, out) => logPhase(io, taskId, fixerAgentId, level, msg, cmd, out),
   });
-  store.updateTask(taskId, { commitSha: newSha });
+  const pushedSha = await confirmedPushedHead(ctx.handle);
+  store.updateTask(taskId, { commitSha: pushedSha });
 
-  const tag = newSha.substring(0, 12);
+  const tag = pushedSha.substring(0, 12);
   logPhase(io, taskId, fixerAgentId, 'info', `Rebuilding ${ctx.imageName}:${tag}…`);
   guardCampaignTaskStage(taskId, 'image-build');
   const rebuilt = await acrBuild({
@@ -2886,7 +2904,7 @@ async function commitBuildAndRedeploy(opts: {
       'Pod did not become Ready within 3 minutes; re-probing anyway.',
     );
   }
-  return { sha: newSha, imageRef };
+  return { sha: pushedSha, imageRef };
 }
 
 export function startBuild(io: SocketServer, taskId: string): void {
@@ -3214,9 +3232,11 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   // created and pushed the empty branch, so resetting --soft to it
   // collapses the WIP series while preserving the final tree.
   const headBeforeSquash = await git.headSha(handle);
+  let remoteHeadBeforeSquash: string | undefined;
   let didSquash = false;
   if (baselineSha && baselineSha !== headBeforeSquash) {
     try {
+      remoteHeadBeforeSquash = await git.remoteBranchSha(handle);
       await git.softResetTo(handle, baselineSha);
       didSquash = true;
       logPhase(
@@ -3239,7 +3259,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   }
 
   let commitFixerAgent: string | undefined;
-  const sha = await runGitOpWithFixer<string>({
+  let sha = await runGitOpWithFixer<string>({
     agentSession,
     ...campaignGitFixerHooks(io, taskId, () => commitFixerAgent ?? builder),
     op: () =>
@@ -3270,37 +3290,48 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
       }
     },
   });
-  store.updateTask(taskId, { commitSha: sha, branch });
+  store.updateTask(taskId, { branch });
   logPhase(io, taskId, builder, 'info', `Commit ${sha.substring(0, 7)} ready`);
 
   logPhase(io, taskId, builder, 'info', 'Pushing branch…', `git push -u origin ${branch}`);
-  let pushFixerAgent: string | undefined;
-  await runGitOpWithFixer<void>({
-    agentSession,
-    ...campaignGitFixerHooks(io, taskId, () => pushFixerAgent ?? builder),
-    op: () => (didSquash ? git.pushForceWithLease(handle) : git.push(handle)),
-    describe: `git push${didSquash ? ' --force-with-lease' : ''} --set-upstream origin ${branch}`,
-    cwd: handle.cwd,
-    branch: handle.branch,
-    repo,
-    recoveryCheck: async () => {
-      if (await git.isBranchUpToDateWithRemote(handle)) {
-        return { recovered: true, result: undefined as void };
-      }
-      return { recovered: false };
-    },
-    onLog: (level, msg, cmd, out) =>
-      logPhase(io, taskId, pushFixerAgent ?? builder, level, msg, cmd, out),
-    onFixerTurnStart: () => {
-      pushFixerAgent = spawnPhase(io, taskId, 'fixer', 'Fixer Liliputian (git-push)');
-    },
-    onFixerTurnEnd: () => {
-      if (pushFixerAgent) {
-        completePhase(io, taskId, pushFixerAgent);
-        pushFixerAgent = undefined;
-      }
-    },
-  });
+  if (didSquash) {
+    if (!remoteHeadBeforeSquash) {
+      throw new Error('Missing remote branch SHA for force-with-lease push');
+    }
+    await git.pushForceWithLease(handle, {
+      expectedRemoteSha: remoteHeadBeforeSquash,
+      onLog: (msg) => logPhase(io, taskId, builder, 'warn', msg),
+    });
+  } else {
+    let pushFixerAgent: string | undefined;
+    await runGitOpWithFixer<void>({
+      agentSession,
+      ...campaignGitFixerHooks(io, taskId, () => pushFixerAgent ?? builder),
+      op: () => git.push(handle),
+      describe: `git push --set-upstream origin ${branch}`,
+      cwd: handle.cwd,
+      branch: handle.branch,
+      repo,
+      recoveryCheck: async () => {
+        if (await git.isBranchUpToDateWithRemote(handle)) {
+          return { recovered: true, result: undefined as void };
+        }
+        return { recovered: false };
+      },
+      onLog: (level, msg, cmd, out) =>
+        logPhase(io, taskId, pushFixerAgent ?? builder, level, msg, cmd, out),
+      onFixerTurnStart: () => {
+        pushFixerAgent = spawnPhase(io, taskId, 'fixer', 'Fixer Liliputian (git-push)');
+      },
+      onFixerTurnEnd: () => {
+        if (pushFixerAgent) {
+          completePhase(io, taskId, pushFixerAgent);
+          pushFixerAgent = undefined;
+        }
+      },
+    });
+  }
+  sha = await confirmedPushedHead(handle);
   store.updateTask(taskId, {
     branch,
     baseCommitSha: baselineSha,
@@ -4322,7 +4353,7 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
   );
   logPhase(io, taskId, builder, 'info', 'Committing iteration changes…');
   let iterCommitFixerAgent: string | undefined;
-  const sha = await runGitOpWithFixer<string>({
+  let sha = await runGitOpWithFixer<string>({
     agentSession: live.agentSession,
     ...campaignGitFixerHooks(io, taskId, () => iterCommitFixerAgent ?? builder),
     op: () =>
@@ -4353,7 +4384,6 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
       }
     },
   });
-  store.updateTask(taskId, { commitSha: sha });
   logPhase(io, taskId, builder, 'info', `Commit ${sha.substring(0, 7)} ready`);
 
   logPhase(io, taskId, builder, 'info', 'Pushing branch…', `git push origin ${live.branch}`);
@@ -4384,6 +4414,8 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
       }
     },
   });
+  sha = await confirmedPushedHead(live.repoHandle);
+  store.updateTask(taskId, { commitSha: sha });
   logPhase(io, taskId, builder, 'info', 'Branch pushed; PR will pick up the new commit automatically.');
 
   // Per-round conflict guard: keep the branch free of merge conflicts with the
@@ -4422,6 +4454,8 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
       },
     });
     if (guardResult.status === 'resolved') {
+      sha = await confirmedPushedHead(live.repoHandle);
+      store.updateTask(taskId, { commitSha: sha });
       chatStatus(
         io,
         taskId,
@@ -4591,24 +4625,16 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
  * against the current workspace state. Caller is expected to have already
  * written the .liliput-rebuild marker so the working tree is dirty.
  */
-async function runRebuildOnly(
+async function commitAndPushRebuild(
   io: SocketServer,
   taskId: string,
   live: LiveSession,
+  builder: string,
   message: string,
-): Promise<void> {
-  const task = store.getTask(taskId);
-  if (!task) throw new Error('Task not found');
-
-  guardCampaignTaskStage(taskId, 'build');
-  setPipelineStage(io, taskId, 'build', 'active');
-  const builder = spawnPhase(io, taskId, 'builder', 'Builder Liliputian');
-  if (!builder) throw new Error('Failed to register builder agent');
-
-  chatStatus(io, taskId, `📦 Committing rebuild marker & building image…`);
+): Promise<string> {
   logPhase(io, taskId, builder, 'info', 'Committing rebuild marker…');
   let commitFixer: string | undefined;
-  const sha = await runGitOpWithFixer<string>({
+  const committedSha = await runGitOpWithFixer<string>({
     agentSession: live.agentSession,
     ...campaignGitFixerHooks(io, taskId, () => commitFixer ?? builder),
     op: () =>
@@ -4639,8 +4665,7 @@ async function runRebuildOnly(
       }
     },
   });
-  store.updateTask(taskId, { commitSha: sha });
-  logPhase(io, taskId, builder, 'info', `Commit ${sha.substring(0, 7)} ready`);
+  logPhase(io, taskId, builder, 'info', `Commit ${committedSha.substring(0, 7)} ready`);
 
   logPhase(io, taskId, builder, 'info', 'Pushing branch…', `git push origin ${live.branch}`);
   let pushFixer: string | undefined;
@@ -4671,6 +4696,37 @@ async function runRebuildOnly(
     },
   });
   logPhase(io, taskId, builder, 'info', 'Branch pushed.');
+  const pushedSha = await confirmedPushedHead(live.repoHandle);
+  store.updateTask(taskId, { commitSha: pushedSha });
+  return pushedSha;
+}
+
+async function runRebuildOnly(
+  io: SocketServer,
+  taskId: string,
+  live: LiveSession,
+  message: string,
+  options: { existingHeadSha?: string } = {},
+): Promise<void> {
+  const task = store.getTask(taskId);
+  if (!task) throw new Error('Task not found');
+
+  guardCampaignTaskStage(taskId, 'build');
+  setPipelineStage(io, taskId, 'build', 'active');
+  const builder = spawnPhase(io, taskId, 'builder', 'Builder Liliputian');
+  if (!builder) throw new Error('Failed to register builder agent');
+
+  const sha =
+    options.existingHeadSha ??
+    (await commitAndPushRebuild(io, taskId, live, builder, message));
+  store.updateTask(taskId, { commitSha: sha });
+  chatStatus(
+    io,
+    taskId,
+    options.existingHeadSha
+      ? `📦 Revalidating pull-request head ${sha.substring(0, 7)}…`
+      : `📦 Rebuild marker committed; building image…`,
+  );
 
   if (!ACR_NAME) {
     failPhase(io, taskId, builder, 'ACR_NAME env var not set — cannot rebuild image.');
@@ -4777,6 +4833,7 @@ async function runRebuildOnly(
     campaignConfiguredModel(taskId, 'reviewer'),
   );
   guardCampaignTaskStage(taskId, 'review');
+  setPipelineStage(io, taskId, 'review', 'active');
   try {
     const review = await triggerPipelineReview(
       io,
@@ -4807,7 +4864,90 @@ async function runRebuildOnly(
     logger.warn({ taskId, err: err instanceof Error ? err.message : String(err) }, 'Rebuild reviewer threw (non-fatal)');
   }
 
+  setPipelineStage(io, taskId, 'review', 'done');
   setTaskStatus(io, taskId, 'review', { devUrl, devNamespace: live.namespace, devPort: live.port, devEnvState: 'active' });
+}
+
+export function revalidateCampaignTask(
+  io: SocketServer,
+  taskId: string,
+  expectedHeadSha: string,
+): void {
+  if (!beginTaskRun(taskId)) {
+    logger.info(
+      { taskId, expectedHeadSha },
+      'Campaign head revalidation skipped because a task run is already active',
+    );
+    return;
+  }
+  void (async () => {
+    try {
+      const task = store.getTask(taskId);
+      if (!task) throw new Error('Task not found');
+      if (!task.campaignCycleId) {
+        throw new Error('Campaign head revalidation requires a campaign-owned task');
+      }
+      store.updateTask(taskId, {
+        status: 'building',
+        commitSha: expectedHeadSha,
+        campaignReleaseReview: undefined,
+        errorMessage: undefined,
+      });
+
+      const existing = liveSessions.get(taskId);
+      if (existing) {
+        liveSessions.delete(taskId);
+        try {
+          await disposeAgentSession(existing.agentSession);
+        } catch (err) {
+          logger.warn(
+            {
+              taskId,
+              err: err instanceof Error ? err.message : String(err),
+            },
+            'Failed to dispose stale session before campaign head revalidation',
+          );
+        }
+      }
+
+      const refreshedTask = store.getTask(taskId);
+      if (!refreshedTask) throw new Error('Task not found');
+      const live = await resurrectLiveSession(io, taskId, refreshedTask);
+      const actualHeadSha = await confirmedPushedHead(live.repoHandle);
+      if (actualHeadSha !== expectedHeadSha) {
+        logger.warn(
+          { taskId, expectedHeadSha, actualHeadSha },
+          'Campaign pull-request head advanced before revalidation; using the latest confirmed head',
+        );
+        store.updateTask(taskId, { commitSha: actualHeadSha });
+      }
+      await runRebuildOnly(
+        io,
+        taskId,
+        live,
+        'Campaign pull-request head revalidation',
+        { existingHeadSha: actualHeadSha },
+      );
+    } catch (err) {
+      const failure =
+        campaignTaskRunInterruption(
+          taskId,
+          campaignStageByTask.get(taskId) ?? 'agent-turn',
+        ) ?? err;
+      if (!handleCampaignPipelineFailure(io, taskId, failure)) {
+        const message = failure instanceof Error ? failure.message : String(failure);
+        logger.error(
+          { taskId, expectedHeadSha, err: message },
+          'Campaign pull-request head revalidation failed',
+        );
+        setTaskStatus(io, taskId, 'failed', { errorMessage: message });
+      }
+    } finally {
+      clearInFlightAgent(taskId);
+      campaignStageByTask.delete(taskId);
+      endTaskRun(taskId);
+    }
+  })();
 }
 
 /** Returns true if a follow-up chat message would trigger an iteration. */
