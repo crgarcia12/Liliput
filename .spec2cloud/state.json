@@ -2045,14 +2045,20 @@
           "tests": 6
         },
         "campaignRecovery": {
-          "status": "revalidation-started",
+          "status": "success",
           "campaignId": "ea8d97fc-f17b-4ba1-bea5-40370617f090",
           "cycleId": "e8f856a4-1260-4811-9034-c4ff01986b3c",
           "staleReviewedHead": "d06a70601c2bdd61e89609e889782a3e0ccc3655",
-          "livePullRequestHead": "deb575e2b6706c22b98d11c53037f5865344d4b7",
+          "initialLivePullRequestHead": "deb575e2b6706c22b98d11c53037f5865344d4b7",
+          "finalReviewedHead": "a9a3870dfa32bfb3c37f3d79b46ece0440d1ea6d",
           "reviewInvalidated": true,
-          "revalidationRequired": true,
-          "observedAt": "2026-07-24T14:28:21Z"
+          "revalidationRequired": false,
+          "pullRequest": "https://github.com/crgarcia12/obelisco/pull/2",
+          "mergeSha": "c035b2cce99a3c059da5887479aedbe08bd0fd28",
+          "nextCycleId": "a63da50c-eab4-4c16-a385-d6f2c0a55c6f",
+          "nextWorkstreamId": "829d3e39-ab4b-42f3-ac69-485bffc96943",
+          "nextWorkstreamName": "[Campaign crgarcia12/obelisco #3] Extend spec validation to cover task-to-requirement traceability",
+          "completedAt": "2026-07-24T15:15:32Z"
         }
       },
       "humanApproval": {
@@ -2093,6 +2099,10 @@
         "mainCi": {
           "status": "success",
           "workflow": "https://github.com/crgarcia12/Liliput/actions/runs/30102019287"
+        },
+        "production": {
+          "status": "pass",
+          "verifiedAt": "2026-07-24T15:18:17Z"
         }
       },
       "humanApproval": {
@@ -2130,7 +2140,50 @@
       },
       "verification": {
         "deployment": {
-          "status": "pending"
+          "status": "success",
+          "workflow": "https://github.com/crgarcia12/Liliput/actions/runs/30103094941",
+          "commit": "de6d1513f972f18806fc498f2face11bc651cb51",
+          "apiImage": "crgarliliputacr.azurecr.io/liliput-api:de6d1513f972f18806fc498f2face11bc651cb51"
+        },
+        "mainCi": {
+          "status": "success",
+          "workflow": "https://github.com/crgarcia12/Liliput/actions/runs/30103095005"
+        },
+        "productionEndpoints": {
+          "root": 200,
+          "apiHealth": 200,
+          "login": 200,
+          "https": true
+        },
+        "cluster": {
+          "readyNodes": 4,
+          "totalNodes": 4,
+          "api": "1/1",
+          "web": "1/1",
+          "gateway": "1/1",
+          "criticalLogMatches": 0
+        },
+        "productionPlaywright": {
+          "status": "pass",
+          "tests": 6
+        },
+        "campaignReviewerLoop": {
+          "status": "success",
+          "campaignId": "ea8d97fc-f17b-4ba1-bea5-40370617f090",
+          "cycleId": "e8f856a4-1260-4811-9034-c4ff01986b3c",
+          "taskId": "7478d9d9-405a-4b28-8a4d-1fabd87aad12",
+          "reviewerFeedbackResumed": true,
+          "reviewedHeadSha": "a9a3870dfa32bfb3c37f3d79b46ece0440d1ea6d",
+          "pullRequest": "https://github.com/crgarcia12/obelisco/pull/2",
+          "mergeSha": "c035b2cce99a3c059da5887479aedbe08bd0fd28",
+          "previewHealthy": true,
+          "previewHttp": 200,
+          "cooldownMinutes": 5,
+          "nextCycleId": "a63da50c-eab4-4c16-a385-d6f2c0a55c6f",
+          "nextWorkstreamId": "829d3e39-ab4b-42f3-ac69-485bffc96943",
+          "nextWorkstreamName": "[Campaign crgarcia12/obelisco #3] Extend spec validation to cover task-to-requirement traceability",
+          "exactlyOneNextWorkstream": true,
+          "verifiedAt": "2026-07-24T15:18:17Z"
         }
       },
       "humanApproval": {
