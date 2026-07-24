@@ -130,7 +130,12 @@ EXPOSE ${port}
 
 export async function resolveDockerfile(cwd: string): Promise<DockerfileResult> {
   // 1. Existing Dockerfile wins.
-  for (const candidate of ['Dockerfile', 'src/api/Dockerfile', 'Dockerfile.dev']) {
+  for (const candidate of [
+    'Dockerfile',
+    'src/api/Dockerfile',
+    'Dockerfile.dev',
+    'Dockerfile.liliput',
+  ]) {
     const p = path.join(cwd, candidate);
     if (await exists(p)) {
       // Best-effort port detection
