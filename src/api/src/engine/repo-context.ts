@@ -11,8 +11,8 @@
  *   3. Truncate everything aggressively so the prompt stays under ~12k chars.
  *   4. Best-effort cleanup of the temp clone.
  *
- * Failures are non-fatal — callers fall back to the title/description-only
- * prompt if extraction throws.
+ * Failures are returned as null. Specification generation treats null as a
+ * hard grounding failure rather than inventing a spec from the task title.
  */
 
 import { readFile, readdir, rm } from 'node:fs/promises';
@@ -125,8 +125,7 @@ export interface RepoContext {
 }
 
 /**
- * Clone + read + format. Best effort: returns null if anything fails badly
- * enough that the spec generator should proceed without repo context.
+ * Clone + read + format. Returns null when repository evidence cannot be read.
  *
  * No wall-clock timeout — a clone that's actively transferring should be
  * allowed to finish. Stalled connections are caught by git's

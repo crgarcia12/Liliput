@@ -34,6 +34,7 @@ export interface PullRequest {
   htmlUrl: string;
   apiUrl: string;
   state: string;
+  draft: boolean;
 }
 
 function redactExactText(value: string, excludedText?: string): string {
@@ -138,6 +139,7 @@ interface GitHubPrResponse {
   html_url: string;
   url: string;
   state: string;
+  draft?: boolean;
 }
 
 export type RepoVerification =
@@ -328,6 +330,7 @@ export async function openPullRequest(
     htmlUrl: data.html_url,
     apiUrl: data.url,
     state: data.state,
+    draft: data.draft ?? options.draft ?? false,
   };
 }
 
@@ -370,6 +373,7 @@ export async function findPullRequestByHead(
         htmlUrl: pull.html_url,
         apiUrl: pull.url,
         state: pull.state,
+        draft: pull.draft ?? false,
       }
     : undefined;
 }
@@ -446,5 +450,43 @@ export async function closePullRequest(repo: string, prNumber: number): Promise<
   });
   if (!res.ok && res.status !== 404) {
     throw new Error(`Close PR failed (${res.status}): ${await res.text()}`);
+  }
+}
+
+export async function mergePullRequestAtSha(
+  repo: string,
+  prNumber: number,
+  expectedHeadSha: string,
+  options: { token?: string; fetchImpl?: typeof fetch } = {},
+): Promise<void> {
+  const token = options.token ?? getToken();
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const res = await fetchImpl(
+    `https://api.github.com/repos/${repo}/pulls/${prNumber}/merge`,
+    {
+      method: 'PUT',
+      headers: {
+        Authorization: ['Bearer', token].join(' '),
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        merge_method: 'squash',
+        sha: expectedHeadSha,
+      }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(`PR merge failed (${res.status}): ${await res.text()}`);
+  }
+  const result = (await res.json()) as {
+    merged?: boolean;
+    message?: string;
+  };
+  if (result.merged !== true) {
+    throw new Error(
+      `PR merge was not confirmed: ${result.message ?? 'GitHub returned merged=false'}`,
+    );
   }
 }

@@ -401,11 +401,11 @@ export function createTasksRouter(
           'cloning': '📦 Cloning the target repo (depth=1)',
           'reading-files': '📖 Reading README, manifests, and file tree',
           'extracted': '✅ Repo context extracted',
-          'clone-failed': '⚠️ Could not clone the repo — drafting from title/description only',
+          'clone-failed': '⚠️ Could not clone the repo — specification generation stopped',
           'connecting-llm': '🔌 Connecting to the LLM',
           'drafting': '✍️ Drafting the specification',
           'spec-ready': '✅ Specification draft ready',
-          'spec-failed': '⚠️ Spec generation failed — falling back to template',
+          'spec-failed': '⚠️ Spec generation failed — no fallback specification was created',
         };
         void specGenerator(
           task.title,
@@ -466,6 +466,11 @@ export function createTasksRouter(
           .catch((specErr: unknown) => {
             const errMessage = specErr instanceof Error ? specErr.message : String(specErr);
             logger.error({ taskId: task.id, err: errMessage }, 'Spec generation failed');
+            store.updateTask(task.id, { status: 'clarifying' });
+            io.to(`task:${task.id}`).emit('task:status', {
+              taskId: task.id,
+              status: 'clarifying',
+            });
             const sysMsg = store.addChatMessage(
               task.id,
               'system',

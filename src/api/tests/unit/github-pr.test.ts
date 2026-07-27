@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildPullRequestDescription,
   extractCampaignCycleMarker,
+  mergePullRequestAtSha,
 } from '../../src/engine/github-pr.js';
 
 describe('buildPullRequestDescription', () => {
@@ -20,6 +21,26 @@ describe('buildPullRequestDescription', () => {
       commitSha: '1234567890abcdef',
       previewUrl: 'https://preview.example.test/task/',
       originalPrompt,
+    });
+
+    describe('mergePullRequestAtSha', () => {
+      it('should pin the merge to the head SHA whose checks passed', async () => {
+        let requestBody = '';
+        const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit) => {
+          requestBody = String(init?.body ?? '');
+          return new Response(JSON.stringify({ merged: true }), { status: 200 });
+        }) as typeof fetch;
+
+        await mergePullRequestAtSha('owner/repo', 42, 'checked-head-sha', {
+          token: 'test-token',
+          fetchImpl,
+        });
+
+        expect(JSON.parse(requestBody)).toEqual({
+          merge_method: 'squash',
+          sha: 'checked-head-sha',
+        });
+      });
     });
 
     expect(body).not.toContain(originalPrompt);

@@ -97,15 +97,15 @@ describe('gateVerdict', () => {
     expect(r).toContain('tests are red');
   });
 
-  it('rejects done when deploy unhealthy', () => {
+  it('does not treat deployment health as part of implementation readiness', () => {
     const r = gateVerdict({
       verdict: { status: 'done', reason: 'ok', raw: 'VERDICT: done' },
       objective: { ...allGood, deployHealthy: false },
     });
-    expect(r).toContain('deploy is not healthy');
+    expect(r).toBeNull();
   });
 
-  it('rejects done when tests never ran', () => {
+  it('allows tests-not-run when command applicability is unknown', () => {
     const r = gateVerdict({
       verdict: { status: 'done', reason: 'ok', raw: 'VERDICT: done' },
       objective: {
@@ -113,11 +113,10 @@ describe('gateVerdict', () => {
         checksRan: { tests: false, deploy: true, gherkin: true },
       },
     });
-    // Tests-not-run is now allowed (deploy is the ground truth).
     expect(r).toBeNull();
   });
 
-  it('rejects done when deploy never verified', () => {
+  it('does not require deployment to have run before implementation is ready', () => {
     const r = gateVerdict({
       verdict: { status: 'done', reason: 'ok', raw: 'VERDICT: done' },
       objective: {
@@ -125,7 +124,7 @@ describe('gateVerdict', () => {
         checksRan: { tests: true, deploy: false, gherkin: true },
       },
     });
-    expect(r).toContain('deploy was never verified');
+    expect(r).toBeNull();
   });
 
   it('passes through blocked verdicts without gating', () => {

@@ -123,9 +123,15 @@
       "type": "bugfix",
       "frd": "specs/liliput/frd-autonomous-workstream-campaigns.md",
       "status": "done"
+    },
+    {
+      "id": "ext-008",
+      "type": "extension",
+      "frd": "specs/liliput/frd-managed-end-to-end-delivery.md",
+      "status": "in-progress"
     }
   ],
-  "currentIncrement": "ext-007",
+  "currentIncrement": "ext-008",
   "increments": {
     "ext-pre-001": {
       "type": "extension-prerequisite",
@@ -2283,6 +2289,120 @@
       },
       "completedAt": "2026-07-24T21:53:11Z",
       "verifiedAt": "2026-07-24T22:21:01Z"
+    },
+    "ext-008": {
+      "type": "extension",
+      "frd": "specs/liliput/frd-managed-end-to-end-delivery.md",
+      "description": "Preserve the managed delivery contract across all agent turns and fail closed at specification, validation, Git, CI, merge, rebuild, and autonomous proposal boundaries.",
+      "status": "in-progress",
+      "steps": {
+        "tests": {
+          "status": "done",
+          "gherkinDeltas": [
+            "Recovery turn retains the approved delivery contract",
+            "Validation cannot pass when Cucumber executes zero scenarios",
+            "Direct delivery merges only the checked pull request revision",
+            "Rebuild current revision without modifying source",
+            "Campaign rejects a support-only proposal"
+          ],
+          "vitestFiles": [
+            "src/api/tests/unit/managed-delivery-contract.test.ts",
+            "src/api/tests/unit/spec-generator-fail-closed.test.ts",
+            "src/api/tests/unit/github-check-gate.test.ts",
+            "src/api/tests/unit/github-pr.test.ts",
+            "src/api/tests/unit/git-client.test.ts",
+            "src/api/tests/unit/gherkin-runner.test.ts",
+            "src/api/tests/unit/autonomous-campaign-feature-proposal.test.ts"
+          ]
+        },
+        "contracts": {
+          "status": "done",
+          "apiContracts": [],
+          "sharedTypes": [
+            "src/shared/types/autonomous-campaign-proposal.ts"
+          ],
+          "infraUpdated": false
+        },
+        "implementation": {
+          "status": "done",
+          "slices": {
+            "api": {
+              "status": "done",
+              "modifiedFiles": [
+                "src/api/src/engine/managed-delivery-contract.ts",
+                "src/api/src/engine/agent-loop.ts",
+                "src/api/src/engine/agent-engine.ts",
+                "src/api/src/engine/spec-generator.ts",
+                "src/api/src/engine/repo-context.ts",
+                "src/api/src/routes/tasks.ts",
+                "src/api/src/engine/git-client.ts",
+                "src/api/src/engine/gherkin-runner.ts",
+                "src/api/src/engine/github-check-gate.ts",
+                "src/api/src/engine/github-pr.ts",
+                "src/api/src/engine/reviewer-loop.ts",
+                "src/api/src/engine/autopilot.ts",
+                "src/api/src/engine/k8s-deployer.ts",
+                "src/api/src/engine/autonomous-campaign-proposal.ts"
+              ],
+              "failingTests": [],
+              "lastTestRun": "2026-07-27T13:05:39Z",
+              "iteration": 2
+            },
+            "web": {
+              "status": "not-applicable",
+              "reason": "The increment changes delivery orchestration and safety gates without changing the portal surface."
+            },
+            "integration": {
+              "status": "done",
+              "failingTests": [],
+              "lastTestRun": "2026-07-27T13:05:39Z",
+              "iteration": 1
+            }
+          },
+          "review": {
+            "status": "pass",
+            "reviewer": "adversarial-code-review",
+            "findings": 0
+          }
+        },
+        "verification": {
+          "status": "in-progress",
+          "regression": {
+            "apiUnit": {
+              "status": "pass",
+              "files": 51,
+              "tests": 527
+            },
+            "cucumber": {
+              "status": "pass",
+              "scenarios": 75,
+              "steps": 554
+            },
+            "playwright": {
+              "status": "pass",
+              "tests": 6
+            },
+            "apiBuild": "pass",
+            "apiLint": "pass",
+            "webBuild": "pass",
+            "webLint": "pass",
+            "skippedTests": 0,
+            "verifiedAt": "2026-07-27T13:32:17Z"
+          },
+          "aspire": {
+            "api": "healthy",
+            "web": "healthy",
+            "testHarnessRecovery": "Restarted with the system Node path and authenticated GitHub CLI token."
+          },
+          "deployment": {
+            "status": "pending"
+          }
+        }
+      },
+      "research": {
+        "finding": "End-to-end reliability requires reinjecting immutable task context on every turn and using deterministic evidence gates rather than trusting conversational memory or success-shaped fallbacks.",
+        "packageUpdates": []
+      }
     }
   },
   "humanGates": {
@@ -2451,6 +2571,18 @@
       "cluster": "running-4-nodes",
       "startupErrors": 0,
       "obeliscoSerialRelease": "cycle-1-merged-cycle-2-workstream-active"
+    },
+    "managedEndToEndDelivery": {
+      "apiBuild": "pass",
+      "webBuild": "pass",
+      "apiLint": "pass",
+      "webLint": "pass",
+      "apiTests": "51-files-527-tests-pass",
+      "cucumber": "75-scenarios-554-steps-pass",
+      "playwright": "6-pass",
+      "codeReview": "pass",
+      "skippedTests": 0,
+      "deployment": "pending"
     }
   },
   "extensions": {
@@ -2542,5 +2674,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-24T11:33:36Z"
+  "lastUpdated": "2026-07-27T13:32:17Z"
 }

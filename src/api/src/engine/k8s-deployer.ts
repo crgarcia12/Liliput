@@ -215,7 +215,12 @@ export async function deployApp(opts: DeployAppOptions): Promise<void> {
       strategy: { type: 'Recreate' },
       selector: { matchLabels: labels },
       template: {
-        metadata: { labels },
+        metadata: {
+          labels,
+          annotations: {
+            'liliput.dev/deployed-at': new Date().toISOString(),
+          },
+        },
         spec: {
           containers: [
             {

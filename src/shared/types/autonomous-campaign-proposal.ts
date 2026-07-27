@@ -12,6 +12,7 @@ export type CampaignProposalRejectionReason =
   | 'irreversible-change'
   | 'untestable'
   | 'oversized'
+  | 'non-delivery'
   | 'unsupported';
 
 export interface CampaignFeatureCandidate {
