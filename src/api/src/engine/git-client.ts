@@ -188,6 +188,121 @@ export async function runWithRetry<T>(
   }
 }
 
+export function repositorySlugFromRemoteUrl(remoteUrl: string): string | null {
+  const trimmed = remoteUrl.trim();
+  const scpMatch = trimmed.match(/^git@github\.com:([^/]+\/[^/]+?)(?:\.git)?$/i);
+  if (scpMatch?.[1]) return scpMatch[1].replace(/\.git$/i, '');
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.hostname.toLowerCase() !== 'github.com') return null;
+    const slug = parsed.pathname.replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '');
+    return /^[^/]+\/[^/]+$/.test(slug) ? slug : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function assertRepositoryIdentity(handle: RepoHandle): Promise<void> {
+  const [{ stdout: remoteStdout }, { stdout: branchStdout }] = await Promise.all([
+    run('git', ['remote', 'get-url', 'origin'], { cwd: handle.cwd }),
+    run('git', ['branch', '--show-current'], { cwd: handle.cwd }),
+  ]);
+  const actualRepo = repositorySlugFromRemoteUrl(remoteStdout);
+  if (!actualRepo || actualRepo.toLowerCase() !== handle.repo.toLowerCase()) {
+    throw new Error(
+      `Repository identity mismatch: expected ${handle.repo}, origin resolves to ${actualRepo ?? 'a non-GitHub remote'}.`,
+    );
+  }
+  const actualBranch = branchStdout.trim();
+  if (actualBranch !== handle.branch) {
+    throw new Error(
+      `Branch identity mismatch: expected ${handle.branch}, checked out ${actualBranch || '(detached HEAD)'}.`,
+    );
+  }
+}
+
+export function unsafeGeneratedArtifactPaths(
+  paths: readonly string[],
+  allowedGeneratedPrefixes: readonly string[] = [],
+): string[] {
+  const unsafeDirectory =
+    /(^|\/)(node_modules|\.venv|venv|__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache|coverage|\.nyc_output|\.turbo)(\/|$)/i;
+  const unsafeCacheDirectory = /(^|\/)\.next\/cache(\/|$)/i;
+  const conditionalBuildDirectory = /(^|\/)(dist|build)(\/|$)/i;
+  const unsafeFile =
+    /(^|\/)(\.DS_Store|npm-debug\.log|yarn-error\.log|pnpm-debug\.log|[^/]+\.pyc|[^/]+\.tsbuildinfo)$/i;
+  const normalizedAllowedPrefixes = allowedGeneratedPrefixes
+    .map((prefix) => prefix.replace(/\\/g, '/').replace(/^\.\/+|\/+$/g, ''))
+    .filter((prefix) => /(^|\/)(dist|build)$/i.test(prefix));
+
+  return paths.filter((candidate) => {
+    const normalized = candidate.replace(/\\/g, '/');
+    if (
+      unsafeDirectory.test(normalized) ||
+      unsafeCacheDirectory.test(normalized) ||
+      unsafeFile.test(normalized)
+    ) {
+      return true;
+    }
+    if (conditionalBuildDirectory.test(normalized)) {
+      const allowed = normalizedAllowedPrefixes.some(
+        (prefix) => normalized === prefix || normalized.startsWith(`${prefix}/`),
+      );
+      if (!allowed) return true;
+    }
+    const filename = normalized.split('/').pop() ?? normalized;
+    if (!/^\.env(?:\.|$)/i.test(filename)) return false;
+    return !/\.(?:example|sample|template|dist)$/i.test(filename);
+  });
+}
+
+async function committedGeneratedArtifactAllowlist(handle: RepoHandle): Promise<string[]> {
+  let stdout: string;
+  try {
+    ({ stdout } = await run(
+      'git',
+      ['show', 'HEAD:.liliput-generated-artifacts.allow'],
+      { cwd: handle.cwd },
+    ));
+  } catch {
+    return [];
+  }
+
+  return stdout
+    .split(/\r?\n/)
+    .map((entry) => entry.trim().replace(/\\/g, '/').replace(/^\.\/+|\/+$/g, ''))
+    .filter(
+      (entry) =>
+        entry.length > 0 &&
+        !entry.startsWith('#') &&
+        !entry.startsWith('/') &&
+        !entry.split('/').includes('..') &&
+        !/[*?[\]]/.test(entry) &&
+        /(^|\/)(dist|build)$/i.test(entry),
+    );
+}
+
+async function assertSafeStagedChanges(handle: RepoHandle): Promise<void> {
+  const { stdout } = await run(
+    'git',
+    ['diff', '--cached', '--name-only', '--diff-filter=ACMRTUXB', '-z'],
+    { cwd: handle.cwd },
+  );
+  const stagedPaths = stdout.split('\0').filter(Boolean);
+  const allowedGeneratedPrefixes = await committedGeneratedArtifactAllowlist(handle);
+  const unsafe = unsafeGeneratedArtifactPaths(stagedPaths, allowedGeneratedPrefixes);
+  if (unsafe.length === 0) return;
+
+  const shown = unsafe.slice(0, 20);
+  const suffix = unsafe.length > shown.length
+    ? `\n...and ${unsafe.length - shown.length} more`
+    : '';
+  throw new Error(
+    `Refusing to commit generated, cached, or secret-bearing files:\n${shown.join('\n')}${suffix}\nRemove them from the change or add the path to .gitignore. Repositories that intentionally version dist/ or build/ output must commit the exact directory prefix to .liliput-generated-artifacts.allow before Liliput starts the task.`,
+  );
+}
+
 /** Clone a repo into a fresh workspace directory and return a handle. */
 export async function clone(options: CloneOptions): Promise<RepoHandle> {
   const token = getToken();
@@ -256,7 +371,9 @@ export async function commitAll(
   handle: RepoHandle,
   message: string,
 ): Promise<string> {
+  await assertRepositoryIdentity(handle);
   await run('git', ['add', '-A'], { cwd: handle.cwd });
+  await assertSafeStagedChanges(handle);
 
   // Detect "nothing to commit" up front for a friendlier error.
   const { stdout: status } = await run('git', ['status', '--porcelain'], {
@@ -278,6 +395,7 @@ export async function push(
   handle: RepoHandle,
   opts: { onLog?: RetryLog } = {},
 ): Promise<void> {
+  await assertRepositoryIdentity(handle);
   const log = opts.onLog;
   await runWithRetry(
     () =>
@@ -315,7 +433,9 @@ export async function commitAllIfChanges(
   handle: RepoHandle,
   message: string,
 ): Promise<string | null> {
+  await assertRepositoryIdentity(handle);
   await run('git', ['add', '-A'], { cwd: handle.cwd });
+  await assertSafeStagedChanges(handle);
   const { stdout: status } = await run('git', ['status', '--porcelain'], {
     cwd: handle.cwd,
   });
@@ -337,6 +457,7 @@ export async function pushForceWithLease(
   handle: RepoHandle,
   opts: { onLog?: RetryLog; expectedRemoteSha?: string } = {},
 ): Promise<void> {
+  await assertRepositoryIdentity(handle);
   const log = opts.onLog;
   const lease = opts.expectedRemoteSha
     ? `--force-with-lease=refs/heads/${handle.branch}:${opts.expectedRemoteSha}`

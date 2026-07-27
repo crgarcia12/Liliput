@@ -23,6 +23,7 @@ type CampaignProposalRejectionReason =
   | 'irreversible-change'
   | 'untestable'
   | 'oversized'
+  | 'non-delivery'
   | 'unsupported';
 
 interface CampaignFeatureCandidate {
@@ -451,6 +452,52 @@ describe('generateAndCritiqueCampaignProposal', () => {
 
     expect(result.status).toBe('accepted');
     expect(campaignStore.getCycle(cycle.cycleId)?.proposal).toBeDefined();
+  });
+
+  it('should reject specification-only work even when the critic selects it', async () => {
+    const cycle = createRunningCycle();
+    await persistEvidence(cycle);
+    const candidate = baseCandidate({
+      id: 'cand-spec-only',
+      title: 'Document the next feature',
+      affectedComponents: [
+        'specs/frd-next-feature.md',
+        'tests/features/next-feature.feature',
+      ],
+    });
+
+    const result = await generate(cycle, {
+      candidates: [candidate],
+      decision: { selectedCandidateId: candidate.id },
+    });
+
+    expect(result.status).toBe('rejected');
+    expect(result.rejections).toContainEqual({
+      candidateId: candidate.id,
+      reason: 'non-delivery',
+    });
+    expect(campaignStore.getCycle(cycle.cycleId)?.proposal).toBeUndefined();
+  });
+
+  it('should reject support-only work without an explicit delivery surface', async () => {
+    const cycle = createRunningCycle();
+    await persistEvidence(cycle);
+    const candidate = baseCandidate({
+      id: 'cand-support-only',
+      title: 'Add a documentation site configuration',
+      affectedComponents: ['mkdocs.yml', '.github/workflows/docs.yml'],
+    });
+
+    const result = await generate(cycle, {
+      candidates: [candidate],
+      decision: { selectedCandidateId: candidate.id },
+    });
+
+    expect(result.status).toBe('rejected');
+    expect(result.rejections).toContainEqual({
+      candidateId: candidate.id,
+      reason: 'non-delivery',
+    });
   });
 
   it.each<[string, Partial<CampaignFeatureCandidate>, CampaignProposalRejectionReason]>([

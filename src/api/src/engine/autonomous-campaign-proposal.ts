@@ -68,6 +68,7 @@ const rejectionReasons: CampaignProposalRejectionReason[] = [
   'irreversible-change',
   'untestable',
   'oversized',
+  'non-delivery',
   'unsupported',
 ];
 
@@ -369,6 +370,39 @@ export function calculateCampaignProposalFingerprint(
   return createHash('sha256').update(canonical, 'utf8').digest('hex');
 }
 
+function isDeliveryComponent(component: string): boolean {
+  const normalized = component.trim().replace(/\\/g, '/').toLowerCase();
+  if (!normalized) return false;
+  if (
+    /(^|\/)(docs?|specs?|tests?|e2e)(\/|$)/.test(normalized) ||
+    /(^|\/)(readme|changelog|license)(?:\.[^/]*)?$/.test(normalized) ||
+    /\.(?:md|mdx|txt|feature|snap)$/.test(normalized) ||
+    /\.(?:spec|test)\.[cm]?[jt]sx?$/.test(normalized)
+  ) {
+    return false;
+  }
+
+  const productionCode =
+    /(^|\/)(src|app|api|web|server|client|frontend|backend|ui|components?|routes?|controllers?|services?|workers?|commands?|cli|engine|runtime|db|database|migrations?)(\/|$)/.test(
+      normalized,
+    ) ||
+    /\.(?:[cm]?[jt]sx?|py|go|java|kt|kts|cs|fs|fsx|rs|rb|php|swift|scala|vue|svelte|sql|prisma)$/.test(
+      normalized,
+    );
+  const operatorCapability =
+    /(^|\/)(k8s|kubernetes|infra|infrastructure|helm|charts?|deploy|deployment|terraform)(\/|$)/.test(
+      normalized,
+    ) ||
+    /(^|\/)(dockerfile(?:\.[^/]*)?|azure\.ya?ml|[^/]+\.bicep|chart\.ya?ml)$/.test(
+      normalized,
+    );
+  return productionCode || operatorCapability;
+}
+
+function isNonDeliveryCandidate(candidate: CampaignFeatureCandidate): boolean {
+  return !candidate.affectedComponents.some(isDeliveryComponent);
+}
+
 function mandatoryRejection(
   candidate: CampaignFeatureCandidate,
   fingerprint: string,
@@ -382,6 +416,7 @@ function mandatoryRejection(
   if (candidate.reversible === false) return 'irreversible-change';
   if (candidate.verifiable === false) return 'untestable';
   if (candidate.size === 'large') return 'oversized';
+  if (isNonDeliveryCandidate(candidate)) return 'non-delivery';
   return undefined;
 }
 
@@ -1033,6 +1068,9 @@ export async function generateCampaignFeatureCandidatesWithCopilot(
     [
       'Generate one to five useful, evidence-backed feature candidates for a single serial delivery cycle.',
       'Prefer small or medium work. Include concrete tests and a reversible rollback plan.',
+      'Every candidate must include production behavior or an operator-usable capability.',
+      'affectedComponents must name at least one concrete production-code path (for example src/, app/, api/, web/, server/) or operator-capability path (for example k8s/, infra/, Helm, Dockerfile, or Bicep). Unknown support/config files do not prove delivery.',
+      'Docs-only, specification-only, test-harness-only, planning, workflow-only, or scaffolding work is invalid unless production implementation is explicitly included.',
       'Do not reject authentication, workflow, or permission changes merely by category.',
       'Set all policy boolean fields truthfully. Call submit_campaign_feature_candidates exactly once.',
       '',
@@ -1085,6 +1123,7 @@ export async function critiqueCampaignFeatureCandidatesWithCopilot(
     [
       'Independently critique the candidate set against the persisted evidence.',
       'Select at most one useful, testable, reversible, non-duplicate small or medium candidate.',
+      'Reject non-delivery candidates that produce only specs, docs, tests, plans, workflows, or scaffolding without production capability.',
       'Otherwise reject every candidate. Sensitive file categories alone are not rejection reasons.',
       'Call submit_campaign_proposal_critique exactly once.',
       '',

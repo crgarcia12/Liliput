@@ -17,8 +17,6 @@
  */
 
 import type { Server as SocketServer } from 'socket.io';
-import { promises as fs } from 'fs';
-import * as path from 'path';
 import { randomUUID } from 'node:crypto';
 import type {
   AgentRole,
@@ -42,6 +40,7 @@ import {
   disposeAgentSession,
   abortAgentTurn,
   applyModelChange,
+  setAgentDeliveryContext,
   type AgentSession,
 } from './agent-loop.js';
 import { resolveDockerfile } from './dockerfile-detector.js';
@@ -72,14 +71,15 @@ import {
   openPullRequest,
   markPullRequestReady,
   closePullRequest,
+  mergePullRequestAtSha,
   updatePullRequestBody,
 } from './github-pr.js';
+import { assertPullRequestChecksPassing } from './github-check-gate.js';
 import { linkPrToFeature } from './pm-issue-flow.js';
 import * as featureStore from '../stores/feature-store.js';
 import { pathPrefixFor, writeContractIntoWorkspace } from './liliput-deploy-contract.js';
 import { writeAcceptanceFeature } from './acceptance-feature-writer.js';
 import { installCucumberIfMissing } from './cucumber-installer.js';
-import { gateVerdict } from './autopilot.js';
 import { latestVerdictForTask } from '../stores/verdict-store.js';
 import { recordAndDecide as recordStuck, resetStuckHistory } from './stuck-detector.js';
 import { runGherkinChecks } from './gherkin-runner.js';
@@ -126,20 +126,11 @@ const MAX_VALIDATE_ATTEMPTS = parseInt(process.env['MAX_VALIDATE_ATTEMPTS'] ?? '
 const VALIDATE_INITIAL_SETTLE_MS = parseInt(process.env['VALIDATE_INITIAL_SETTLE_MS'] ?? '8000', 10);
 
 /**
- * Autopilot gate decision. Reads the latest `VERDICT:` line the agent
- * emitted, runs it through `gateVerdict`, and:
- *
- *  - on healthy exit: logs that the verdict (if any) is accepted.
- *  - on cap-exhausted exit: if the agent had claimed `done`, post a chat
- *    message refuting the claim so the user can see the agent over-promised.
- *
- * No shadow anymore — this is enforcing. The "enforcement" is observational
- * for now (chat message + log) since the loop already exits at cap; future
- * PRs will let the gate force additional iterations or trigger a strategy
- * pivot.
+ * Correlate the coder's local implementation verdict with Liliput's separate
+ * deployment outcome. `VERDICT: done` means implementation-ready; only this
+ * pipeline may claim that the deployed preview is healthy.
  */
 function applyVerdictGate(
-  io: SocketServer,
   taskId: string,
   outcome: { deployHealthy: boolean; exitReason: 'healthy' | 'exhausted' },
 ): void {
@@ -152,41 +143,16 @@ function applyVerdictGate(
       );
       return;
     }
-    const reject = gateVerdict({
-      verdict: { status: v.status, reason: v.reason ?? '', raw: v.raw ?? '' },
-      objective: {
-        testsExitCode: null,
-        deployHealthy: outcome.deployHealthy,
-        gherkinAllPassed: false,
-        checksRan: { tests: false, deploy: true, gherkin: false },
-      },
-    });
     logger.info(
       {
         taskId,
-        verdict: v.status,
+        implementationVerdict: v.status,
         verdictReason: v.reason,
-        exitReason: outcome.exitReason,
-        deployHealthy: outcome.deployHealthy,
-        accepted: reject === null,
-        rejectReason: reject,
+        deliveryOutcome: outcome.exitReason,
+        deliveryVerified: outcome.deployHealthy,
       },
-      'autopilot/gate decision',
+      'autopilot implementation verdict correlated with delivery outcome',
     );
-    // If the agent claimed done but we exhausted the loop unhealthy, surface
-    // it to the user — the verdict was over-promising.
-    if (
-      outcome.exitReason === 'exhausted' &&
-      v.status === 'done' &&
-      reject !== null
-    ) {
-      const msg = store.addChatMessage(
-        taskId,
-        'liliput',
-        `🚫 The agent claimed \`VERDICT: done\` but the deploy gate rejected it: ${reject}`,
-      );
-      if (msg) io.to(`task:${taskId}`).emit('chat:message', msg);
-    }
   } catch (err) {
     logger.warn(
       { taskId, err: err instanceof Error ? err.message : String(err) },
@@ -382,6 +348,10 @@ interface InFlightAgent {
   taskTitle: string;
   taskDescription: string;
   spec?: string;
+  repository?: string;
+  baseBranch?: string;
+  taskBranch?: string;
+  baseCommitSha?: string;
 }
 const inFlightAgents = new Map<string, InFlightAgent>();
 interface ActiveTaskRun {
@@ -894,6 +864,10 @@ async function drainPendingChatMessages(
           taskTitle: inFlight.taskTitle,
           taskDescription: inFlight.taskDescription,
           spec: inFlight.spec,
+          repository: inFlight.repository,
+          baseBranch: inFlight.baseBranch,
+          taskBranch: inFlight.taskBranch,
+          baseCommitSha: inFlight.baseCommitSha,
           followUp,
           isInitial: false,
           ...(liliputContext ? { liliputContext } : {}),
@@ -2639,7 +2613,7 @@ async function validateAndHealLoopInner(ctx: ValidateContext): Promise<ValidateO
       }
 
       if (!gherkinFail) {
-        applyVerdictGate(io, taskId, { deployHealthy: true, exitReason: 'healthy' });
+        applyVerdictGate(taskId, { deployHealthy: true, exitReason: 'healthy' });
         completePhase(io, taskId, tester);
         resetStuckHistory(taskId);
         const okMsg = store.addChatMessage(
@@ -2697,7 +2671,7 @@ async function validateAndHealLoopInner(ctx: ValidateContext): Promise<ValidateO
         'warn',
         `Exhausted ${MAX_VALIDATE_ATTEMPTS} validation attempts — pausing the heal loop. Chat to redirect.`,
       );
-      applyVerdictGate(io, taskId, { deployHealthy: false, exitReason: 'exhausted' });
+      applyVerdictGate(taskId, { deployHealthy: false, exitReason: 'exhausted' });
       completePhase(io, taskId, tester);
       const stuckMsg = store.addChatMessage(
         taskId,
@@ -3121,12 +3095,26 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   );
   logPhase(io, taskId, coder, 'info', `Spawning Copilot SDK session (model: ${coderSdk.model})…`);
   const agentSession = await createAgentSession(handle.cwd, coderSdk.model, coderSdk.reasoningEffort);
+  setAgentDeliveryContext(agentSession, {
+    taskTitle: task.title,
+    taskDescription: task.description,
+    spec: task.spec,
+    repository: task.repository,
+    baseBranch,
+    taskBranch: branch,
+    baseCommitSha: baselineSha,
+    workspaceRoot: handle.cwd,
+  });
   registerInFlightAgent(taskId, {
     agentSession,
     pendingChatMessages: [],
     taskTitle: task.title,
     taskDescription: task.description,
     spec: task.spec,
+    repository: task.repository,
+    baseBranch,
+    taskBranch: branch,
+    baseCommitSha: baselineSha,
   });
   logPhase(io, taskId, coder, 'info', 'Invoking LLM agent loop…');
   const hb = startHeartbeat(io, taskId, coder);
@@ -3147,6 +3135,10 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
       taskTitle: task.title,
       taskDescription: task.description,
       spec: task.spec,
+      repository: task.repository,
+      baseBranch,
+      taskBranch: branch,
+      baseCommitSha: baselineSha,
       isInitial: true,
       liliputContext: { pathPrefix },
       reviewerFeedback: consumeReviewerFeedbackForCoder(io, taskId) ?? undefined,
@@ -3606,19 +3598,22 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
     logger.warn({ taskId, err: err instanceof Error ? err.message : String(err) }, 'Pipeline reviewer threw (non-fatal)');
   }
 
-  // After validate (healthy OR cap-exhausted OR chat-preempt), surface the
-  // task as 'review' so the UI lets the user chat / ship / discard. The
-  // validate loop already posted the appropriate "✅ healthy" or "⚠️
-  // auto-heal paused" chat message — we don't duplicate it here.
-  setTaskStatus(io, taskId, 'review', {
+  const finalTaskStatus = validateOutcome.healthy ? 'review' : 'failed';
+  setTaskStatus(io, taskId, finalTaskStatus, {
     devNamespace: namespace,
     devUrl,
     devPort: df.port,
     devEnvState: 'active',
     ...(prUrl ? { pullRequestUrl: prUrl } : {}),
     ...(prNumber !== undefined ? { pullRequestNumber: prNumber } : {}),
+    ...(validateOutcome.healthy
+      ? { errorMessage: undefined }
+      : {
+          errorMessage:
+            `Preview validation did not become healthy after ${validateOutcome.attemptsUsed} attempt(s).`,
+        }),
   });
-  setPipelineStage(io, taskId, 'review', 'done');
+  setPipelineStage(io, taskId, 'review', validateOutcome.healthy ? 'done' : 'failed');
 }
 
 export async function shipTask(io: SocketServer, taskId: string): Promise<Task> {
@@ -3642,54 +3637,80 @@ export async function shipTask(io: SocketServer, taskId: string): Promise<Task> 
 
     // Open a PR now if one wasn't auto-created at deploy time (fallback path).
     if (!prNumber) {
-      logPhase(io, taskId, reviewer, 'info', `Opening pull request to ${baseBranch}…`);
-      const pr = await openPullRequest({
-        repo: task.repository,
-        title: `[liliput] ${task.title}`,
-        body: taskPullRequestDescription(task, {
-          implementationNotes: task.implementationNotes,
-          changedFiles: task.implementationChangedFiles,
-          commitSha: task.commitSha,
-          previewUrl: task.devUrl,
-        }),
-        head: task.branch,
-        base: baseBranch,
-        draft: false,
-      });
+      const existing = await findPullRequestByHead(
+        task.repository,
+        task.branch,
+        baseBranch,
+      );
+      const pr =
+        existing ??
+        (await openPullRequest({
+          repo: task.repository,
+          title: `[liliput] ${task.title}`,
+          body: taskPullRequestDescription(task, {
+            implementationNotes: task.implementationNotes,
+            changedFiles: task.implementationChangedFiles,
+            commitSha: task.commitSha,
+            previewUrl: task.devUrl,
+          }),
+          head: task.branch,
+          base: baseBranch,
+          draft: false,
+        }));
       prUrl = pr.htmlUrl;
       prNumber = pr.number;
-      logPhase(io, taskId, reviewer, 'info', `Pull request opened: ${pr.htmlUrl}`);
-      // Link PR back to Feature + apply rm:review so the RM dispatcher fires.
-      await linkPrToFeatureForTask(task, pr.number, pr.htmlUrl, /*isDraft*/ false);
-    } else {
-      // PR already exists as a draft — mark it ready for review.
-      logPhase(io, taskId, reviewer, 'info', `Marking PR #${prNumber} ready for review…`);
-      try {
+      if (existing?.draft) {
         await refreshPullRequestDescription(taskId, task, {
           implementationNotes: task.implementationNotes,
           changedFiles: task.implementationChangedFiles,
           commitSha: task.commitSha,
           previewUrl: task.devUrl,
         });
-        await markPullRequestReady(task.repository, prNumber);
-        logPhase(io, taskId, reviewer, 'info', `PR ready for review: ${prUrl}`);
-        // After mark-ready, transition the issue + PR labels to rm:review.
-        await linkPrToFeatureForTask(task, prNumber, prUrl ?? '', /*isDraft*/ false);
-      } catch (err) {
-        const m = err instanceof Error ? err.message : String(err);
-        logPhase(io, taskId, reviewer, 'warn', `Mark-ready failed (PR still open as draft): ${m}`);
+        await markPullRequestReady(task.repository, pr.number);
       }
+      logPhase(
+        io,
+        taskId,
+        reviewer,
+        'info',
+        `${existing ? 'Reusing existing pull request' : 'Pull request opened'}: ${pr.htmlUrl}`,
+      );
+      // Link PR back to Feature + apply rm:review so the RM dispatcher fires.
+      await linkPrToFeatureForTask(task, pr.number, pr.htmlUrl, /*isDraft*/ false);
+    } else {
+      // PR already exists as a draft — mark it ready for review.
+      logPhase(io, taskId, reviewer, 'info', `Marking PR #${prNumber} ready for review…`);
+      await refreshPullRequestDescription(taskId, task, {
+        implementationNotes: task.implementationNotes,
+        changedFiles: task.implementationChangedFiles,
+        commitSha: task.commitSha,
+        previewUrl: task.devUrl,
+      });
+      await markPullRequestReady(task.repository, prNumber);
+      logPhase(io, taskId, reviewer, 'info', `PR ready for review: ${prUrl}`);
+      // After mark-ready, transition the issue + PR labels to rm:review.
+      await linkPrToFeatureForTask(task, prNumber, prUrl ?? '', /*isDraft*/ false);
     }
 
     if ((task.commitMode ?? 'pr') === 'direct' && prNumber !== undefined) {
-      try {
-        logPhase(io, taskId, reviewer, 'info', 'Direct mode — auto-merging PR…');
-        await mergePullRequest(task.repository, prNumber);
-        logPhase(io, taskId, reviewer, 'info', 'PR merged.');
-      } catch (mergeErr) {
-        const m = mergeErr instanceof Error ? mergeErr.message : String(mergeErr);
-        logPhase(io, taskId, reviewer, 'warn', `Auto-merge failed (PR still open): ${m}`);
-      }
+      logPhase(io, taskId, reviewer, 'info', 'Direct mode — checking CI status…');
+      const checks = await assertPullRequestChecksPassing(
+        task.repository,
+        prNumber,
+        getToken(),
+      );
+      logPhase(
+        io,
+        taskId,
+        reviewer,
+        'info',
+        checks.state === 'none'
+          ? 'No GitHub checks are configured for this PR.'
+          : 'All GitHub checks passed.',
+      );
+      logPhase(io, taskId, reviewer, 'info', 'Direct mode — auto-merging PR…');
+      await mergePullRequestAtSha(task.repository, prNumber, checks.headSha);
+      logPhase(io, taskId, reviewer, 'info', 'PR merged.');
     }
 
     completePhase(io, taskId, reviewer);
@@ -4158,13 +4179,17 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
     taskTitle: task.title,
     taskDescription: task.description,
     spec: task.spec,
+    repository: task.repository,
+    baseBranch: task.baseBranch ?? 'main',
+    taskBranch: task.branch ?? live.branch,
+    baseCommitSha: task.baseCommitSha,
   });
 
   // Short-circuit: if the user's message is a pure rebuild/redeploy command,
   // skip the agent turn entirely. The agent has no veto over a direct
   // "rebuild" instruction — that's an operator command, not an editing task.
-  // We write a marker file so the SHA is unique (unique image tag → real
-  // rollout), then drop straight into the commit + build + deploy path.
+  // The deployer stamps the pod template so the same image tag still causes a
+  // real rollout; no meaningless source change or marker commit is needed.
   const pureRebuild = isPureRebuildCommand(message);
   if (pureRebuild) {
     logPhase(
@@ -4181,21 +4206,6 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
       `🔨 Direct rebuild requested. Skipping the agent turn and forcing a fresh build + redeploy of the current commit.`,
     );
     if (ackMsg) io.to(`task:${taskId}`).emit('chat:message', ackMsg);
-    try {
-      const markerPath = path.join(live.repoHandle.cwd, '.liliput-rebuild');
-      const stamp = new Date().toISOString();
-      await fs.writeFile(
-        markerPath,
-        `# Liliput rebuild marker — touched ${stamp} on operator request.\n` +
-          `# This file exists only to give git a unique commit so the dev\n` +
-          `# preview gets a fresh image tag and a real rollout.\n`,
-        'utf8',
-      );
-      logPhase(io, taskId, coder, 'info', `Wrote .liliput-rebuild marker (${stamp})`);
-    } catch (markerErr) {
-      const m = markerErr instanceof Error ? markerErr.message : String(markerErr);
-      logPhase(io, taskId, coder, 'warn', `Could not write rebuild marker: ${m}`);
-    }
     completePhase(io, taskId, coder);
     await runRebuildOnly(io, taskId, live, message);
     return;
@@ -4232,6 +4242,10 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
       taskTitle: task.title,
       taskDescription: task.description,
       spec: task.spec,
+      repository: task.repository,
+      baseBranch: task.baseBranch ?? 'main',
+      taskBranch: task.branch ?? live.branch,
+      baseCommitSha: task.baseCommitSha,
       followUp: message,
       isInitial: false,
       ...(planningContext ? { planningContext } : {}),
@@ -4302,36 +4316,15 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
       'info',
       'No file changes, but user requested rebuild — forcing rebuild from current HEAD.',
     );
-    // Write a rebuild marker so the commit has real content (unique SHA →
-    // unique image tag → real rollout). Without this the rebuild would
-    // collide on the same image and AKS would no-op the rollout.
-    try {
-      const markerPath = path.join(live.repoHandle.cwd, '.liliput-rebuild');
-      const stamp = new Date().toISOString();
-      await fs.writeFile(
-        markerPath,
-        `# Liliput rebuild marker — touched ${stamp} on operator request.\n` +
-          `# This file exists only to give git a unique commit so the dev\n` +
-          `# preview gets a fresh image tag and a real rollout.\n`,
-        'utf8',
-      );
-      logPhase(
-        io,
-        taskId,
-        coder,
-        'info',
-        `Wrote .liliput-rebuild marker (${stamp})`,
-      );
-    } catch (markerErr) {
-      const m = markerErr instanceof Error ? markerErr.message : String(markerErr);
-      logPhase(io, taskId, coder, 'warn', `Could not write rebuild marker: ${m}`);
-    }
     const forceMsg = store.addChatMessage(
       taskId,
       'liliput',
-      `🔨 No code changes this turn — but you asked to rebuild, so I'm forcing a rebuild + redeploy from the current commit.`,
+      `🔨 No code changes this turn — but you asked to rebuild, so I'm rebuilding and redeploying the current commit without creating a source marker.`,
     );
     if (forceMsg) io.to(`task:${taskId}`).emit('chat:message', forceMsg);
+    completePhase(io, taskId, coder);
+    await runRebuildOnly(io, taskId, live, message);
+    return;
   }
 
   // Coder is done — mark it completed BEFORE spawning the builder so the UI
@@ -4612,18 +4605,32 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
     logger.warn({ taskId, err: err instanceof Error ? err.message : String(err) }, 'Iter reviewer threw (non-fatal)');
   }
 
-  // Flip back to 'review' after validate (loop already posted the appropriate
-  // healthy/exhausted chat message).
-  setPipelineStage(io, taskId, 'review', 'done');
-  setTaskStatus(io, taskId, 'review', { devUrl, devNamespace: live.namespace, devPort: live.port, devEnvState: 'active' });
+  setPipelineStage(
+    io,
+    taskId,
+    'review',
+    iterValidateOutcome.healthy ? 'done' : 'failed',
+  );
+  setTaskStatus(io, taskId, iterValidateOutcome.healthy ? 'review' : 'failed', {
+    devUrl,
+    devNamespace: live.namespace,
+    devPort: live.port,
+    devEnvState: 'active',
+    ...(iterValidateOutcome.healthy
+      ? { errorMessage: undefined }
+      : {
+          errorMessage:
+            `Preview validation did not become healthy after ${iterValidateOutcome.attemptsUsed} attempt(s).`,
+        }),
+  });
 }
 
 /**
  * Direct rebuild path — used when the user issues a pure rebuild command
  * ("rebuild", "redeploy now", "go ahead and rebuild"). Skips the agent
- * turn entirely and runs commit + push + build + deploy + validate
- * against the current workspace state. Caller is expected to have already
- * written the .liliput-rebuild marker so the working tree is dirty.
+ * turn entirely and runs build + deploy + validate against the current
+ * workspace state. Real pending edits are committed; a clean tree rebuilds
+ * the current SHA without creating a marker commit.
  */
 async function commitAndPushRebuild(
   io: SocketServer,
@@ -4632,7 +4639,21 @@ async function commitAndPushRebuild(
   builder: string,
   message: string,
 ): Promise<string> {
-  logPhase(io, taskId, builder, 'info', 'Committing rebuild marker…');
+  const changed = await git.changedFiles(live.repoHandle);
+  if (changed.length === 0) {
+    const currentSha = await git.headSha(live.repoHandle);
+    logPhase(
+      io,
+      taskId,
+      builder,
+      'info',
+      `Working tree is clean; rebuilding current commit ${currentSha.substring(0, 7)}.`,
+    );
+    store.updateTask(taskId, { commitSha: currentSha });
+    return currentSha;
+  }
+
+  logPhase(io, taskId, builder, 'info', 'Committing pending rebuild changes…');
   let commitFixer: string | undefined;
   const committedSha = await runGitOpWithFixer<string>({
     agentSession: live.agentSession,
@@ -4725,7 +4746,7 @@ async function runRebuildOnly(
     taskId,
     options.existingHeadSha
       ? `📦 Revalidating pull-request head ${sha.substring(0, 7)}…`
-      : `📦 Rebuild marker committed; building image…`,
+      : `📦 Building commit ${sha.substring(0, 7)}…`,
   );
 
   if (!ACR_NAME) {
@@ -4864,8 +4885,29 @@ async function runRebuildOnly(
     logger.warn({ taskId, err: err instanceof Error ? err.message : String(err) }, 'Rebuild reviewer threw (non-fatal)');
   }
 
-  setPipelineStage(io, taskId, 'review', 'done');
-  setTaskStatus(io, taskId, 'review', { devUrl, devNamespace: live.namespace, devPort: live.port, devEnvState: 'active' });
+  setPipelineStage(
+    io,
+    taskId,
+    'review',
+    rebuildValidateOutcome.healthy ? 'done' : 'failed',
+  );
+  setTaskStatus(
+    io,
+    taskId,
+    rebuildValidateOutcome.healthy ? 'review' : 'failed',
+    {
+      devUrl,
+      devNamespace: live.namespace,
+      devPort: live.port,
+      devEnvState: 'active',
+      ...(rebuildValidateOutcome.healthy
+        ? { errorMessage: undefined }
+        : {
+            errorMessage:
+              `Preview validation did not become healthy after ${rebuildValidateOutcome.attemptsUsed} attempt(s).`,
+          }),
+    },
+  );
 }
 
 export function revalidateCampaignTask(
@@ -5056,6 +5098,16 @@ async function resurrectLiveSession(
     );
     logPhase(io, taskId, phaseAgent, 'info', `Re-creating Copilot SDK session (model: ${coderSdk.model})…`);
     const agentSession = await createAgentSession(handle.cwd, coderSdk.model, coderSdk.reasoningEffort);
+    setAgentDeliveryContext(agentSession, {
+      taskTitle: task.title,
+      taskDescription: task.description,
+      spec: task.spec,
+      repository: task.repository,
+      baseBranch: task.baseBranch ?? 'main',
+      taskBranch: task.branch,
+      baseCommitSha: task.baseCommitSha,
+      workspaceRoot: handle.cwd,
+    });
 
     const imageName = `liliput-app-${sanitiseK8sName(task.repository.replace('/', '-'))}`;
     const devPrefix = sanitiseK8sName(process.env.LILIPUT_DEV_PREFIX || 'dev');
@@ -5126,23 +5178,6 @@ async function deleteRemoteBranch(repo: string, branch: string): Promise<void> {
   if (!res.ok && res.status !== 404 && res.status !== 422) {
     const text = await res.text();
     throw new Error(`Branch delete failed (${res.status}): ${text}`);
-  }
-}
-
-async function mergePullRequest(repo: string, prNumber: number): Promise<void> {
-  const url = `https://api.github.com/repos/${repo}/pulls/${prNumber}/merge`;
-  const res = await fetch(url, {
-    method: 'PUT',
-    headers: {
-      Authorization: `Bearer ${getToken()}`,
-      Accept: 'application/vnd.github+json',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ merge_method: 'squash' }),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`PR merge failed (${res.status}): ${text}`);
   }
 }
 

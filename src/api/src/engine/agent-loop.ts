@@ -29,6 +29,10 @@ import { getCopilotClient, isSdkConnectionClosed, resetCopilotClient, IdleTimeou
 import { deriveReasoningEffort, type ReasoningEffort } from '../../../shared/types/index.js';
 import { setForceEffort } from './force-effort.js';
 import { buildDeployContract, type DeployContractContext } from './liliput-deploy-contract.js';
+import {
+  buildManagedDeliveryContract,
+  type ManagedDeliveryContractInput,
+} from './managed-delivery-contract.js';
 import { logger } from '../logger.js';
 
 const DEFAULT_MODEL = process.env['COPILOT_MODEL'] ?? 'claude-sonnet-4.5';
@@ -122,12 +126,19 @@ export interface AgentSession {
   _session: CopilotSession;
   /** @internal mutable so callers can swap log/event callbacks per turn. */
   _callbacks: TurnCallbacks;
+  /** @internal immutable task context reused by purpose-built fixer prompts. */
+  _deliveryContext?: ManagedDeliveryContractInput;
 }
 
 export interface RunAgentTurnOptions {
   taskTitle: string;
   taskDescription: string;
   spec?: string;
+  repository?: string;
+  baseBranch?: string;
+  taskBranch?: string;
+  baseCommitSha?: string;
+  workspaceRoot?: string;
   /** Optional follow-up instruction from the user (chat message). */
   followUp?: string;
   /** True for the very first turn (we include task title/spec); false for iterations. */
@@ -140,10 +151,8 @@ export interface RunAgentTurnOptions {
   promptOverride?: string;
   /**
    * Liliput runtime context (path-prefix, port, devUrl). When provided, the
-   * Liliput Deploy Contract is prepended to the initial prompt so the agent
-   * understands the proxy contract from turn one. Follow-up turns rely on
-   * conversation memory (the contract is already in-context from turn one)
-   * plus the LILIPUT_DEPLOY_CONTRACT.md file dropped at workspace root.
+   * Liliput Deploy Contract is injected on every turn. This intentionally does
+   * not rely on conversation memory, which may be lost after session recovery.
    */
   liliputContext?: DeployContractContext;
   /**
@@ -186,6 +195,29 @@ export interface RunAgentResult {
   toolCallCount: number;
 }
 
+export function setAgentDeliveryContext(
+  handle: AgentSession,
+  context: ManagedDeliveryContractInput,
+): void {
+  handle._deliveryContext = {
+    ...context,
+    workspaceRoot: context.workspaceRoot ?? handle.workspaceRoot,
+  };
+}
+
+export function buildManagedPromptOverride(
+  context: ManagedDeliveryContractInput,
+  promptOverride: string,
+): string {
+  return [
+    buildManagedDeliveryContract(context),
+    '',
+    '---',
+    '',
+    promptOverride,
+  ].join('\n');
+}
+
 function summariseArgs(args: Record<string, unknown> | undefined): string {
   if (!args) return '';
   const parts: string[] = [];
@@ -224,198 +256,154 @@ function buildPlanningBlock(planningContext?: string): string {
   return [planningContext.trim(), '', '---', ''].join('\n');
 }
 
-function buildInitialPrompt(opts: RunAgentTurnOptions): string {
-  const contractBlock = opts.liliputContext
-    ? [
-        buildDeployContract(opts.liliputContext),
-        '',
-        '⚠️  The contract above is also available as `LILIPUT_DEPLOY_CONTRACT.md` at the workspace root — re-read it whenever you touch the Dockerfile, k8s manifests, or any code that affects how the app is served.',
-        '',
-        '---',
-        '',
-      ].join('\n')
-    : '';
-  const reviewerBlock = opts.reviewerFeedback
-    ? [
-        opts.reviewerFeedback,
-        '',
-        '---',
-        '',
-      ].join('\n')
-    : '';
+function buildVerdictContract(): string {
   return [
-    contractBlock,
-    reviewerBlock,
-    buildPlanningBlock(opts.planningContext),
-    'You are an autonomous coding agent operating directly on a git checkout.',
-    'The current working directory is the repository root and is already on a feature branch.',
+    '## Verdict and evidence',
     '',
-    'You have FULL access to the repository AND to the host environment:',
-    '  - read / write / edit / grep / glob / bash tools — use them freely',
-    '  - `git` — you may inspect, branch, stash, commit, push, fetch, etc.',
-    '  - `kubectl` (cluster-admin), `az`, `docker`, `curl`, `gh` — available',
-    '  - `npm` / `node` for JS projects; `python` / `pip` for Python; etc.',
-    '  - any file in the repo is fair game (including infra/, k8s/, .github/) IF that is genuinely the right fix',
+    'Always end your reply with exactly one verdict line:',
+    '    VERDICT: done — <one-line implementation-ready summary>',
+    '    VERDICT: blocked — <reason you genuinely cannot continue>',
+    '    VERDICT: continue — <what remains incomplete>',
     '',
-    'You are trusted to figure out the right action and do it. Do not ask for permission.',
+    '`done` means the repository implementation is complete and locally verified for',
+    'Liliput to package and deploy. It does NOT claim that deployment is already healthy;',
+    'Liliput performs deployment and live validation after this turn. Use `blocked` only',
+    'for a real external blocker. Use `continue` when required code or verification is',
+    'still unfinished.',
     '',
-    'Tests-first workflow (TDD):',
-    '  1. Explore the codebase (read README, package.json / pyproject / etc, key entry points).',
-    '  2. If the spec contains a `## Acceptance Scenarios (Gherkin)` section, scaffold',
-    '     failing tests from those scenarios FIRST (e.g. tests/features/*.feature for',
-    '     Cucumber, e2e/*.spec.ts for Playwright, *.test.ts for Vitest).',
-    '  3. Plan the minimal set of edits needed to make those tests pass + satisfy the spec.',
-    '  4. Apply edits with write/edit tools — do NOT print code blocks for the human.',
-    '  5. Run the test suite locally if one exists (`npm test`, `pytest`, etc.) and iterate',
-    '     until tests are green or you have a concrete blocker to report.',
-    '  6. Stay idiomatic to the repo: match its existing style, file layout, and conventions.',
-    '',
-    'About git: Liliput will run `git add -A && git commit && git push` after you finish, so you',
-    'do NOT need to commit/push yourself — but if you do, that is fine too. Liliput detects',
-    'an already-committed / already-pushed state and short-circuits cleanly.',
-    '',
-    '## How rebuild & redeploy work (READ THIS — do not get confused)',
-    '',
-    'You DO have access to `docker`, `kubectl`, `gh`, and `az` in your shell, but you do',
-    'NOT need to use them to rebuild and redeploy. Liliput owns that pipeline:',
-    '',
-    '  1. You edit files in the workspace.',
-    '  2. When your turn ends, Liliput stages, commits, and pushes your edits.',
-    '  3. Liliput then **automatically rebuilds the Docker image** from the new commit',
-    '     and **rolls out a new dev preview** to the AKS namespace at your preview URL.',
-    '  4. Liliput then probes the preview and runs cucumber tests against it.',
-    '',
-    'Therefore: if the user asks you to "rebuild" or "redeploy", you simply make whatever',
-    'edit they want (or, if no edit is needed, make a tiny no-op change like adding a',
-    'newline or a build-marker comment) and Liliput will rebuild + redeploy automatically.',
-    '',
-    'NEVER tell the user that "Liliput operators must trigger a build" or that you "cannot',
-    'access the build pipeline". You are the build pipeline\'s trigger — every commit you',
-    'cause is a deploy. If you make zero edits, no rebuild happens; that is the only',
-    'restriction.',
-    '',
-    '## Tool wishes',
-    'If you wish you had a CLI that is NOT installed (e.g. `jq`, `yq`, `ripgrep`, `helm`,',
-    '`terraform`, `psql`, `redis-cli`), emit a single line in your reply of the form:',
-    '    TOOL-WISH: <tool> — <one-line reason>',
-    'The line must start with `TOOL-WISH:` (case-insensitive). Liliput captures these so',
-    'the operator can bake popular requests into the next runtime image. Wishes do NOT',
-    'block your work — keep going with what you have.',
-    '',
-    '## Verdict',
-    'When you have decided whether you are finished, emit a single line of the form:',
-    '    VERDICT: done — <one-line summary of what is shipped>',
-    '    VERDICT: blocked — <reason you cannot continue>',
-    '    VERDICT: continue — <what you are about to do next>',
-    'Use `done` ONLY when tests pass, the deploy is healthy, and the acceptance scenarios',
-    'are covered. Use `blocked` when you genuinely cannot make progress (missing creds,',
-    'unreachable infra, ambiguous requirement). Use `continue` for in-progress turns.',
-    'Liliput parses the LAST `VERDICT:` line of your reply, so always emit one when you',
-    'finish a turn. The keyword is case-insensitive.',
-    '',
-    'When (and ONLY when) you emit `VERDICT: done`, you MUST also include an EVIDENCE',
-    'block above the verdict line. Paste the actual command output — do not paraphrase:',
+    'When (and ONLY when) you emit `VERDICT: done`, include an `evidence` fenced block',
+    'above it with actual relevant command output. Do not paraphrase or invent output:',
     '',
     '    ```evidence',
-    '    $ npm test',
-    '    <last ~20 lines including the "Tests <N> passed" summary>',
+    '    $ <test command that exists in this repository>',
+    '    <last lines including the pass/fail summary>',
     '',
-    '    $ curl -fsS -o /dev/null -w "%{http_code}\\n" "<LILIPUT_PREVIEW_URL>"',
-    '    200',
+    '    $ <build/type-check command that exists in this repository>',
+    '    <last lines showing success>',
     '',
-    '    $ npx cucumber-js   # if a tests/features/*.feature file exists',
-    '    <last ~10 lines showing scenarios passing>',
+    '    $ <any acceptance-specific verification command>',
+    '    <actual output>',
     '    ```',
     '',
-    'If any of these commands fail or were not run, you do NOT have evidence — emit',
-    '`VERDICT: continue` (or `blocked`) instead, and try again on the next turn.',
-    'Liliput cross-checks your EVIDENCE against live probes; over-claiming will be',
-    'rejected and posted back to chat for the user to see.',
+    'If required checks fail or were not run, do not emit `done`.',
+  ].join('\n');
+}
+
+function deliveryContractForTurn(opts: RunAgentTurnOptions): string {
+  return buildManagedDeliveryContract({
+    taskTitle: opts.taskTitle,
+    taskDescription: opts.taskDescription,
+    spec: opts.spec,
+    repository: opts.repository,
+    baseBranch: opts.baseBranch,
+    taskBranch: opts.taskBranch,
+    baseCommitSha: opts.baseCommitSha,
+    workspaceRoot: opts.workspaceRoot,
+  });
+}
+
+function buildReviewerFeedbackBlock(feedback?: string): string {
+  if (!feedback?.trim()) return '';
+  return [feedback.trim(), '', '---', ''].join('\n');
+}
+
+export function buildInitialPrompt(opts: RunAgentTurnOptions): string {
+  const deployContract = opts.liliputContext
+    ? buildDeployContract(opts.liliputContext)
+    : '';
+  return [
+    deliveryContractForTurn(opts),
     '',
-    'When you are done, reply with a 2-3 sentence summary of the actual changes, files,',
-    'and verification performed. Do not quote or restate the original user prompt.',
+    '---',
     '',
-    `## Task: ${opts.taskTitle}`,
+    deployContract,
+    deployContract ? '\n---\n' : '',
+    buildPlanningBlock(opts.planningContext),
+    buildReviewerFeedbackBlock(opts.reviewerFeedback),
+    'You are the implementation agent for this task. Work directly in the repository',
+    'using your tools. You have full autonomy to read files, edit files, install required',
+    'dependencies, run commands, and iterate until the implementation-ready boundary is met.',
     '',
-    opts.taskDescription,
+    '## Execution workflow',
     '',
-    opts.spec ? `## Approved specification\n${opts.spec}` : '',
+    '1. **Ground yourself** — Inspect README files, manifests, source, tests, git status,',
+    '   current branch, and origin before editing. Confirm this is the target above.',
+    '2. **Plan and execute** — Think through every affected layer, then implement in this',
+    '   same turn. Do not stop after producing a plan.',
+    '3. **Test first where reasonable** — Create or update executable tests for the',
+    '   acceptance criteria and confirm they fail for the expected reason before the fix.',
+    '   If the approved spec contains Gherkin scenarios, keep feature files and executable',
+    '   step definitions aligned with the production behavior.',
+    '4. **Implement end to end** — Make the smallest complete production change. Handle',
+    '   relevant errors and edge cases; do not substitute documentation or scaffolding for',
+    '   the requested capability.',
+    '5. **Verify** — Run the repository\'s relevant build, type-check, lint, unit,',
+    '   integration, and end-to-end commands. Exercise the critical user flow locally when',
+    '   the repository supports it.',
+    '6. **Inspect the final diff** — Ensure every changed file belongs to this task and',
+    '   remove generated dependencies, caches, build output, secrets, and unrelated edits.',
+    '',
+    'Do not merely describe code or output a patch in chat: edit and verify the files.',
+    '',
+    '## Runtime environment',
+    '',
+    'Liliput packages, deploys, and live-validates the repository after this turn. Make',
+    'sure the application has a viable Docker/runtime path, listens on `0.0.0.0`, reads',
+    'ports and base paths from configuration where applicable, and does not hardcode',
+    'localhost-only URLs.',
+    opts.liliputContext?.pathPrefix
+      ? `The app must work under reverse-proxy prefix \`${opts.liliputContext.pathPrefix}\`.`
+      : '',
+    '',
+    'If an important CLI is unavailable, emit `TOOL-WISH: <tool> — <reason>` and continue',
+    'with the best available path. A tool wish is not a blocker.',
+    '',
+    buildVerdictContract(),
+    '',
+    'Finish with a concise summary of actual changes and verification. Do not quote or',
+    'restate the original user prompt.',
   ]
-    .filter(Boolean)
+    .filter((s) => s !== '')
     .join('\n');
 }
 
-function buildFollowUpPrompt(opts: RunAgentTurnOptions): string {
-  const message = opts.followUp ?? '(no instruction)';
-  const contractBlock = opts.liliputContext
-    ? [
-        buildDeployContract(opts.liliputContext),
-        '',
-        '⚠️  The contract above remains in effect. Re-read `LILIPUT_DEPLOY_CONTRACT.md` at the workspace root if you touch infra/Dockerfile/server-routing code.',
-        '',
-        '---',
-        '',
-      ].join('\n')
-    : '';
-  const recapBlock = opts.recap
-    ? [
-        '## Recap of previous session',
-        '',
-        'Your SDK session was reset (likely a pod restart) so you have no in-memory',
-        'history of our previous conversation. Below is a transcript of the last',
-        'messages exchanged before the reset. Treat this as your memory:',
-        '',
-        opts.recap,
-        '',
-        '---',
-        '',
-      ].join('\n')
-    : '';
-  const reviewerBlock = opts.reviewerFeedback
-    ? [
-        opts.reviewerFeedback,
-        '',
-        '---',
-        '',
-      ].join('\n')
+export function buildFollowUpPrompt(opts: RunAgentTurnOptions): string {
+  const deployContract = opts.liliputContext
+    ? buildDeployContract(opts.liliputContext)
     : '';
   return [
-    contractBlock,
-    recapBlock,
-    reviewerBlock,
+    deliveryContractForTurn(opts),
+    '',
+    '---',
+    '',
+    deployContract,
+    deployContract ? '\n---\n' : '',
+    opts.recap ? '## Recap of previous session' : '',
+    opts.recap ?? '',
+    opts.recap ? '' : '',
     buildPlanningBlock(opts.planningContext),
-    'Follow-up instruction from the user. The previous turn already produced a',
-    'commit and a draft PR; new edits will be appended to the same branch.',
-    'Continue editing the same workspace. Do not commit or push — Liliput handles git.',
+    buildReviewerFeedbackBlock(opts.reviewerFeedback),
+    'Continue in the existing workspace. Conversation memory may be incomplete, so inspect',
+    'the current files, git status, branch, origin, and diff before deciding what remains.',
+    'Preserve correct prior work and satisfy the new instruction without losing the original',
+    'task or approved specification above.',
     '',
-    '⚙️  Reminder: Liliput automatically rebuilds the Docker image and redeploys the',
-    'dev preview after EVERY turn that produces edits. You do NOT need docker / kubectl',
-    'access to trigger a rebuild — just edit a file. If the user asks you to "rebuild"',
-    'or "redeploy" and no code change is needed, make a tiny no-op edit (add a newline',
-    'or a comment) so Liliput has something to commit. Never tell the user that operators',
-    'must trigger a build — you are the trigger.',
+    'Run relevant existing verification and fix regressions caused by the change. Do not',
+    'create no-op comments, blank lines, marker files, or meaningless commits to force a',
+    'rebuild; Liliput can rebuild an unchanged commit directly.',
     '',
-    'You still have full access: bash / git / kubectl / az / docker / curl / gh / npm.',
-    'Use whatever tools are needed. Run tests if relevant.',
+    'Edit files rather than describing a patch. Keep the diff task-focused and free of',
+    'generated dependencies, build output, caches, environment files, and secrets.',
     '',
-    'If you wish you had a CLI that is not installed, emit a line:',
-    '    TOOL-WISH: <tool> — <reason>',
-    '',
-    'Always end your reply with a single `VERDICT:` line — `done`, `blocked`, or',
-    '`continue` — followed by a short reason. Use `done` only when tests pass,',
-    'the deploy is healthy, and acceptance scenarios are covered. When you emit',
-    '`VERDICT: done`, also include an `evidence` fenced block above it pasting',
-    'the actual `npm test`, `curl <preview>` (HTTP 200), and `npx cucumber-js`',
-    'output. Liliput cross-checks against live probes — over-claiming gets',
-    'rejected and shown to the user.',
-    '',
-    'When done, reply with a 1-2 sentence summary of the actual changes and verification',
-    'performed in this turn. Do not quote or restate the user instruction.',
+    buildVerdictContract(),
     '',
     '## New instruction',
     '',
-    message,
-  ].filter(Boolean).join('\n');
+    opts.followUp ??
+      'Review the current state and continue until the approved task is implementation-ready.',
+  ]
+    .filter((s) => s !== '')
+    .join('\n');
 }
 
 function makeEventHandler(callbacks: TurnCallbacks): (event: SessionEvent) => void {
@@ -779,11 +767,37 @@ export async function runAgentTurn(
   handle._callbacks.usage = wrappedUsage;
   const before = handle._callbacks.toolCount;
 
+  if (!opts.promptOverride) {
+    setAgentDeliveryContext(handle, {
+      taskTitle: opts.taskTitle,
+      taskDescription: opts.taskDescription,
+      spec: opts.spec,
+      repository: opts.repository,
+      baseBranch: opts.baseBranch,
+      taskBranch: opts.taskBranch,
+      baseCommitSha: opts.baseCommitSha,
+      workspaceRoot: opts.workspaceRoot ?? handle.workspaceRoot,
+    });
+  }
+  const effectiveContext = handle._deliveryContext ?? {
+    taskTitle: opts.taskTitle,
+    taskDescription: opts.taskDescription,
+    spec: opts.spec,
+    repository: opts.repository,
+    baseBranch: opts.baseBranch,
+    taskBranch: opts.taskBranch,
+    baseCommitSha: opts.baseCommitSha,
+    workspaceRoot: opts.workspaceRoot ?? handle.workspaceRoot,
+  };
+  const promptOptions: RunAgentTurnOptions = {
+    ...opts,
+    ...effectiveContext,
+  };
   const prompt = opts.promptOverride
-    ? opts.promptOverride
-    : opts.isInitial
-      ? buildInitialPrompt(opts)
-      : buildFollowUpPrompt(opts);
+    ? buildManagedPromptOverride(effectiveContext, opts.promptOverride)
+    : promptOptions.isInitial
+      ? buildInitialPrompt(promptOptions)
+      : buildFollowUpPrompt(promptOptions);
 
   // Re-assert force-override before every turn — another task may have
   // overwritten the file between the session creation and now.

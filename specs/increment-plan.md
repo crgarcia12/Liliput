@@ -360,3 +360,52 @@ No new Azure resource, workflow engine, or npm package is planned.
 - **Dependencies:** `ext-006`
 - **Rollback Plan:** Disable campaign scheduling and retain read-only history.
   Manual task execution and all existing APIs remain available.
+
+## ext-008: Enforce managed end-to-end delivery
+
+- **Type:** extension
+- **Effort:** M
+- **FRD:** `specs/liliput/frd-managed-end-to-end-delivery.md`
+- **Scope:** Preserve immutable task, specification, and repository context across
+  coder and fixer turns; fail closed on specification and validation gaps; guard
+  Git identity and staged artifacts; wait for GitHub checks and merge the exact
+  checked SHA; rebuild clean commits without source markers; and reject autonomous
+  proposals that do not deliver production, data, or operator capability.
+- **Acceptance Criteria:**
+  - [x] Every implementation and recovery turn receives the managed delivery
+        contract.
+  - [x] Generic specification fallback and false review-ready validation states
+        are removed.
+  - [x] Cucumber executes explicit feature paths and zero scenarios cannot pass.
+  - [x] Commit and push operations enforce repository identity and artifact safety.
+  - [x] Direct merge waits for terminal checks and is pinned to the checked SHA.
+  - [x] Rebuild-only delivery creates a real rollout without a marker commit.
+  - [x] Campaign proposals require a positive delivery surface.
+- **Test Strategy:**
+  - Unit tests for managed initial, follow-up, and fixer prompts.
+  - Unit tests for fail-closed specification generation and clarifying recovery.
+  - Real-Git tests for identity, generated artifacts, and committed build-output
+    allowlists.
+  - Unit tests for Cucumber discovery and zero-scenario detection.
+  - Unit tests for GitHub check discovery, pending timeout, and SHA-pinned merge.
+  - Campaign proposal policy tests for production and support-only components.
+  - Full API type-check, lint, unit regression, and Web production build.
+- **Gherkin Deltas:**
+  - New: `Scenario: Recovery turn retains the approved delivery contract`.
+  - New: `Scenario: Validation cannot pass when Cucumber executes zero scenarios`.
+  - New: `Scenario: Direct delivery merges only the checked pull request revision`.
+  - New: `Scenario: Rebuild current revision without modifying source`.
+  - New: `Scenario: Campaign rejects a support-only proposal`.
+  - Regression: existing manual task, campaign, review, and deployment scenarios
+    remain unchanged.
+- **Integration Points:**
+  - coder and fixer prompt construction
+  - specification generation and task creation
+  - Git commit/push and generated-artifact policy
+  - validation and reviewer loops
+  - GitHub checks and pull-request merge
+  - Kubernetes deployment rollout metadata
+  - autonomous campaign proposal policy
+- **Dependencies:** none
+- **Rollback Plan:** Revert the managed delivery gates as one increment. Existing
+  task, campaign, branch, pull-request, and deployment records remain compatible.

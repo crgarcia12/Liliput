@@ -6,11 +6,11 @@
  * preview? If the agent followed the TDD-first prompt, the workspace
  * should contain `tests/features/*.feature` and a `cucumber-js` setup.
  *
- * This module is BEST-EFFORT:
- *  - If cucumber isn't installed locally, we report "skipped" — no install
- *    triggered (we don't want to pollute the agent's lockfile).
+ * This module fails closed once feature files exist:
+ *  - If cucumber isn't installed locally, we report "failed".
  *  - If no `.feature` files exist, we report "skipped".
- *  - If cucumber runs and exits 0, we report "passed".
+ *  - If cucumber exits 0 after executing scenarios, we report "passed".
+ *  - If cucumber exits 0 but reports zero scenarios, we report "failed".
  *  - If cucumber exits non-zero, we capture the tail of its output as
  *    failure context (fed to the fixer as the new error).
  *
@@ -22,7 +22,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { logger } from '../logger.js';
 
@@ -36,40 +36,43 @@ export interface GherkinResult {
 const TIMEOUT_MS = parseInt(process.env['GHERKIN_RUNNER_TIMEOUT_MS'] ?? '90000', 10);
 const OUTPUT_TAIL_BYTES = 4000;
 
-/** Recursively walk up to `maxDepth` looking for files matching `predicate`. */
-function findAny(
+/** Recursively collect feature files without following symlinked directories. */
+export function discoverGherkinFeatureFiles(
   root: string,
-  predicate: (filename: string, fullPath: string) => boolean,
-  maxDepth = 4,
   exclude: ReadonlySet<string> = new Set(['node_modules', '.git', 'dist', 'build', '.next']),
-): string | null {
-  if (!existsSync(root)) return null;
-  const stack: Array<{ path: string; depth: number }> = [{ path: root, depth: 0 }];
+): string[] {
+  if (!existsSync(root)) return [];
+  const matches: string[] = [];
+  const stack: string[] = [root];
   while (stack.length) {
-    const { path, depth } = stack.pop()!;
+    const currentPath = stack.pop()!;
     let entries: string[];
     try {
-      entries = readdirSync(path);
+      entries = readdirSync(currentPath);
     } catch {
       continue;
     }
     for (const name of entries) {
       if (exclude.has(name)) continue;
-      const full = join(path, name);
+      const full = join(currentPath, name);
       let s;
       try {
-        s = statSync(full);
+        s = lstatSync(full);
       } catch {
         continue;
       }
       if (s.isDirectory()) {
-        if (depth < maxDepth) stack.push({ path: full, depth: depth + 1 });
-      } else if (predicate(name, full)) {
-        return full;
+        stack.push(full);
+      } else if (name.endsWith('.feature')) {
+        matches.push(full);
       }
     }
   }
-  return null;
+  return matches.sort((left, right) => left.localeCompare(right));
+}
+
+export function reportsZeroCucumberScenarios(output: string): boolean {
+  return /(?:^|\s)0 scenarios?(?:\s|\(|$)/im.test(output);
 }
 
 /**
@@ -82,9 +85,10 @@ export async function runGherkinChecks(
 ): Promise<GherkinResult> {
   const start = Date.now();
 
-  // Quick gate: any *.feature in workspace?
-  const featureFile = findAny(cwd, (n) => n.endsWith('.feature'));
-  if (!featureFile) {
+  // Discover every feature file and pass the paths explicitly. Cucumber's
+  // default search does not include this repository's tests/features layout.
+  const featureFiles = discoverGherkinFeatureFiles(cwd);
+  if (featureFiles.length === 0) {
     return {
       status: 'skipped',
       reason: 'no .feature files found in workspace',
@@ -98,7 +102,7 @@ export async function runGherkinChecks(
   const cucumberBin = join(cwd, 'node_modules', '.bin', process.platform === 'win32' ? 'cucumber-js.cmd' : 'cucumber-js');
   if (!existsSync(cucumberBin)) {
     return {
-      status: 'skipped',
+      status: 'failed',
       reason: 'cucumber-js not installed in workspace node_modules',
       output: '',
       durationMs: Date.now() - start,
@@ -114,7 +118,11 @@ export async function runGherkinChecks(
     };
     let output = '';
     let timedOut = false;
-    const child = spawn(cucumberBin, [], { cwd, env, shell: false });
+    const child = spawn(cucumberBin, ['--format', 'progress', ...featureFiles], {
+      cwd,
+      env,
+      shell: false,
+    });
     const timer = setTimeout(() => {
       timedOut = true;
       try {
@@ -136,7 +144,7 @@ export async function runGherkinChecks(
     child.on('error', (err) => {
       clearTimeout(timer);
       resolve({
-        status: 'skipped',
+        status: 'failed',
         reason: `cucumber spawn failed: ${err.message}`,
         output,
         durationMs: Date.now() - start,
@@ -150,6 +158,15 @@ export async function runGherkinChecks(
         resolve({
           status: 'failed',
           reason: `cucumber timed out after ${TIMEOUT_MS}ms`,
+          output: tail,
+          durationMs: Date.now() - start,
+        });
+        return;
+      }
+      if (code === 0 && reportsZeroCucumberScenarios(tail)) {
+        resolve({
+          status: 'failed',
+          reason: 'cucumber discovered feature files but executed zero scenarios',
           output: tail,
           durationMs: Date.now() - start,
         });
@@ -177,7 +194,7 @@ export async function runGherkinChecks(
       'gherkin-runner: unexpected error',
     );
     return {
-      status: 'skipped' as const,
+      status: 'failed' as const,
       reason: `runner crashed: ${err instanceof Error ? err.message : String(err)}`,
       output: '',
       durationMs: Date.now() - start,

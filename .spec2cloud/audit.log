@@ -275,3 +275,12 @@
 [2026-07-24T22:21:01Z] increment=bugfix-005 step=verification action=aks-deploy result=success workflow=https://github.com/crgarcia12/Liliput/actions/runs/30129448304 commit=59ca7d318ce25a385322a2151f00b57d02bd1366 apiImage=crgarliliputacr.azurecr.io/liliput-api:59ca7d318ce25a385322a2151f00b57d02bd1366
 [2026-07-24T22:21:01Z] increment=bugfix-005 step=verification action=production-verification result=pass root=200 apiHealth=200 login=200 playwrightPassed=6 readyNodes=4 api=1/1 web=1/1 gateway=1/1
 [2026-07-24T22:21:01Z] increment=bugfix-005 step=verification action=failed-task-recovery result=success task=e226889d-519b-425d-a9d2-4159a02e2061 status=review branch=liliput/task-e226889d remoteSha=f9a0be4fd8ee236f52b07dd9b6002a7eb5b51d6b image=crgarliliputacr.azurecr.io/liliput-app-crgarcia12-obelisco:f9a0be4fd8ee previewHttp=200 validationAttempts=2 repeatedGitErrors=0
+[2026-07-27T13:15:51Z] phase=extension-planning action=frds-generated result=done count=1 frd=specs/liliput/frd-managed-end-to-end-delivery.md
+[2026-07-27T13:15:51Z] phase=extension-planning action=increments-generated result=done count=1 increment=ext-008
+[2026-07-27T13:15:51Z] increment=ext-008 step=implementation action=managed-delivery-hardening result=done surfaces=prompts-specification-git-validation-ci-merge-rebuild-campaigns
+[2026-07-27T13:15:51Z] increment=ext-008 step=implementation action=targeted-regression result=pass typecheck=pass tests=pass diffCheck=pass
+[2026-07-27T13:15:51Z] increment=ext-008 step=implementation action=adversarial-code-review result=pass findings=0
+[2026-07-27T13:32:17Z] phase=verification action=aspire-start result=error message="JavaScript dependency installers could not resolve the working system Node path."
+[2026-07-27T13:32:17Z] increment=ext-008 step=verification action=cucumber result=error message="Campaign-control scenarios returned HTTP 400 because the local Aspire API lacked GitHub authentication."
+[2026-07-27T13:32:17Z] increment=ext-008 step=verification action=test-harness-recovery result=done strategy=restart-aspire-with-system-node-path-and-authenticated-gh-token
+[2026-07-27T13:32:17Z] increment=ext-008 step=verification action=full-regression result=pass api=51-files-527-tests cucumber=75-scenarios-554-steps playwright=6 apiBuild=pass apiLint=pass webBuild=pass webLint=pass skipped=0

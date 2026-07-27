@@ -4,7 +4,13 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { remoteBranchSha, type RepoHandle } from '../../src/engine/git-client.js';
+import {
+  commitAll,
+  remoteBranchSha,
+  repositorySlugFromRemoteUrl,
+  unsafeGeneratedArtifactPaths,
+  type RepoHandle,
+} from '../../src/engine/git-client.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -66,4 +72,121 @@ describe('git-client', () => {
 
     await expect(remoteBranchSha(handle)).resolves.toBe(localSha);
   }, 20_000);
+
+  it('should normalize authenticated and SSH GitHub remotes', () => {
+    expect(
+      repositorySlugFromRemoteUrl(
+        'https://x-access-token:secret@github.com/crgarcia12/Liliput.git',
+      ),
+    ).toBe('crgarcia12/Liliput');
+    expect(
+      repositorySlugFromRemoteUrl('git@github.com:crgarcia12/Liliput.git'),
+    ).toBe('crgarcia12/Liliput');
+  });
+
+  it('should identify generated dependencies and environment files', () => {
+    expect(
+      unsafeGeneratedArtifactPaths([
+        'src/index.ts',
+        'node_modules/pkg/index.js',
+        '.env.production',
+        '.env.example',
+        'coverage/coverage.json',
+        '.next/cache/webpack/client.pack',
+        'dist/index.js',
+        'packages/api/build/server.js',
+      ]),
+    ).toEqual([
+      'node_modules/pkg/index.js',
+      '.env.production',
+      'coverage/coverage.json',
+      '.next/cache/webpack/client.pack',
+      'dist/index.js',
+      'packages/api/build/server.js',
+    ]);
+  });
+
+  it('should allow explicitly versioned build output prefixes', () => {
+    expect(
+      unsafeGeneratedArtifactPaths(
+        ['dist/index.js', 'packages/api/build/server.js', '.next/cache/data.bin'],
+        ['dist', 'packages/api/build'],
+      ),
+    ).toEqual(['.next/cache/data.bin']);
+    expect(
+      unsafeGeneratedArtifactPaths(
+        ['packages/api/build/server.js'],
+        ['packages'],
+      ),
+    ).toEqual(['packages/api/build/server.js']);
+  });
+
+  it('should refuse a commit that stages generated dependencies', async () => {
+    const workspace = path.join(root, 'guarded-workspace');
+    const branch = 'liliput/task-guard';
+    await mkdir(workspace);
+    await git(workspace, 'init', '--quiet');
+    await git(workspace, 'config', 'user.name', 'Liliput Test');
+    await git(workspace, 'config', 'user.email', 'liliput-test@example.com');
+    await writeFile(path.join(workspace, 'README.md'), '# Test\n', 'utf8');
+    await git(workspace, 'add', 'README.md');
+    await git(workspace, 'commit', '--quiet', '-m', 'Initial commit');
+    await git(workspace, 'branch', '-M', 'main');
+    await git(
+      workspace,
+      'remote',
+      'add',
+      'origin',
+      'https://github.com/local/test.git',
+    );
+    await git(workspace, 'switch', '--quiet', '-c', branch);
+    await mkdir(path.join(workspace, 'node_modules', 'pkg'), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(workspace, 'node_modules', 'pkg', 'index.js'),
+      'module.exports = {};\n',
+      'utf8',
+    );
+    await writeFile(path.join(workspace, 'feature.ts'), 'export {};\n', 'utf8');
+
+    const handle: RepoHandle = { cwd: workspace, repo: 'local/test', branch };
+    await expect(commitAll(handle, 'Implement feature')).rejects.toThrow(
+      'Refusing to commit generated',
+    );
+    expect(await git(workspace, 'log', '-1', '--format=%s')).toBe(
+      'Initial commit',
+    );
+  });
+
+  it('should allow build output from a committed repository allowlist', async () => {
+    const workspace = path.join(root, 'allowlisted-workspace');
+    const branch = 'liliput/task-build-output';
+    await mkdir(workspace);
+    await git(workspace, 'init', '--quiet');
+    await git(workspace, 'config', 'user.name', 'Liliput Test');
+    await git(workspace, 'config', 'user.email', 'liliput-test@example.com');
+    await writeFile(path.join(workspace, 'README.md'), '# Test\n', 'utf8');
+    await writeFile(
+      path.join(workspace, '.liliput-generated-artifacts.allow'),
+      'dist/\n',
+      'utf8',
+    );
+    await git(workspace, 'add', 'README.md', '.liliput-generated-artifacts.allow');
+    await git(workspace, 'commit', '--quiet', '-m', 'Initial commit');
+    await git(workspace, 'branch', '-M', 'main');
+    await git(
+      workspace,
+      'remote',
+      'add',
+      'origin',
+      'https://github.com/local/test.git',
+    );
+    await git(workspace, 'switch', '--quiet', '-c', branch);
+    await mkdir(path.join(workspace, 'dist'));
+    await writeFile(path.join(workspace, 'dist', 'index.js'), 'export {};\n', 'utf8');
+
+    const handle: RepoHandle = { cwd: workspace, repo: 'local/test', branch };
+    await expect(commitAll(handle, 'Update versioned output')).resolves.toBeDefined();
+  });
 });

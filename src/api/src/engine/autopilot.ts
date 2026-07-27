@@ -6,8 +6,8 @@
  *  - provide the master prompt (workspace + spec + Gherkin + tools),
  *  - parse the agent's `VERDICT:` line when it claims completion,
  *  - enforce a budget cap as a runaway guard (NOT as the primary stop),
- *  - server-side verify the verdict (objective gate: tests green + deploy
- *    healthy + scenarios covered) before marking the task done.
+ *  - server-side verify local implementation evidence separately from
+ *    Liliput's deployment and release gates.
  *
  * This module is the verdict + budget half. The mega-prompt itself is
  * assembled in `agent-engine.ts` once we wire the new path in.
@@ -125,9 +125,9 @@ export class Budget {
 }
 
 /**
- * Server-side gate. The agent's `VERDICT: done` claim is REJECTED unless all
- * objective signals are green. Returns null on accept, an explanation string
- * on reject (used as the new reason to push the agent back into the loop).
+ * Server-side implementation gate. `VERDICT: done` means implementation-ready,
+ * not deployment-verified. Deployment health is enforced by the pipeline after
+ * the coder turn and must not be attributed to the coder.
  */
 export interface VerdictGateInput {
   verdict: Verdict;
@@ -144,19 +144,17 @@ export interface VerdictGateInput {
 }
 
 /**
- * Server-side gate. The agent's `VERDICT: done` claim is REJECTED unless the
- * **deploy is healthy** (the only hard requirement — a "done" claim without a
- * working preview is fraudulent). Test signals are softer:
+ * Reject an implementation-ready claim when an executed local verification
+ * check is red:
  *
  *  - tests RAN and FAILED → reject
- *  - tests NEVER RAN → allow but caller should log a warning (we want the
- *    autopilot loop to deploy and validate even when the agent skipped unit
- *    tests; the live preview probe is the ultimate truth)
+ *  - tests NEVER RAN → allow here because the input does not say whether a
+ *    test command exists; prompt/reviewer/release guards handle that evidence
  *  - gherkin RAN and FAILED → reject
  *  - gherkin NEVER RAN → allow (specs without acceptance.feature are common)
  *
- * If the deploy itself was never run (e.g. agent claimed done before pushing),
- * that's also a hard reject.
+ * `deployHealthy` remains in the input for compatibility with persisted callers
+ * but is intentionally not part of implementation readiness.
  */
 export function gateVerdict(input: VerdictGateInput): string | null {
   const { verdict, objective } = input;
@@ -168,17 +166,11 @@ export function gateVerdict(input: VerdictGateInput): string | null {
       `tests are red (exit code ${objective.testsExitCode ?? 'unknown'})`,
     );
   }
-  // tests never run is allowed — the live deploy probe is the ground truth.
-  if (objective.checksRan.deploy && !objective.deployHealthy) {
-    failures.push('deploy is not healthy');
-  } else if (!objective.checksRan.deploy) {
-    failures.push('deploy was never verified — cannot accept "done"');
-  }
   if (objective.checksRan.gherkin && !objective.gherkinAllPassed) {
     failures.push('gherkin scenarios did not all pass');
   }
   // Gherkin not running is allowed (some specs may have no acceptance.feature)
 
   if (failures.length === 0) return null;
-  return `verdict "done" REJECTED — objective gate failed: ${failures.join('; ')}. Keep working.`;
+  return `implementation verdict "done" REJECTED — local verification failed: ${failures.join('; ')}. Keep working.`;
 }
