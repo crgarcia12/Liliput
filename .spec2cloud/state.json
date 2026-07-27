@@ -128,10 +128,10 @@
       "id": "ext-008",
       "type": "extension",
       "frd": "specs/liliput/frd-managed-end-to-end-delivery.md",
-      "status": "in-progress"
+      "status": "done"
     }
   ],
-  "currentIncrement": "ext-008",
+  "currentIncrement": "ext-007",
   "increments": {
     "ext-pre-001": {
       "type": "extension-prerequisite",
@@ -2294,7 +2294,7 @@
       "type": "extension",
       "frd": "specs/liliput/frd-managed-end-to-end-delivery.md",
       "description": "Preserve the managed delivery contract across all agent turns and fail closed at specification, validation, Git, CI, merge, rebuild, and autonomous proposal boundaries.",
-      "status": "in-progress",
+      "status": "done",
       "steps": {
         "tests": {
           "status": "done",
@@ -2366,7 +2366,7 @@
           }
         },
         "verification": {
-          "status": "in-progress",
+          "status": "done",
           "regression": {
             "apiUnit": {
               "status": "pass",
@@ -2395,14 +2395,47 @@
             "testHarnessRecovery": "Restarted with the system Node path and authenticated GitHub CLI token."
           },
           "deployment": {
-            "status": "pending"
+            "status": "done",
+            "environment": "production",
+            "platform": "aks",
+            "url": "https://liliput.crgarcia.com.ar",
+            "commitSha": "cf7c3de7e62a737cc015b18497613e6b527ac138",
+            "apiImage": "crgarliliputacr.azurecr.io/liliput-api:cf7c3de7e62a737cc015b18497613e6b527ac138",
+            "webImage": "crgarliliputacr.azurecr.io/liliput-web:cf7c3de7e62a737cc015b18497613e6b527ac138",
+            "workflow": "https://github.com/crgarcia12/Liliput/actions/runs/30271235649",
+            "deployedAt": "2026-07-27T13:52:18Z"
+          },
+          "smokeTests": {
+            "rootHttp": 200,
+            "apiHealthHttp": 200,
+            "loginHttp": 200,
+            "productionPlaywrightPassed": 6
+          },
+          "cluster": {
+            "powerState": "Running",
+            "readyNodes": 4,
+            "api": "1/1",
+            "web": "1/1",
+            "gateway": "1/1",
+            "podRestarts": 0,
+            "steadyStateCriticalLogMatches": 0
           }
         }
       },
       "research": {
         "finding": "End-to-end reliability requires reinjecting immutable task context on every turn and using deterministic evidence gates rather than trusting conversational memory or success-shaped fallbacks.",
         "packageUpdates": []
-      }
+      },
+      "delivery": {
+        "sourceCommit": "c1d26b3b0a1b397acf7a4952b91d791826ec02c6",
+        "pullRequest": "https://github.com/crgarcia12/Liliput/pull/113",
+        "mergeCommit": "cf7c3de7e62a737cc015b18497613e6b527ac138",
+        "pullRequestCi": "https://github.com/crgarcia12/Liliput/actions/runs/30271033903",
+        "mainCi": "https://github.com/crgarcia12/Liliput/actions/runs/30271235740",
+        "deployment": "https://github.com/crgarcia12/Liliput/actions/runs/30271235649"
+      },
+      "completedAt": "2026-07-27T13:55:18Z",
+      "verifiedAt": "2026-07-27T13:55:18Z"
     }
   },
   "humanGates": {
@@ -2582,7 +2615,10 @@
       "playwright": "6-pass",
       "codeReview": "pass",
       "skippedTests": 0,
-      "deployment": "pending"
+      "deployment": "pass",
+      "productionPlaywright": "6-pass",
+      "cluster": "running-4-nodes",
+      "startupErrors": 0
     }
   },
   "extensions": {
@@ -2636,14 +2672,14 @@
     "resourceGroup": "crgar-liliput-rg",
     "cluster": "crgar-liliput-aks",
     "clusterPowerState": "Running",
-    "clusterVerifiedAt": "2026-07-24T07:45:54Z",
+    "clusterVerifiedAt": "2026-07-27T13:55:18Z",
     "namespace": "liliput",
     "url": "https://liliput.crgarcia.com.ar",
-    "commitSha": "abd3d9b7b1295d1d7c3bb3a0054f421bc255ce3e",
-    "apiImage": "crgarliliputacr.azurecr.io/liliput-api:abd3d9b7b1295d1d7c3bb3a0054f421bc255ce3e",
-    "webImage": "crgarliliputacr.azurecr.io/liliput-web:abd3d9b7b1295d1d7c3bb3a0054f421bc255ce3e",
-    "deployedAt": "2026-07-23T14:49:07Z",
-    "verifiedAt": "2026-07-24T07:45:54Z",
+    "commitSha": "cf7c3de7e62a737cc015b18497613e6b527ac138",
+    "apiImage": "crgarliliputacr.azurecr.io/liliput-api:cf7c3de7e62a737cc015b18497613e6b527ac138",
+    "webImage": "crgarliliputacr.azurecr.io/liliput-web:cf7c3de7e62a737cc015b18497613e6b527ac138",
+    "deployedAt": "2026-07-27T13:52:18Z",
+    "verifiedAt": "2026-07-27T13:55:18Z",
     "aiFoundry": {
       "account": "crgar-liliput-ai",
       "resourceGroup": "crgar-ai-rg",
@@ -2674,5 +2710,5 @@
       "verifiedAt": "2026-07-19T13:34:19.0791901Z"
     }
   },
-  "lastUpdated": "2026-07-27T13:32:17Z"
+  "lastUpdated": "2026-07-27T13:55:18Z"
 }
