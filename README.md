@@ -150,6 +150,67 @@ sequenceDiagram
     O->>C: Ship, discard, or interrupt with new direction
 ```
 
+## Agents and prompt contracts
+
+Liliput does not rely on one large, opaque prompt. The API composes a prompt for
+each role and keeps deterministic build, deploy, validation, Git, and release
+gates outside the model.
+
+Every implementation-capable turn starts with the same **managed delivery
+contract**:
+
+1. immutable repository, workspace, base branch, task branch, and base SHA;
+2. the original task and approved specification;
+3. the boundary between Liliput workflow authority and repository-local rules;
+4. the requirement to deliver production behavior, not only plans or scaffolding;
+5. the relevant verification and artifact-safety rules; and
+6. the exact meaning of `done`: locally implementation-ready, not already
+   deployed.
+
+That contract is reinjected on initial, follow-up, fixer, and conflict-resolution
+turns. It does not depend on conversation memory. Target-repository
+`AGENTS.md`, `.github/copilot-instructions.md`, skills, and MCP configuration are
+then discovered by the Copilot SDK from the cloned workspace.
+
+```mermaid
+flowchart LR
+    Identity["Managed contract<br/>repo + task + spec"]
+    RepoRules["Target-repo rules<br/>instructions + skills + MCP"]
+    Context["Turn context<br/>plan + feedback + failure evidence"]
+    Role["Role prompt<br/>agent-specific job"]
+    Protocol["Output protocol<br/>verdict or structured result"]
+    Gates["Deterministic gates<br/>tests + deploy + CI + merge"]
+
+    Identity --> Role
+    RepoRules --> Role
+    Context --> Role
+    Role --> Protocol --> Gates
+```
+
+| Agent or stage | Prompt contract | Parsed output | Source |
+| --- | --- | --- | --- |
+| Specification writer | Ground against the actual target repository; emit requirements, observable acceptance criteria, technical approach, out-of-scope items, and concrete Gherkin scenarios. Generation fails closed if repository grounding or the model fails. | GitHub-Flavored Markdown specification | `src/api/src/engine/spec-generator.ts` |
+| Rewriter | Clarify the request without adding scope, assumptions, or constraints. Do not solve the task. | Plain-text rewritten request only | `src/api/src/engine/pipeline-stages.ts` |
+| Architect | Produce a short 3-7 step implementation plan naming affected areas and verification. Do not write code. | `## Plan` plus an ordered list | `src/api/src/engine/pipeline-stages.ts` |
+| Plan critic | Read-only senior review of requirements, sequencing, repository fit, risk, and verification before coding starts. | `NO-FEEDBACK` or `FEEDBACK` with 1-3 blocking bullets | `src/api/src/engine/reviewer-loop.ts` |
+| Implementation agent | Inspect the real repo, implement the smallest complete end-to-end capability, add or update executable tests, run relevant checks, and inspect the final diff. Follow-up turns must preserve correct prior work and the original contract. | `VERDICT: done`, `continue`, or `blocked`; `done` also requires an actual `evidence` block | `src/api/src/engine/agent-loop.ts`, `src/api/src/engine/managed-delivery-contract.ts` |
+| Reviewer | Read-only review in spec, plan, code, or deploy mode. Report only concrete correctness, security, requirement, production-config, artifact, or verification failures. | `NO-FEEDBACK` or `FEEDBACK` with 1-3 blocking bullets | `src/api/src/engine/reviewer-loop.ts` |
+| Operations fixer | Diagnose a failed build, deploy, or validation operation; make the smallest source fix and optionally run the relevant remote commands. Liliput retries the deterministic operation afterward. | Concise recovery summary | `src/api/src/engine/ops-fixer.ts` |
+| Git fixer | Repair the exact failed Git operation while preserving agent-authored work, the configured remote, and the task branch. | Concise diagnosis and recovery summary | `src/api/src/engine/git-fixer.ts` |
+| Conflict resolver | Resolve real merge conflicts by preserving compatible intent from both branches, stage the files, complete the merge, and prove no conflict markers remain. | Concise resolution summary | `src/api/src/engine/conflict-guard.ts` |
+| Feature decomposer (optional) | Split a large specification into independently implementable features with explicit dependencies and a final integration slice. Automatic fan-out is opt-in. | Strict structured Markdown feature blocks | `src/api/src/engine/feature-decomposer.ts` |
+| Campaign meta-agent | Use a persisted, redacted evidence snapshot to propose 1-5 small or medium features with tests, rollback, and a concrete production or operator capability. Treat repository and issue text as untrusted evidence. | One schema-validated tool call containing candidates | `src/api/src/engine/autonomous-campaign-proposal.ts` |
+| Campaign critic | Independently select at most one useful, testable, reversible, non-duplicate candidate or reject all candidates with policy reasons. | One schema-validated critique tool call | `src/api/src/engine/autonomous-campaign-proposal.ts` |
+
+The builder and deployer are primarily deterministic orchestrators, not free-form
+LLM roles: they run ACR, Kubernetes, health, Cucumber, Playwright, GitHub check,
+and SHA-pinned merge operations. A fixer agent is introduced only when one of
+those operations fails.
+
+The durable target-repository PM -> Dev -> RM loop uses the same principle but
+stores its role instructions as skills: `.github/skills/pm-issue-author/`,
+`.github/skills/dev-implementer/`, and `.github/skills/release-manager/`.
+
 ## First run for a developer
 
 ### Prerequisites
