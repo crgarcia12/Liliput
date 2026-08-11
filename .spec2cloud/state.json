@@ -1683,6 +1683,19 @@
             "playwright": {
               "pass": 4,
               "fail": 0
+            },
+            "bugfix-spec-review-controls": {
+              "type": "bugfix",
+              "frd": null,
+              "description": "Hide edit and approve controls for automatic tasks while preserving manual spec review controls.",
+              "status": "done",
+              "testFile": "e2e/spec-review-controls.spec.ts",
+              "fixedFiles": [
+                "src/web/src/app/m/task/[id]/page.tsx",
+                "src/web/src/app/task/[id]/page.tsx"
+              ],
+              "completedAt": "2026-08-11T17:00:06Z",
+              "testResult": "2 Playwright tests passed"
             }
           },
           "deployment": {

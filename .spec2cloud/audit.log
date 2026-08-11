@@ -292,3 +292,7 @@
 [2026-07-27T13:55:18Z] increment=ext-008 step=verification action=production-test-auth-recovery result=done strategy=load-jwt-secret-directly-from-kubernetes-without-printing
 [2026-07-27T13:55:18Z] increment=ext-008 step=verification action=production-verification result=pass root=200 apiHealth=200 login=200 playwrightPassed=6 readyNodes=4 api=1/1 web=1/1 gateway=1/1 podRestarts=0 criticalLogMatches=0
 [2026-07-27T13:55:18Z] increment=ext-008 action=increment-delivered result=transition-to-ext-007
+[2026-08-11T17:00:06Z] phase=bugfix action=test-created feature=bugfix-spec-review-controls result=approved details="e2e/spec-review-controls.spec.ts; automatic-task control test reproduced the transient specifying-state bug"
+[2026-08-11T17:00:06Z] phase=bugfix action=human-gate-approve feature=bugfix-spec-review-controls result=approved details="User approved the regression test"
+[2026-08-11T17:00:06Z] phase=bugfix action=implement feature=bugfix-spec-review-controls result=success details="Gated desktop and mobile spec controls on requireSpecApproval"
+[2026-08-11T17:00:06Z] phase=bugfix action=run-tests feature=bugfix-spec-review-controls result=success details="2 Playwright tests passed; web TypeScript check passed"

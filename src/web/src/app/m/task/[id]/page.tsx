@@ -38,7 +38,8 @@ export default function MobileTaskChatPage() {
   const task = m.task;
   const backHref = task?.workstreamId ? `/m/workstream/${task.workstreamId}` : '/m';
   const showSpecBanner = !!task?.spec;
-  const canEditSpec = task?.status === 'specifying';
+  const canReviewSpec =
+    task?.status === 'specifying' && task.requireSpecApproval === true;
   const errorText = m.error || task?.errorMessage;
 
   return (
@@ -131,10 +132,10 @@ export default function MobileTaskChatPage() {
         <div className="border-b border-purple-800/50 bg-purple-950/20">
           <div className="flex items-center justify-between px-3 py-2 text-xs gap-2">
             <span className="text-purple-300 font-semibold truncate">
-              📜 {canEditSpec ? `Spec ready${m.editingSpec ? ' — editing' : ''}` : 'Implementation spec'}
+              📜 {canReviewSpec ? `Spec ready${m.editingSpec ? ' — editing' : ''}` : 'Implementation spec'}
             </span>
             <div className="flex items-center gap-2 shrink-0">
-              {canEditSpec && m.editingSpec ? (
+              {canReviewSpec && m.editingSpec ? (
                 <>
                   <button
                     onClick={m.cancelEditSpec}
@@ -151,7 +152,7 @@ export default function MobileTaskChatPage() {
                     {m.specSaving ? 'Saving…' : '💾 Save'}
                   </button>
                 </>
-              ) : canEditSpec ? (
+              ) : canReviewSpec ? (
                 <>
                   <button
                     onClick={() => {
@@ -177,7 +178,7 @@ export default function MobileTaskChatPage() {
                   {showSpec ? 'Hide' : 'Show'}
                 </button>
               )}
-              {canEditSpec && (
+              {canReviewSpec && (
                 <button
                   onClick={m.approveSpec}
                   disabled={m.actionPending === 'approve' || m.specSaving}
@@ -188,7 +189,7 @@ export default function MobileTaskChatPage() {
               )}
             </div>
           </div>
-          {canEditSpec && m.editingSpec ? (
+          {canReviewSpec && m.editingSpec ? (
             <textarea
               value={m.specDraft}
               onChange={(e) => m.setSpecDraft(e.target.value)}

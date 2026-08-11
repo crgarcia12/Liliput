@@ -815,12 +815,12 @@ export default function TaskPage() {
         <div className="border-b border-purple-800/50 bg-purple-950/20">
           <div className="flex items-center justify-between px-6 py-2 text-xs">
             <span className="text-purple-300 font-semibold">
-              {task.status === 'specifying'
+              {task.status === 'specifying' && task.requireSpecApproval === true
                 ? `📜 Specification ready — review${editingSpec ? ' & edit' : ', edit,'} and approve to start the build`
                 : '📜 Internal implementation specification'}
             </span>
             <div className="flex items-center gap-2">
-              {task.status === 'specifying' && editingSpec ? (
+              {task.status === 'specifying' && task.requireSpecApproval === true && editingSpec ? (
                 <>
                   <button
                     onClick={handleCancelEditSpec}
@@ -837,7 +837,7 @@ export default function TaskPage() {
                     {specSaving ? 'Saving…' : '💾 Save'}
                   </button>
                 </>
-              ) : task.status === 'specifying' ? (
+              ) : task.status === 'specifying' && task.requireSpecApproval === true ? (
                 <>
                   <button
                     onClick={handleStartEditSpec}
@@ -860,7 +860,7 @@ export default function TaskPage() {
                   Hide
                 </button>
               )}
-              {task.status === 'specifying' && (
+              {task.status === 'specifying' && task.requireSpecApproval === true && (
                 <button
                   onClick={handleApproveSpec}
                   disabled={actionPending === 'approve' || specSaving}
@@ -871,7 +871,7 @@ export default function TaskPage() {
               )}
             </div>
           </div>
-          {task.status === 'specifying' && editingSpec ? (
+          {task.status === 'specifying' && task.requireSpecApproval === true && editingSpec ? (
             <textarea
               value={specDraft}
               onChange={(e) => setSpecDraft(e.target.value)}
@@ -888,7 +888,7 @@ export default function TaskPage() {
       {task?.spec && !showSpec && (
         <div className="px-6 py-1 bg-purple-950/20 border-b border-purple-800/30 text-xs flex items-center gap-3">
           <span className="text-purple-300">
-            📜 {task.status === 'specifying' ? 'Spec is ready' : 'Implementation spec'}
+            📜 {task.status === 'specifying' && task.requireSpecApproval === true ? 'Spec is ready' : 'Implementation spec'}
           </span>
           <button
             onClick={() => setShowSpec(true)}
@@ -896,7 +896,7 @@ export default function TaskPage() {
           >
             Show
           </button>
-          {task.status === 'specifying' && (
+          {task.status === 'specifying' && task.requireSpecApproval === true && (
             <>
               <button
                 onClick={handleStartEditSpec}
