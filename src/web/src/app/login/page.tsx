@@ -6,6 +6,7 @@ import { login } from '@/lib/api-client';
 export default function LoginPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -76,16 +77,27 @@ export default function LoginPage() {
               <label htmlFor="password" className="block text-sm font-medium text-[#d0d0d8] mb-2">
                 Password
               </label>
-              <input
-                id="password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full px-4 py-2 bg-[#0a0a0f] border border-[#3a3a5e] rounded text-[#e0e0e8] placeholder-[#606080] focus:outline-none focus:border-[#5a5a8e]"
-                disabled={loading}
-                required
-              />
+              <div className="flex">
+                <input
+                  id="password"
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="min-w-0 flex-1 px-4 py-2 bg-[#0a0a0f] border border-r-0 border-[#3a3a5e] rounded-l text-[#e0e0e8] placeholder-[#606080] focus:outline-none focus:border-[#5a5a8e]"
+                  disabled={loading}
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((visible) => !visible)}
+                  className="px-3 py-2 bg-[#1a1a2e] border border-[#3a3a5e] rounded-r text-[#a0a0a8] hover:text-[#e0e0e8]"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  disabled={loading}
+                >
+                  {showPassword ? 'Hide' : 'Show'}
+                </button>
+              </div>
             </div>
 
             {error && (

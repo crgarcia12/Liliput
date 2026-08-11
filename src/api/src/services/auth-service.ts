@@ -100,7 +100,9 @@ export async function validateCredentials(
   try {
     const db = getDb();
     const user = db
-      .prepare('SELECT id, username, role, password_hash FROM users WHERE username = ?')
+      .prepare(
+        'SELECT id, username, role, password_hash FROM users WHERE LOWER(username) = LOWER(?)',
+      )
       .get(username) as
       | {
           id: string;

@@ -66,6 +66,16 @@ describe('Authentication System', () => {
       expect(res.headers['set-cookie']).toBeDefined();
     });
 
+    it('should login successfully regardless of username casing', async () => {
+      const res = await request(app).post('/api/login').send({
+        username: 'AdMiN',
+        password: SEED_PASSWORD,
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.user.username).toBe('admin');
+    });
+
     it('should fail with incorrect password', async () => {
       const res = await request(app).post('/api/login').send({
         username: 'admin',
@@ -466,4 +476,3 @@ describe('Authentication System', () => {
     });
   });
 });
-
