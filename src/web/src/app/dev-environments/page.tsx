@@ -31,12 +31,18 @@ const STATUS_STYLES: Record<TaskStatus, { label: string; cls: string }> = {
   deleting:    { label: 'Deleting',    cls: 'bg-gray-500/15 text-gray-400 border-gray-500/30' },
 };
 
+type ViewMode = 'card' | 'list';
+
 export default function DevEnvironmentsPage() {
   const { connected } = useSocket();
   const { getTasks } = useTasks();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [view, setView] = useState<ViewMode>('card');
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -75,22 +81,119 @@ export default function DevEnvironmentsPage() {
     return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
   }, [envs]);
 
+  // Drop selections for tasks that no longer exist or are already deleted.
+  useEffect(() => {
+    setSelected((prev) => {
+      const validIds = new Set(
+        envs.filter((t) => (t.devEnvState ?? 'active') !== 'deleted').map((t) => t.id),
+      );
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (validIds.has(id)) next.add(id);
+      }
+      return next.size === prev.size ? prev : next;
+    });
+  }, [envs]);
+
+  const toggleOne = useCallback((id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const deletableEnvs = useMemo(
+    () => envs.filter((t) => (t.devEnvState ?? 'active') !== 'deleted'),
+    [envs],
+  );
+
+  const allSelected = deletableEnvs.length > 0 && selected.size === deletableEnvs.length;
+
+  const toggleAll = useCallback(() => {
+    setSelected((prev) =>
+      prev.size === deletableEnvs.length ? new Set() : new Set(deletableEnvs.map((t) => t.id)),
+    );
+  }, [deletableEnvs]);
+
+  const bulkDelete = useCallback(async () => {
+    if (selected.size === 0) return;
+    const ids = Array.from(selected);
+    if (
+      !confirm(
+        `Delete ${ids.length} dev environment${ids.length === 1 ? '' : 's'}?\n\nThis removes the k8s deployment and route for each. Images stay in ACR — chat will recreate them.`,
+      )
+    ) {
+      return;
+    }
+    setBulkDeleting(true);
+    setBulkError(null);
+    try {
+      const results = await Promise.allSettled(
+        ids.map((id) =>
+          fetch(`/api/tasks/${id}/dev-env`, { method: 'DELETE' }).then(async (r) => {
+            if (!r.ok) {
+              const err = await r.json().catch(() => ({}));
+              throw new Error(err.details ?? err.error ?? `HTTP ${r.status}`);
+            }
+          }),
+        ),
+      );
+      const failed = results.filter((r) => r.status === 'rejected');
+      if (failed.length > 0) {
+        setBulkError(
+          `${failed.length} of ${ids.length} deletions failed: ${(failed[0] as PromiseRejectedResult).reason}`,
+        );
+      }
+      setSelected(new Set());
+      await refresh();
+    } finally {
+      setBulkDeleting(false);
+    }
+  }, [selected, refresh]);
+
   return (
     <div className="min-h-screen bg-[#050510] text-gray-200 font-mono">
       <TopBar subtitle="Dev environments" connected={connected} />
 
       <main className="max-w-6xl mx-auto px-6 py-6 space-y-6">
         <section className="bg-[#0d0d14] border border-[#1a1a2e] rounded-lg p-4">
-          <h2 className="text-sm font-semibold text-gray-300 mb-2">
-            What&apos;s running on the cluster
-          </h2>
+          <div className="flex items-start justify-between gap-3 mb-2">
+            <h2 className="text-sm font-semibold text-gray-300">
+              What&apos;s running on the cluster
+            </h2>
+            <div className="shrink-0 flex items-center gap-1 bg-black/30 border border-[#1a1a2e] rounded-lg p-0.5">
+              <button
+                onClick={() => setView('card')}
+                className={`px-2 py-1 rounded text-[11px] ${
+                  view === 'card'
+                    ? 'bg-cyan-600/30 text-cyan-200 border border-cyan-500/40'
+                    : 'text-gray-500 hover:text-gray-300'
+                }`}
+              >
+                ▦ Cards
+              </button>
+              <button
+                onClick={() => setView('list')}
+                className={`px-2 py-1 rounded text-[11px] ${
+                  view === 'list'
+                    ? 'bg-cyan-600/30 text-cyan-200 border border-cyan-500/40'
+                    : 'text-gray-500 hover:text-gray-300'
+                }`}
+              >
+                ☰ List
+              </button>
+            </div>
+          </div>
           <p className="text-xs text-gray-500 leading-relaxed">
             Each task that builds successfully gets its own preview environment in AKS:
             a Kubernetes namespace, a deployment running the freshly-built image, and
             a public URL routed through the gateway. These environments live independently
             of the agent pod — restarting <code className="text-cyan-400">liliput-api</code> doesn&apos;t
             touch them. Click a task title to chat with the agent that owns it (the session
-            will be resurrected if it was lost).
+            will be resurrected if it was lost). Use the List view to select multiple
+            environments and delete them together.
           </p>
         </section>
 
@@ -100,12 +203,50 @@ export default function DevEnvironmentsPage() {
           </div>
         )}
 
+        {view === 'list' && selected.size > 0 && (
+          <div className="sticky top-0 z-10 flex items-center justify-between gap-3 bg-cyan-950/40 border border-cyan-500/40 rounded-lg px-4 py-2">
+            <span className="text-xs text-cyan-200">
+              {selected.size} environment{selected.size === 1 ? '' : 's'} selected
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setSelected(new Set())}
+                className="px-2 py-1 text-[11px] text-gray-400 hover:text-gray-200"
+              >
+                Clear
+              </button>
+              <button
+                onClick={() => void bulkDelete()}
+                disabled={bulkDeleting}
+                className="px-3 py-1 bg-red-600/30 hover:bg-red-600/50 border border-red-500/50 rounded text-[11px] text-red-200 disabled:opacity-50"
+              >
+                {bulkDeleting ? '⏳ Deleting…' : `🗑 Delete selected (${selected.size})`}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {bulkError && (
+          <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-sm text-red-300">
+            {bulkError}
+          </div>
+        )}
+
         {loading && envs.length === 0 ? (
           <div className="text-gray-500 text-sm">Loading…</div>
         ) : envs.length === 0 ? (
           <div className="text-gray-500 text-sm border border-[#1a1a2e] rounded-lg p-6 text-center">
             No dev environments yet. Deployed previews will show up here.
           </div>
+        ) : view === 'list' ? (
+          <DevEnvTable
+            envs={envs}
+            selected={selected}
+            onToggleOne={toggleOne}
+            onToggleAll={toggleAll}
+            allSelected={allSelected}
+            deletableCount={deletableEnvs.length}
+          />
         ) : (
           byRepo.map(([repo, repoEnvs]) => (
             <section key={repo} className="space-y-3">
@@ -125,6 +266,126 @@ export default function DevEnvironmentsPage() {
           ))
         )}
       </main>
+    </div>
+  );
+}
+
+function DevEnvTable({
+  envs,
+  selected,
+  onToggleOne,
+  onToggleAll,
+  allSelected,
+  deletableCount,
+}: {
+  envs: Task[];
+  selected: Set<string>;
+  onToggleOne: (id: string) => void;
+  onToggleAll: () => void;
+  allSelected: boolean;
+  deletableCount: number;
+}) {
+  return (
+    <div className="border border-[#1a1a2e] rounded-lg overflow-hidden">
+      <table className="w-full text-[11px]">
+        <thead className="bg-[#0d0d14] text-gray-500">
+          <tr>
+            <th className="w-8 px-3 py-2 text-left">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={onToggleAll}
+                disabled={deletableCount === 0}
+                className="accent-cyan-500"
+                aria-label="Select all"
+              />
+            </th>
+            <th className="px-3 py-2 text-left">Task</th>
+            <th className="px-3 py-2 text-left">Repository</th>
+            <th className="px-3 py-2 text-left">Status</th>
+            <th className="px-3 py-2 text-left">Namespace</th>
+            <th className="px-3 py-2 text-left">Branch</th>
+            <th className="px-3 py-2 text-left">URL</th>
+            <th className="px-3 py-2 text-left">Updated</th>
+          </tr>
+        </thead>
+        <tbody>
+          {envs.map((t) => {
+            const style = STATUS_STYLES[t.status];
+            const devEnvState = t.devEnvState ?? 'active';
+            const deleted = devEnvState === 'deleted';
+            return (
+              <tr
+                key={t.id}
+                className={`border-t border-[#1a1a2e] ${
+                  selected.has(t.id) ? 'bg-cyan-500/5' : 'hover:bg-white/[0.02]'
+                }`}
+              >
+                <td className="px-3 py-2">
+                  <input
+                    type="checkbox"
+                    checked={selected.has(t.id)}
+                    onChange={() => onToggleOne(t.id)}
+                    disabled={deleted}
+                    className="accent-cyan-500"
+                    aria-label={`Select ${t.title}`}
+                  />
+                </td>
+                <td className="px-3 py-2">
+                  <Link href={`/task/${t.id}`} className="text-gray-100 hover:text-cyan-300">
+                    {t.title}
+                  </Link>
+                </td>
+                <td className="px-3 py-2 text-gray-400">{t.repository ?? '—'}</td>
+                <td className="px-3 py-2">
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full border ${style.cls}`}>
+                    {style.label}
+                  </span>
+                  {devEnvState !== 'active' && (
+                    <span
+                      className={`ml-1 text-[10px] px-2 py-0.5 rounded-full border ${
+                        deleted
+                          ? 'bg-red-500/15 text-red-300 border-red-500/30'
+                          : 'bg-gray-500/15 text-gray-300 border-gray-500/30'
+                      }`}
+                    >
+                      {deleted ? '🗑 Deleted' : '⏸ Stopped'}
+                    </span>
+                  )}
+                </td>
+                <td className="px-3 py-2">
+                  {t.devNamespace ? (
+                    <code className="text-amber-300">{t.devNamespace}</code>
+                  ) : (
+                    <span className="text-gray-600">—</span>
+                  )}
+                </td>
+                <td className="px-3 py-2">
+                  {t.branch ? <code className="text-green-300">{t.branch}</code> : <span className="text-gray-600">—</span>}
+                </td>
+                <td className="px-3 py-2 max-w-[220px]">
+                  {t.devUrl ? (
+                    <a
+                      href={t.devUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-cyan-300 hover:underline truncate block"
+                      title={t.devUrl}
+                    >
+                      {t.devUrl}
+                    </a>
+                  ) : (
+                    <span className="text-gray-600">—</span>
+                  )}
+                </td>
+                <td className="px-3 py-2 text-gray-500 whitespace-nowrap">
+                  {t.updatedAt ? new Date(t.updatedAt).toLocaleString() : '—'}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }

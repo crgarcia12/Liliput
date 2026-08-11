@@ -811,14 +811,16 @@ export default function TaskPage() {
         </div>
       )}
 
-      {task?.spec && task.status === 'specifying' && showSpec && (
+      {task?.spec && showSpec && (
         <div className="border-b border-purple-800/50 bg-purple-950/20">
           <div className="flex items-center justify-between px-6 py-2 text-xs">
             <span className="text-purple-300 font-semibold">
-              📜 Specification ready — review{editingSpec ? ' & edit' : ', edit,'} and approve to start the build
+              {task.status === 'specifying'
+                ? `📜 Specification ready — review${editingSpec ? ' & edit' : ', edit,'} and approve to start the build`
+                : '📜 Internal implementation specification'}
             </span>
             <div className="flex items-center gap-2">
-              {editingSpec ? (
+              {task.status === 'specifying' && editingSpec ? (
                 <>
                   <button
                     onClick={handleCancelEditSpec}
@@ -835,7 +837,7 @@ export default function TaskPage() {
                     {specSaving ? 'Saving…' : '💾 Save'}
                   </button>
                 </>
-              ) : (
+              ) : task.status === 'specifying' ? (
                 <>
                   <button
                     onClick={handleStartEditSpec}
@@ -850,17 +852,26 @@ export default function TaskPage() {
                     Hide
                   </button>
                 </>
+              ) : (
+                <button
+                  onClick={() => setShowSpec(false)}
+                  className="text-purple-400 hover:text-purple-200 px-2"
+                >
+                  Hide
+                </button>
               )}
-              <button
-                onClick={handleApproveSpec}
-                disabled={actionPending === 'approve' || specSaving}
-                className="px-3 py-1 rounded bg-purple-700 hover:bg-purple-600 text-white disabled:opacity-50"
-              >
-                {actionPending === 'approve' ? 'Approving…' : '✓ Approve & Build'}
-              </button>
+              {task.status === 'specifying' && (
+                <button
+                  onClick={handleApproveSpec}
+                  disabled={actionPending === 'approve' || specSaving}
+                  className="px-3 py-1 rounded bg-purple-700 hover:bg-purple-600 text-white disabled:opacity-50"
+                >
+                  {actionPending === 'approve' ? 'Approving…' : '✓ Approve & Build'}
+                </button>
+              )}
             </div>
           </div>
-          {editingSpec ? (
+          {task.status === 'specifying' && editingSpec ? (
             <textarea
               value={specDraft}
               onChange={(e) => setSpecDraft(e.target.value)}
@@ -874,28 +885,34 @@ export default function TaskPage() {
           )}
         </div>
       )}
-      {task?.spec && task.status === 'specifying' && !showSpec && (
+      {task?.spec && !showSpec && (
         <div className="px-6 py-1 bg-purple-950/20 border-b border-purple-800/30 text-xs flex items-center gap-3">
-          <span className="text-purple-300">📜 Spec is ready</span>
+          <span className="text-purple-300">
+            📜 {task.status === 'specifying' ? 'Spec is ready' : 'Implementation spec'}
+          </span>
           <button
             onClick={() => setShowSpec(true)}
             className="text-purple-400 hover:text-purple-200 underline"
           >
             Show
           </button>
-          <button
-            onClick={handleStartEditSpec}
-            className="text-purple-400 hover:text-purple-200 underline"
-          >
-            Edit
-          </button>
-          <button
-            onClick={handleApproveSpec}
-            disabled={actionPending === 'approve'}
-            className="ml-auto px-3 py-0.5 rounded bg-purple-700 hover:bg-purple-600 text-white disabled:opacity-50"
-          >
-            {actionPending === 'approve' ? 'Approving…' : '✓ Approve & Build'}
-          </button>
+          {task.status === 'specifying' && (
+            <>
+              <button
+                onClick={handleStartEditSpec}
+                className="text-purple-400 hover:text-purple-200 underline"
+              >
+                Edit
+              </button>
+              <button
+                onClick={handleApproveSpec}
+                disabled={actionPending === 'approve'}
+                className="ml-auto px-3 py-0.5 rounded bg-purple-700 hover:bg-purple-600 text-white disabled:opacity-50"
+              >
+                {actionPending === 'approve' ? 'Approving…' : '✓ Approve & Build'}
+              </button>
+            </>
+          )}
         </div>
       )}
 

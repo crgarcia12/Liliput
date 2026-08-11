@@ -29,9 +29,28 @@ vi.mock('../../src/engine/copilot-client.js', async (importOriginal) => {
   };
 });
 
+vi.mock('../../src/engine/agent-engine.js', () => {
+  return {
+    startBuild: vi.fn(),
+    shipTask: vi.fn(async () => undefined),
+    discardTask: vi.fn(async () => undefined),
+    closeTask: vi.fn(async () => undefined),
+    cancelTask: vi.fn(async () => undefined),
+    iterateTask: vi.fn(),
+    canIterate: vi.fn(() => false),
+    enqueueChatForAgent: vi.fn(),
+    hasInFlightAgent: vi.fn(() => false),
+    stopDevEnvForTask: vi.fn(async () => undefined),
+    startDevEnvForTask: vi.fn(async () => undefined),
+    deleteDevEnvForTask: vi.fn(async () => undefined),
+    teardownTask: vi.fn(async () => undefined),
+  };
+});
+
 import { createTasksRouter } from '../../src/routes/tasks.js';
 import { createWorkstreamsRouter } from '../../src/routes/workstreams.js';
 import { resetStore } from '../../src/stores/task-store.js';
+import { startBuild } from '../../src/engine/agent-engine.js';
 import type { SpecGenerator } from '../../src/engine/spec-generator.js';
 
 const FAKE_SPEC = '# Specification: T\n\n## Overview\nMocked spec.';
@@ -69,6 +88,7 @@ async function flushAsync(): Promise<void> {
 
 beforeEach(() => {
   resetStore();
+  vi.mocked(startBuild).mockClear();
 });
 
 describe('POST /api/tasks', () => {
@@ -82,7 +102,18 @@ describe('POST /api/tasks', () => {
     expect(res.body.task).toBeDefined();
     expect(res.body.task.title).toBe('My Task');
     expect(res.body.task.status).toBe('clarifying');
+    expect(res.body.task.requireSpecApproval).toBe(false);
     expect(res.body.task.chatHistory).toHaveLength(1); // system welcome
+  });
+
+  it('should persist an explicit manual specification gate', async () => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .post('/api/tasks')
+      .send({ title: 'My Task', description: 'Build something', requireSpecApproval: true });
+
+    expect(res.status).toBe(201);
+    expect(res.body.task.requireSpecApproval).toBe(true);
   });
 
   it('should return 400 when title is missing', async () => {
@@ -250,7 +281,7 @@ describe('GET /api/tasks/:id', () => {
 });
 
 describe('POST /api/tasks/:id/chat', () => {
-  it('should transition to specifying immediately and produce spec asynchronously', async () => {
+  it('should produce an internal spec and start building automatically by default', async () => {
     const { app } = buildApp();
     const createRes = await request(app)
       .post('/api/tasks')
@@ -270,6 +301,26 @@ describe('POST /api/tasks/:id/chat', () => {
     await flushAsync();
     const detailRes = await request(app).get(`/api/tasks/${id}`);
     expect(detailRes.body.task.spec).toBe(FAKE_SPEC);
+    expect(detailRes.body.task.status).toBe('building');
+    expect(startBuild).toHaveBeenCalledWith(expect.anything(), id);
+  });
+
+  it('should pause for an editable spec when manual approval is requested', async () => {
+    const { app } = buildApp();
+    const createRes = await request(app)
+      .post('/api/tasks')
+      .send({ title: 'T', description: 'D', requireSpecApproval: true });
+
+    const id = createRes.body.task.id;
+    await request(app)
+      .post(`/api/tasks/${id}/chat`)
+      .send({ message: 'More details about the feature' });
+
+    await flushAsync();
+    const detailRes = await request(app).get(`/api/tasks/${id}`);
+    expect(detailRes.body.task.spec).toBe(FAKE_SPEC);
+    expect(detailRes.body.task.status).toBe('specifying');
+    expect(startBuild).not.toHaveBeenCalled();
   });
 
   it('should call the injected generator with task title + chat context', async () => {
@@ -329,7 +380,12 @@ describe('POST /api/tasks/:id/approve-spec', () => {
     const { app } = buildApp();
     const createRes = await request(app)
       .post('/api/tasks')
-      .send({ title: 'T', description: 'D', repository: 'https://github.com/example/repo' });
+      .send({
+        title: 'T',
+        description: 'D',
+        repository: 'https://github.com/example/repo',
+        requireSpecApproval: true,
+      });
 
     const id = createRes.body.task.id;
 
@@ -342,10 +398,7 @@ describe('POST /api/tasks/:id/approve-spec', () => {
     const res = await request(app).post(`/api/tasks/${id}/approve-spec`);
     expect(res.status).toBe(200);
     expect(res.body.task.status).toBe('building');
-    // startBuild spawns the architect agent asynchronously; let it land.
-    await flushAsync();
-    const detail = await request(app).get(`/api/tasks/${id}`);
-    expect(detail.body.task.agents.length).toBeGreaterThan(0);
+    expect(startBuild).toHaveBeenCalledWith(expect.anything(), id);
   });
 
   it('should return 400 when not in specifying status', async () => {
@@ -363,7 +416,12 @@ describe('POST /api/tasks/:id/approve-spec', () => {
     const { app } = buildApp();
     const createRes = await request(app)
       .post('/api/tasks')
-      .send({ title: 'T', description: 'D', repository: 'https://github.com/example/repo' });
+      .send({
+        title: 'T',
+        description: 'D',
+        repository: 'https://github.com/example/repo',
+        requireSpecApproval: true,
+      });
     const id = createRes.body.task.id;
 
     await request(app).post(`/api/tasks/${id}/chat`).send({ message: 'Details' });
@@ -382,7 +440,12 @@ describe('PATCH /api/tasks/:id/spec', () => {
     const { app } = buildApp();
     const createRes = await request(app)
       .post('/api/tasks')
-      .send({ title: 'T', description: 'D', repository: 'https://github.com/example/repo' });
+      .send({
+        title: 'T',
+        description: 'D',
+        repository: 'https://github.com/example/repo',
+        requireSpecApproval: true,
+      });
     const id = createRes.body.task.id;
 
     await request(app).post(`/api/tasks/${id}/chat`).send({ message: 'Details' });
@@ -399,7 +462,12 @@ describe('PATCH /api/tasks/:id/spec', () => {
     const { app } = buildApp();
     const createRes = await request(app)
       .post('/api/tasks')
-      .send({ title: 'T', description: 'D', repository: 'https://github.com/example/repo' });
+      .send({
+        title: 'T',
+        description: 'D',
+        repository: 'https://github.com/example/repo',
+        requireSpecApproval: true,
+      });
     const id = createRes.body.task.id;
 
     await request(app).post(`/api/tasks/${id}/chat`).send({ message: 'Details' });

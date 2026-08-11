@@ -21,6 +21,7 @@ interface CreateTaskOptions {
   reasoningEffort?: ReasoningEffort;
   reviewerModel?: string;
   reviewerReasoningEffort?: ReasoningEffort;
+  requireSpecApproval?: boolean;
 }
 
 interface UseTasksReturn {
@@ -62,6 +63,7 @@ export function useTasks(): UseTasksReturn {
         reasoningEffort: options?.reasoningEffort,
         reviewerModel: options?.reviewerModel,
         reviewerReasoningEffort: options?.reviewerReasoningEffort,
+        requireSpecApproval: options?.requireSpecApproval,
       };
       const data = await apiRequest<TaskDetailResponse>('/api/tasks', {
         method: 'POST',
@@ -90,7 +92,7 @@ export function useTasks(): UseTasksReturn {
   }, []);
 
   const approveSpec = useCallback(async (taskId: string): Promise<void> => {
-    await apiRequest<unknown>(`/api/tasks/${taskId}/approve`, {
+    await apiRequest<unknown>(`/api/tasks/${taskId}/approve-spec`, {
       method: 'POST',
     });
   }, []);

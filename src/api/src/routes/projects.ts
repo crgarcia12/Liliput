@@ -31,6 +31,7 @@ interface CreateProjectBody {
   initialBranch?: string;
   model?: string;
   reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+  requireSpecApproval?: boolean;
 }
 
 function generateRepoName(description: string): string {
@@ -69,10 +70,21 @@ export function createProjectsRouter(deps: ProjectsRouterDeps = {}): Router {
           initialBranch: body.initialBranch,
           model: body.model,
           reasoningEffort: body.reasoningEffort,
+          requireSpecApproval: body.requireSpecApproval,
           hasDescription: !!description,
         },
         'POST /api/projects received',
       );
+      if (
+        body.requireSpecApproval !== undefined &&
+        typeof body.requireSpecApproval !== 'boolean'
+      ) {
+        res.status(400).json({
+          error: 'requireSpecApproval must be a boolean',
+          field: 'requireSpecApproval',
+        });
+        return;
+      }
       const result = await bootstrapProject(
         {
           name,
@@ -81,6 +93,9 @@ export function createProjectsRouter(deps: ProjectsRouterDeps = {}): Router {
           ...(body.initialBranch ? { initialBranch: body.initialBranch.trim() } : {}),
           ...(body.model ? { model: body.model.trim() } : {}),
           ...(body.reasoningEffort ? { reasoningEffort: body.reasoningEffort } : {}),
+          ...(body.requireSpecApproval !== undefined
+            ? { requireSpecApproval: body.requireSpecApproval }
+            : {}),
         },
         {
           taskStore,

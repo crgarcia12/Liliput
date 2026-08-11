@@ -71,6 +71,7 @@ export default function Home() {
   const [reviewerReasoningEffort, setReviewerReasoningEffort] = useState<ReasoningEffortSelection>(
     () => readStoredEffort(CHAT_CONFIG_STORAGE_KEYS.reviewerReasoningEffort),
   );
+  const [requireSpecApproval, setRequireSpecApproval] = useState(false);
   // Greenfield ("Create new project") state.
   const [projectMode, setProjectMode] = useState<'existing' | 'create'>('existing');
   const [newRepoName, setNewRepoName] = useState('');
@@ -208,6 +209,7 @@ export default function Home() {
                 ...(reasoningEffort ? { reasoningEffort } : {}),
                 ...(reviewerModel ? { reviewerModel } : {}),
                 ...(reviewerReasoningEffort ? { reviewerReasoningEffort } : {}),
+                requireSpecApproval,
               }),
             });
             if (!res.ok) {
@@ -257,6 +259,7 @@ export default function Home() {
             ...(reasoningEffort ? { reasoningEffort } : {}),
             ...(reviewerModel ? { reviewerModel } : {}),
             ...(reviewerReasoningEffort ? { reviewerReasoningEffort } : {}),
+            requireSpecApproval,
           });
           setCurrentTask(task);
           // Fire-and-forget: ask the LLM for a tight 1-4 word title and
@@ -307,7 +310,7 @@ export default function Home() {
         setIsWorking(false);
       }
     },
-    [currentTask, createTask, sendMessage, targetRepo, baseBranch, commitMode, model, reasoningEffort, reviewerModel, reviewerReasoningEffort, router, projectMode, newRepoName, newRepoVisibility]
+    [currentTask, createTask, sendMessage, targetRepo, baseBranch, commitMode, model, reasoningEffort, reviewerModel, reviewerReasoningEffort, requireSpecApproval, router, projectMode, newRepoName, newRepoVisibility]
   );
 
   const activeCount = agents.filter((a) => a.status === 'working').length;
@@ -497,6 +500,17 @@ export default function Home() {
               <option value="high">high</option>
               <option value="xhigh">xhigh</option>
             </select>
+          </label>
+          <label
+            className="flex items-center gap-2 cursor-pointer"
+            title="Off by default. When enabled, Liliput pauses after generating the specification so you can edit and approve it."
+          >
+            <input
+              type="checkbox"
+              checked={requireSpecApproval}
+              onChange={(e) => setRequireSpecApproval(e.target.checked)}
+            />
+            <span className="text-gray-300">Pause for spec review</span>
           </label>
           <span className="text-gray-600 ml-auto">
             {projectMode === 'create'

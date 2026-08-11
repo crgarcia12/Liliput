@@ -305,6 +305,7 @@ function completedPipeline(): PipelineState {
     runId: 'campaign-cycle-3-run',
     stages: {
       rewrite: 'done',
+      research: 'done',
       plan: 'done',
       critique: 'done',
       implement: 'done',

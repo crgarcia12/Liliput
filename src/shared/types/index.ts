@@ -110,6 +110,9 @@ export interface Task {
    *  env / server defaults exactly as before. */
   ownerUserId?: string;
   spec?: string;              // Generated specification markdown
+  /** When true, pause after specification generation so the user can edit and
+   *  approve it. New tasks default to false and start building automatically. */
+  requireSpecApproval?: boolean;
   repository?: string;        // Target GitHub repo (e.g. "owner/repo") — what the agent edits
   baseBranch?: string;        // Branch to fork from (default "main")
   branch?: string;            // Working branch the agent commits to
@@ -177,6 +180,7 @@ export interface Task {
  *  WHICH liliputian is acting, not the task's deploy lifecycle. */
 export type PipelineStage =
   | 'rewrite'    // Rewriter rephrases the request for LLM efficiency
+  | 'research'   // Researcher grounds product expectations and technical choices
   | 'plan'       // Architect drafts an implementation plan
   | 'critique'   // Critic (rubber-duck) reviews the plan
   | 'implement'  // Coder writes the code
@@ -202,6 +206,7 @@ export const PIPELINE_STAGES: ReadonlyArray<{
   role: AgentRole;
 }> = [
   { key: 'rewrite',   label: 'Rewrite',   icon: '✍️',  role: 'rewriter' },
+  { key: 'research',  label: 'Research',  icon: '🔍',  role: 'researcher' },
   { key: 'plan',      label: 'Plan',      icon: '🗺️',  role: 'architect' },
   { key: 'critique',  label: 'Critique',  icon: '🦆',  role: 'critic' },
   { key: 'implement', label: 'Implement', icon: '🔨',  role: 'coder' },
@@ -221,6 +226,8 @@ export interface PipelineState {
   stages: Record<PipelineStage, PipelineStageStatus>;
   /** The Rewriter's rephrased prompt (shown in the log, fed to the coder). */
   rewrittenPrompt?: string;
+  /** The Researcher's bounded, citation-bearing grounding brief. */
+  researchBrief?: string;
   /** The Architect's implementation plan markdown. */
   plan?: string;
   startedAt: string;
@@ -471,6 +478,8 @@ export interface CreateTaskRequest {
   /** Explicit on/off for the Reviewer Agent. Defaults to true when
    *  `reviewerModel` is set, false otherwise. */
   reviewerEnabled?: boolean;
+  /** Opt in to the legacy human specification gate. Defaults to false. */
+  requireSpecApproval?: boolean;
 }
 
 /** Curated list of Copilot SDK model ids surfaced in the new-task UI.

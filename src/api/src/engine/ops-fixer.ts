@@ -80,7 +80,7 @@ function buildPrompt(opts: OpsFixerOptions): string {
           '',
           'Likely causes to investigate:',
           '  - missing/incorrect base image',
-          '  - **Docker Hub rate limit on the base image** — if the error mentions `toomanyrequests` or `pull rate limit`, switch the `FROM` to its MCR equivalent: `mcr.microsoft.com/azurelinux/base/nodejs:20` for Node, `mcr.microsoft.com/azurelinux/base/python:3.12` for Python. ACR Build agents share IPs and hit Docker Hub limits intermittently; MCR has no such limit.',
+          '  - **Docker Hub rate limit on the base image** — if the error mentions `toomanyrequests` or `pull rate limit`, switch `FROM` to an MCR equivalent. For Node, inspect `engines.node` and the build-tool requirements, then choose a compatible `mcr.microsoft.com/azurelinux/base/nodejs:<major>` tag instead of blindly downgrading to Node 20. For Python, `mcr.microsoft.com/azurelinux/base/python:3.12` is a common default.',
           '  - missing build-time dependencies',
           '  - wrong working dir, missing files in the build context',
           '  - app references a port other than the one Liliput expects',

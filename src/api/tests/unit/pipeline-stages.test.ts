@@ -14,6 +14,7 @@ vi.mock('../../src/engine/force-effort.js', () => ({
 
 import {
   rewriteRequest,
+  researchRequest,
   generatePlan,
   composePlanningContext,
 } from '../../src/engine/pipeline-stages.js';
@@ -71,20 +72,49 @@ describe('generatePlan', () => {
   });
 });
 
+describe('researchRequest', () => {
+  it('returns a bounded brief and labels it unverified when no search tool runs', async () => {
+    const client = fakeClientReturning(
+      '## Expected Product Baseline\nResponsive UI.\n\n## Verified Technical Guidance\nUse current framework docs.\n\n## Risks and Pitfalls\nNone.\n\n## Assumptions and Unknowns\nStorage is local.',
+    );
+    getCopilotClient.mockResolvedValue(client);
+
+    const r = await researchRequest('Language app', 'Build a language app', {
+      repository: 'o/r',
+    });
+
+    expect(r.ran).toBe(true);
+    expect(r.grounded).toBe(false);
+    expect(r.brief).toContain('External research was unavailable');
+    expect(r.brief).toContain('Expected Product Baseline');
+    expect(client.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        enableConfigDiscovery: false,
+        availableTools: ['web_search'],
+        onPermissionRequest: expect.any(Function),
+      }),
+    );
+  });
+});
+
 describe('composePlanningContext', () => {
   it('returns empty string when nothing is provided', () => {
     expect(composePlanningContext({})).toBe('');
   });
 
-  it('includes the rewritten request, plan, and critique sections', () => {
+  it('includes the rewritten request, research, plan, and critique sections', () => {
     const ctx = composePlanningContext({
       rewritten: 'Add a dark-mode toggle.',
+      research: 'Follow WCAG contrast guidance.',
       plan: '## Plan\n1. Edit settings',
       critique: '- Watch out for SSR hydration mismatch',
     });
     expect(ctx).toContain('Pre-implementation planning');
     expect(ctx).toContain('Rewritten request');
     expect(ctx).toContain('Add a dark-mode toggle.');
+    expect(ctx).toContain('Research grounding');
+    expect(ctx).toContain('WCAG');
+    expect(ctx).toContain('untrusted reference data');
     expect(ctx).toContain('Implementation plan');
     expect(ctx).toContain('Plan critique');
     expect(ctx).toContain('hydration mismatch');

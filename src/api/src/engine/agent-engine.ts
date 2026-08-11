@@ -90,6 +90,7 @@ import {
 } from './autonomous-campaign-attempt-manager.js';
 import {
   rewriteRequest,
+  researchRequest,
   generatePlan,
   critiquePlan,
   composePlanningContext,
@@ -903,6 +904,21 @@ function activeRoutes(): DevRoute[] {
   }));
 }
 
+async function publishDevRoute(
+  taskId: string,
+  pathPrefix: string,
+  namespace: string,
+): Promise<void> {
+  devEnvs.set(taskId, {
+    taskId,
+    pathPrefix,
+    upstreamHost: `app.${namespace}.svc.cluster.local`,
+    upstreamPort: 80,
+    namespace,
+  });
+  await syncRoutesSerialized();
+}
+
 /**
  * Rehydrate the in-memory devEnvs map from persisted tasks, then push the
  * combined route table to nginx.
@@ -1076,14 +1092,7 @@ export async function startDevEnvForTask(io: SocketServer, taskId: string): Prom
       if (!ready) {
         logger.warn({ taskId }, 'startDevEnv: deployment not ready within 120s; continuing anyway');
       }
-      devEnvs.set(taskId, {
-        taskId,
-        pathPrefix,
-        upstreamHost: `app.${task.devNamespace}.svc.cluster.local`,
-        upstreamPort: 80,
-        namespace: task.devNamespace,
-      });
-      await syncRoutesSerialized();
+      await publishDevRoute(taskId, pathPrefix, task.devNamespace);
       const updated = store.updateTask(taskId, { devEnvState: 'active' })!;
       chatStatus(io, taskId, `✅ Dev environment is back at ${task.devUrl}`);
       emitDevEnvUpdate(io, updated);
@@ -1360,6 +1369,7 @@ function chatStatus(io: SocketServer, taskId: string, text: string): void {
 
 const PIPELINE_KEYS: PipelineStage[] = [
   'rewrite',
+  'research',
   'plan',
   'critique',
   'implement',
@@ -1372,6 +1382,7 @@ const PIPELINE_KEYS: PipelineStage[] = [
 function emptyPipelineStages(): Record<PipelineStage, PipelineStageStatus> {
   return {
     rewrite: 'pending',
+    research: 'pending',
     plan: 'pending',
     critique: 'pending',
     implement: 'pending',
@@ -1412,7 +1423,7 @@ function setPipelineStage(
   taskId: string,
   stage: PipelineStage,
   status: PipelineStageStatus,
-  extra: { rewrittenPrompt?: string; plan?: string } = {},
+  extra: { rewrittenPrompt?: string; researchBrief?: string; plan?: string } = {},
 ): void {
   try {
     const task = store.getTask(taskId);
@@ -1436,6 +1447,7 @@ function setPipelineStage(
       stages,
       ...(activeStage ? { activeStage } : { activeStage: undefined }),
       ...(extra.rewrittenPrompt !== undefined ? { rewrittenPrompt: extra.rewrittenPrompt } : {}),
+      ...(extra.researchBrief !== undefined ? { researchBrief: extra.researchBrief } : {}),
       ...(extra.plan !== undefined ? { plan: extra.plan } : {}),
       updatedAt: ts,
     };
@@ -1452,17 +1464,22 @@ function setPipelineStage(
 void PIPELINE_KEYS;
 
 /**
- * Run the three preflight stages — Rewrite → Plan → Critique — and return the
+ * Run the four preflight stages — Rewrite → Research → Plan → Critique — and return the
  * composed planning context to inject into the coder turn. Every stage is
  * bounded and non-fatal: failures degrade gracefully (rewrite → original,
- * plan → skipped, critique → no feedback) and never break the build.
+ * research/plan → skipped, critique → no feedback) and never break the build.
  */
 async function runPreflightStages(
   io: SocketServer,
   taskId: string,
   task: Task,
   repo: string,
-  opts?: { requestTitle?: string; requestText?: string },
+  opts?: {
+    requestTitle?: string;
+    requestText?: string;
+    skipResearch?: boolean;
+    researchBrief?: string;
+  },
 ): Promise<{ planningContext: string; effectiveRequest: string }> {
   // Resolve each preflight role independently. Today task-level fields only
   // exist for `coder`/`reviewer`; rewriter/architect/critic inherit through
@@ -1475,6 +1492,9 @@ async function runPreflightStages(
     ...(task.reasoningEffort ? { taskReasoningEffort: task.reasoningEffort } : {}),
   };
   const rewriterSdk = resolveAgentSdkParams(task, 'rewriter');
+  // Researcher is intentionally not independently configurable yet; non-core
+  // roles inherit the coder model according to the shared agent-config policy.
+  const researcherSdk = resolveAgentSdkParams(task, 'coder', inherit);
   const architectSdk = resolveAgentSdkParams(task, 'architect', inherit);
   const criticSdk = resolveAgentSdkParams(task, 'critic');
   const rewriterCfg: StageConfig = {
@@ -1486,6 +1506,12 @@ async function runPreflightStages(
   const architectCfg: StageConfig = {
     model: architectSdk.model,
     ...(architectSdk.reasoningEffort ? { reasoningEffort: architectSdk.reasoningEffort } : {}),
+    repository: repo,
+    taskId,
+  };
+  const researcherCfg: StageConfig = {
+    model: researcherSdk.model,
+    ...(researcherSdk.reasoningEffort ? { reasoningEffort: researcherSdk.reasoningEffort } : {}),
     repository: repo,
     taskId,
   };
@@ -1530,6 +1556,64 @@ async function runPreflightStages(
   if (rewriter) completePhase(io, taskId, rewriter);
   setPipelineStage(io, taskId, 'rewrite', 'done', rewrittenPrompt ? { rewrittenPrompt } : {});
 
+  // ── Research ──
+  let researchBrief = opts?.researchBrief?.trim() || null;
+  if (opts?.skipResearch) {
+    setPipelineStage(
+      io,
+      taskId,
+      'research',
+      researchBrief ? 'done' : 'skipped',
+      researchBrief ? { researchBrief } : {},
+    );
+  } else {
+    const researcher = spawnPhase(io, taskId, 'researcher', 'Researcher Liliputian');
+    setPipelineStage(io, taskId, 'research', 'active');
+    let researchGrounded = false;
+    try {
+      guardCampaignModelAction(taskId, researcherSdk.model);
+      const rr = await researchRequest(
+        requestTitle,
+        effectiveRequest,
+        {
+          ...researcherCfg,
+          onUsage: (event) =>
+            recordUsageEvent(io, taskId, researcher ?? 'pipeline-researcher', event),
+        },
+        task.spec,
+      );
+      if (rr.ran) recordCampaignModelTurn(taskId);
+      researchBrief = rr.brief;
+      researchGrounded = rr.grounded;
+      if (researcher) {
+        if (researchBrief) {
+          logPhase(
+            io,
+            taskId,
+            researcher,
+            researchGrounded ? 'info' : 'warn',
+            `${researchGrounded ? 'Grounding brief' : 'Unverified product baseline'}:\n${researchBrief}`,
+          );
+        } else {
+          logPhase(io, taskId, researcher, 'info', 'Research unavailable or unnecessary — proceeding with the internal specification.');
+        }
+      }
+    } catch (err) {
+      if (isCampaignStageBlockedError(err)) throw err;
+      if (researcher) {
+        logPhase(io, taskId, researcher, 'warn', `Research skipped: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    if (researcher) completePhase(io, taskId, researcher);
+    setPipelineStage(
+      io,
+      taskId,
+      'research',
+      researchGrounded ? 'done' : 'skipped',
+      researchBrief ? { researchBrief } : {},
+    );
+  }
+
   // ── Plan ──
   const architect = spawnPhase(io, taskId, 'architect', 'Architect Liliputian');
   setPipelineStage(io, taskId, 'plan', 'active');
@@ -1545,6 +1629,7 @@ async function runPreflightStages(
           recordUsageEvent(io, taskId, architect ?? 'pipeline-architect', event),
       },
       task.spec,
+      researchBrief ?? undefined,
     );
     if (pr.ran) recordCampaignModelTurn(taskId);
     planMd = pr.plan;
@@ -1598,6 +1683,7 @@ async function runPreflightStages(
 
   const planningContext = composePlanningContext({
     ...(rewrittenPrompt ? { rewritten: rewrittenPrompt } : {}),
+    research: researchBrief,
     plan: planMd,
     critique: critiqueFeedback,
   });
@@ -2958,8 +3044,8 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   const baseBranch = task.baseBranch ?? 'main';
   const branch = `liliput/task-${taskId.substring(0, 8)}`;
 
-  // ── Pipeline preflight: Rewrite → Plan → Critique ──
-  // These three bounded, non-fatal stages give every request the visible
+  // ── Pipeline preflight: Rewrite → Research → Plan → Critique ──
+  // These four bounded, non-fatal stages give every request the visible
   // multi-agent flow before the heavy clone/coder work begins. The composed
   // planning context is injected into the coder turn below.
   initPipeline(io, taskId);
@@ -3395,14 +3481,7 @@ async function runFullPipeline(io: SocketServer, taskId: string): Promise<void> 
   store.updateTask(taskId, { imageRef: deployOutcome.imageRef, commitSha: deployOutcome.sha });
 
   logPhase(io, taskId, deployer, 'info', `Patching gateway route ${pathPrefix} → ${namespace}/${appName}`);
-  devEnvs.set(taskId, {
-    taskId,
-    pathPrefix,
-    upstreamHost: `${appName}.${namespace}.svc.cluster.local`,
-    upstreamPort: 80,
-    namespace,
-  });
-  await syncRoutes(activeRoutes());
+  await publishDevRoute(taskId, pathPrefix, namespace);
 
   store.updateTask(taskId, { devEnvState: 'active' });
   logPhase(io, taskId, deployer, 'info', `Dev environment live at ${devUrl}`);
@@ -4211,15 +4290,17 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
     return;
   }
 
-  // Multi-agent pipeline (follow-up path): run the bounded, non-fatal
-  // rewrite → plan → critique preflight on the user's follow-up message, then
-  // feed the distilled planning context into the coder turn. Pure rebuild
-  // commands returned above, so they correctly skip these LLM stages.
+  // Multi-agent pipeline (follow-up path): rewrite and plan the new request,
+  // reusing the initial grounding brief instead of paying for another research
+  // turn. Pure rebuild commands returned above, so they skip these LLM stages.
+  const priorResearchBrief = task.pipeline?.researchBrief;
   initPipeline(io, taskId);
   guardCampaignTaskStage(taskId, 'agent-turn');
   const { planningContext } = await runPreflightStages(io, taskId, task, live.repo, {
     requestTitle: task.title,
     requestText: message,
+    skipResearch: true,
+    ...(priorResearchBrief ? { researchBrief: priorResearchBrief } : {}),
   });
   setPipelineStage(io, taskId, 'implement', 'active');
 
@@ -4508,6 +4589,14 @@ async function runIteration(io: SocketServer, taskId: string, message: string): 
     initialSha: buildOutcome.sha,
   });
   store.updateTask(taskId, { imageRef: deployOutcome.imageRef, commitSha: deployOutcome.sha });
+  logPhase(
+    io,
+    taskId,
+    deployer,
+    'info',
+    `Patching gateway route ${live.pathPrefix} → ${live.namespace}/app`,
+  );
+  await publishDevRoute(taskId, live.pathPrefix, live.namespace);
   completePhase(io, taskId, deployer);
   setPipelineStage(io, taskId, 'deploy', 'done');
 
@@ -4794,6 +4883,14 @@ async function runRebuildOnly(
     initialSha: buildOutcome.sha,
   });
   store.updateTask(taskId, { imageRef: deployOutcome.imageRef, commitSha: deployOutcome.sha });
+  logPhase(
+    io,
+    taskId,
+    deployer,
+    'info',
+    `Patching gateway route ${live.pathPrefix} → ${live.namespace}/app`,
+  );
+  await publishDevRoute(taskId, live.pathPrefix, live.namespace);
   completePhase(io, taskId, deployer);
   setPipelineStage(io, taskId, 'deploy', 'done');
 

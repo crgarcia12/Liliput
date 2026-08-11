@@ -95,6 +95,20 @@ describe('POST /api/projects', () => {
     expect(r.body.field).toBe('name');
   });
 
+  it('rejects a non-boolean specification gate', async () => {
+    const app = buildApp({});
+    const r = await request(app)
+      .post('/api/projects')
+      .send({
+        name: 'valid-name',
+        description: 'hello',
+        visibility: 'private',
+        requireSpecApproval: 'yes',
+      });
+    expect(r.status).toBe(400);
+    expect(r.body.field).toBe('requireSpecApproval');
+  });
+
   it('auto-generates a private repo name when Gulliver submits only an idea', async () => {
     const createRepo = vi.fn().mockImplementation(({ name }: { name: string }) => Promise.resolve(makeRepo(name)));
     const app = buildApp({
@@ -164,8 +178,36 @@ describe('POST /api/projects', () => {
     expect(r.status).toBe(201);
     expect(r.body.task).toBeTruthy();
     expect(r.body.task.repository).toBe('crgarcia12/new-app');
+    expect(r.body.task.requireSpecApproval).toBe(false);
     expect(r.body.repository.fullName).toBe('crgarcia12/new-app');
     expect(r.body.partial).toBe(false);
+  });
+
+  it('passes through an explicit manual specification gate', async () => {
+    const app = buildApp({
+      whoami: vi.fn().mockResolvedValue('crgarcia12'),
+      exists: vi.fn().mockResolvedValue(false),
+      createRepo: vi.fn().mockResolvedValue(makeRepo('review-first')),
+      gitClient: {
+        clone: vi.fn().mockResolvedValue({ cwd: '/tmp/fake', branch: 'main' }),
+        commitAll: vi.fn().mockResolvedValue(undefined),
+        push: vi.fn().mockResolvedValue(undefined),
+      },
+      runSpec2cloudInit: vi.fn().mockResolvedValue({ exitCode: 0, stdout: 'ok', stderr: '' }),
+      writeContract: vi.fn().mockResolvedValue(undefined),
+    });
+
+    const r = await request(app)
+      .post('/api/projects')
+      .send({
+        name: 'review-first',
+        description: 'Build an app.',
+        visibility: 'private',
+        requireSpecApproval: true,
+      });
+
+    expect(r.status).toBe(201);
+    expect(r.body.task.requireSpecApproval).toBe(true);
   });
 
   it('records partial=true when spec2cloud init exits non-zero but still creates the task', async () => {

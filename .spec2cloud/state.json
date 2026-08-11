@@ -21,7 +21,7 @@
   "activePaths": ["extend"],
   "assessment": {},
   "adrs": {
-    "nextNumber": 3,
+    "nextNumber": 4,
     "records": [
       {
         "number": "ADR-001",
@@ -36,6 +36,13 @@
         "status": "accepted",
         "date": "2026-07-21",
         "path": "specs/adrs/adr-002-allow-unrestricted-campaign-auto-merge.md"
+      },
+      {
+        "number": "ADR-003",
+        "title": "Default to autonomous specification expansion and bounded research",
+        "status": "accepted",
+        "date": "2026-08-05",
+        "path": "specs/adrs/adr-003-default-to-autonomous-specification-and-research.md"
       }
     ]
   },

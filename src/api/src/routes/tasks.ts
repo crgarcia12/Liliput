@@ -128,6 +128,7 @@ export function createTasksRouter(
         reviewerModel,
         reviewerReasoningEffort,
         reviewerEnabled,
+        requireSpecApproval,
       } = req.body as CreateTaskRequest;
       logger.info(
         {
@@ -141,6 +142,7 @@ export function createTasksRouter(
           reviewerModel,
           reviewerReasoningEffort,
           reviewerEnabled,
+          requireSpecApproval,
           hasTitle: !!title,
           hasDescription: !!description,
         },
@@ -204,6 +206,13 @@ export function createTasksRouter(
         });
         return;
       }
+      if (requireSpecApproval !== undefined && typeof requireSpecApproval !== 'boolean') {
+        res.status(400).json({
+          error: 'requireSpecApproval must be a boolean',
+          field: 'requireSpecApproval',
+        });
+        return;
+      }
 
       // Fail loudly on typoed / inaccessible repos. Without this an invalid
       // repo silently propagates to the coder phase, which logs a confusing
@@ -247,6 +256,7 @@ export function createTasksRouter(
         ...(reviewerModel ? { reviewerModel } : {}),
         ...(reviewerReasoningEffort ? { reviewerReasoningEffort } : {}),
         ...(reviewerEnabled !== undefined ? { reviewerEnabled } : {}),
+        ...(requireSpecApproval !== undefined ? { requireSpecApproval } : {}),
       });
 
       // Add system welcome message
@@ -384,7 +394,7 @@ export function createTasksRouter(
         const ackMsg = store.addChatMessage(
           task.id,
           'liliput',
-          'Drafting a specification with the LLM — this can take a moment…',
+          'Expanding your request into an implementation-ready specification — this can take a moment…',
         );
         io.to(`task:${task.id}`).emit('chat:message', ackMsg);
 
@@ -431,19 +441,14 @@ export function createTasksRouter(
           },
         )
           .then((spec) => {
+            const current = store.getTask(task.id);
+            if (!current || current.status !== 'specifying') return;
+
             store.updateTask(task.id, { spec });
             io.to(`task:${task.id}`).emit('task:spec', { taskId: task.id, spec });
 
-            const sysMsg = store.addChatMessage(
-              task.id,
-              'liliput',
-              'I\'ve drafted a specification based on your requirements. Please review and approve it to start building!',
-            );
-            io.to(`task:${task.id}`).emit('chat:message', sysMsg);
-
-            // Kick off the Reviewer Agent on the spec — fire-and-forget. If it
-            // finds something important, it posts to chat with role='reviewer'
-            // and queues feedback for the coder's first turn. Silent otherwise.
+            // Automated review never gates the build. When configured, it can
+            // queue spec feedback while the bounded preflight stages run.
             triggerSpecReview(io, task.id, spec);
 
             // Best-effort decomposition (behind feature flag).
@@ -462,6 +467,26 @@ export function createTasksRouter(
                 },
               );
             }
+
+            if (current.requireSpecApproval === true) {
+              const sysMsg = store.addChatMessage(
+                task.id,
+                'liliput',
+                'Specification ready. Edit it if needed, then choose Approve & Build.',
+              );
+              io.to(`task:${task.id}`).emit('chat:message', sysMsg);
+              return;
+            }
+
+            store.updateTask(task.id, { status: 'building' });
+            io.to(`task:${task.id}`).emit('task:status', { taskId: task.id, status: 'building' });
+            const sysMsg = store.addChatMessage(
+              task.id,
+              'liliput',
+              'Specification prepared internally. Starting research, planning, and implementation automatically.',
+            );
+            io.to(`task:${task.id}`).emit('chat:message', sysMsg);
+            startBuild(io, task.id);
           })
           .catch((specErr: unknown) => {
             const errMessage = specErr instanceof Error ? specErr.message : String(specErr);
@@ -794,10 +819,8 @@ export function createTasksRouter(
     }
   });
 
-  // PATCH /api/tasks/:id/spec — save user edits to the generated spec.
-  // Only allowed while `specifying` (before the build starts), so the user can
-  // tweak requirements/acceptance criteria before approving. The edited spec is
-  // what the coder and feature decomposer consume on approval.
+  // PATCH /api/tasks/:id/spec — save user edits when the task explicitly uses
+  // manual specification approval.
   router.patch('/api/tasks/:id/spec', (req: Request, res: Response) => {
     try {
       const task = store.getTask(req.params['id'] as string);
@@ -865,7 +888,7 @@ export function createTasksRouter(
       store.addChatMessage(
         task.id,
         'system',
-        'Spec approved! Summoning the Liliputians… 🏗️',
+        'Specification approved. Summoning the Liliputians… 🏗️',
       );
 
       // Start the agent build pipeline

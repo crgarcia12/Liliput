@@ -173,6 +173,7 @@ export function createTask(
     reviewerModel?: string;
     reviewerReasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
     reviewerEnabled?: boolean;
+    requireSpecApproval?: boolean;
   } = {},
 ): Task {
   const ts = now();
@@ -204,6 +205,7 @@ export function createTask(
       ? { reviewerReasoningEffort: options.reviewerReasoningEffort }
       : {}),
     reviewerEnabled,
+    requireSpecApproval: options.requireSpecApproval ?? false,
     agents: [],
     chatHistory: [],
     createdAt: ts,

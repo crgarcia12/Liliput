@@ -37,7 +37,8 @@ export default function MobileTaskChatPage() {
 
   const task = m.task;
   const backHref = task?.workstreamId ? `/m/workstream/${task.workstreamId}` : '/m';
-  const showSpecBanner = !!(task?.spec && task.status === 'specifying');
+  const showSpecBanner = !!task?.spec;
+  const canEditSpec = task?.status === 'specifying';
   const errorText = m.error || task?.errorMessage;
 
   return (
@@ -130,10 +131,10 @@ export default function MobileTaskChatPage() {
         <div className="border-b border-purple-800/50 bg-purple-950/20">
           <div className="flex items-center justify-between px-3 py-2 text-xs gap-2">
             <span className="text-purple-300 font-semibold truncate">
-              📜 Spec ready{m.editingSpec ? ' — editing' : ''}
+              📜 {canEditSpec ? `Spec ready${m.editingSpec ? ' — editing' : ''}` : 'Implementation spec'}
             </span>
             <div className="flex items-center gap-2 shrink-0">
-              {m.editingSpec ? (
+              {canEditSpec && m.editingSpec ? (
                 <>
                   <button
                     onClick={m.cancelEditSpec}
@@ -150,7 +151,7 @@ export default function MobileTaskChatPage() {
                     {m.specSaving ? 'Saving…' : '💾 Save'}
                   </button>
                 </>
-              ) : (
+              ) : canEditSpec ? (
                 <>
                   <button
                     onClick={() => {
@@ -168,17 +169,26 @@ export default function MobileTaskChatPage() {
                     {showSpec ? 'Hide' : 'Show'}
                   </button>
                 </>
+              ) : (
+                <button
+                  onClick={() => setShowSpec((s) => !s)}
+                  className="text-purple-300 hover:text-purple-100 px-3 py-2 min-h-[44px]"
+                >
+                  {showSpec ? 'Hide' : 'Show'}
+                </button>
               )}
-              <button
-                onClick={m.approveSpec}
-                disabled={m.actionPending === 'approve' || m.specSaving}
-                className="px-3 py-2 min-h-[44px] rounded bg-purple-700 hover:bg-purple-600 text-white text-xs disabled:opacity-50"
-              >
-                {m.actionPending === 'approve' ? 'Approving…' : '✓ Approve'}
-              </button>
+              {canEditSpec && (
+                <button
+                  onClick={m.approveSpec}
+                  disabled={m.actionPending === 'approve' || m.specSaving}
+                  className="px-3 py-2 min-h-[44px] rounded bg-purple-700 hover:bg-purple-600 text-white text-xs disabled:opacity-50"
+                >
+                  {m.actionPending === 'approve' ? 'Approving…' : '✓ Approve'}
+                </button>
+              )}
             </div>
           </div>
-          {m.editingSpec ? (
+          {canEditSpec && m.editingSpec ? (
             <textarea
               value={m.specDraft}
               onChange={(e) => m.setSpecDraft(e.target.value)}

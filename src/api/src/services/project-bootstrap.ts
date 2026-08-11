@@ -45,6 +45,8 @@ export interface BootstrapInput {
   model?: string;
   /** Optional reasoning-effort hint for the resulting task. Auto-derived from model id when missing. */
   reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+  /** Pause for human specification approval instead of building automatically. */
+  requireSpecApproval?: boolean;
 }
 
 export interface BootstrapResult {
@@ -258,6 +260,9 @@ export async function bootstrapProject(
     workstreamId: workstream.id,
     ...(input.model ? { model: input.model } : {}),
     ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
+    ...(input.requireSpecApproval !== undefined
+      ? { requireSpecApproval: input.requireSpecApproval }
+      : {}),
   });
 
   deps.taskStore.addChatMessage(

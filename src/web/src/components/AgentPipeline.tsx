@@ -8,6 +8,7 @@ import type { PipelineStage, PipelineStageStatus, PipelineState } from '@shared/
 // the CommonJS/ESM module-format conflict during the Next.js build.
 const PIPELINE_STAGES: ReadonlyArray<{ key: PipelineStage; label: string; icon: string }> = [
   { key: 'rewrite',   label: 'Rewrite',   icon: '✍️' },
+  { key: 'research',  label: 'Research',  icon: '🔍' },
   { key: 'plan',      label: 'Plan',      icon: '🗺️' },
   { key: 'critique',  label: 'Critique',  icon: '🦆' },
   { key: 'implement', label: 'Implement', icon: '🔨' },
@@ -21,7 +22,7 @@ const PIPELINE_STAGES: ReadonlyArray<{ key: PipelineStage; label: string; icon: 
  * AgentPipeline — the multi-agent state-machine diagram shown above the
  * activity log. Renders the five fixed stages every request flows through:
  *
- *   ✍️ Rewrite → 🗺️ Plan → 🦆 Critique → 🔨 Implement → 👀 Review
+ *   ✍️ Rewrite → 🔍 Research → 🗺️ Plan → 🦆 Critique → 🔨 Implement → 👀 Review
  *
  * The active stage pulses; done stages are green; skipped/failed are dimmed
  * or red. Driven entirely by the live `pipeline:stage` socket event (with the
@@ -57,6 +58,7 @@ export default function AgentPipeline({ pipeline }: Props) {
   const stages: Record<PipelineStage, PipelineStageStatus> =
     pipeline?.stages ?? {
       rewrite: 'pending',
+      research: 'pending',
       plan: 'pending',
       critique: 'pending',
       implement: 'pending',
