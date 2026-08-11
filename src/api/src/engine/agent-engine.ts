@@ -1111,7 +1111,11 @@ export async function startDevEnvForTask(io: SocketServer, taskId: string): Prom
  * Preserves namespace name, image ref, port, and devUrl on the Task so
  * a future Start (or chat message) can resurrect from the cached image.
  */
-export async function deleteDevEnvForTask(io: SocketServer, taskId: string): Promise<Task> {
+export async function deleteDevEnvForTask(
+  io: SocketServer,
+  taskId: string,
+  options: { syncRoutes?: boolean } = {},
+): Promise<Task> {
   return withTaskLifecycleLock(taskId, async () => {
     const task = store.getTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
@@ -1128,17 +1132,45 @@ export async function deleteDevEnvForTask(io: SocketServer, taskId: string): Pro
       logger.warn({ taskId, err: m }, 'deleteDevEnv: namespace delete failed');
     }
     devEnvs.delete(taskId);
-    try { await syncRoutesSerialized(); } catch (err) {
-      logger.warn(
-        { taskId, err: err instanceof Error ? err.message : String(err) },
-        'deleteDevEnv: gateway sync failed',
-      );
+    if (options.syncRoutes !== false) {
+      try { await syncRoutesSerialized(); } catch (err) {
+        logger.warn(
+          { taskId, err: err instanceof Error ? err.message : String(err) },
+          'deleteDevEnv: gateway sync failed',
+        );
+      }
     }
     const updated = store.updateTask(taskId, { devEnvState: 'deleted' })!;
     chatStatus(io, taskId, '🗑 Dev environment deleted. Send a chat message or click Start to recreate it from the cached image.');
     emitDevEnvUpdate(io, updated);
     return updated;
   });
+}
+
+/** Delete multiple dev environments and reload the gateway once. */
+export async function deleteDevEnvsForTasks(
+  io: SocketServer,
+  taskIds: string[],
+): Promise<{ tasks: Task[]; failures: Array<{ taskId: string; error: string }> }> {
+  const tasks: Task[] = [];
+  const failures: Array<{ taskId: string; error: string }> = [];
+  for (const taskId of taskIds) {
+    try {
+      tasks.push(await deleteDevEnvForTask(io, taskId, { syncRoutes: false }));
+    } catch (err) {
+      failures.push({ taskId, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  if (tasks.length > 0) {
+    try {
+      await syncRoutesSerialized();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn({ err: message, taskCount: tasks.length }, 'bulk delete: gateway sync failed');
+      for (const task of tasks) failures.push({ taskId: task.id, error: `Gateway sync failed: ${message}`});
+    }
+  }
+  return { tasks, failures };
 }
 
 /**

@@ -130,20 +130,21 @@ export default function DevEnvironmentsPage() {
     setBulkDeleting(true);
     setBulkError(null);
     try {
-      const results = await Promise.allSettled(
-        ids.map((id) =>
-          fetch(`/api/tasks/${id}/dev-env`, { method: 'DELETE' }).then(async (r) => {
-            if (!r.ok) {
-              const err = await r.json().catch(() => ({}));
-              throw new Error(err.details ?? err.error ?? `HTTP ${r.status}`);
-            }
-          }),
-        ),
-      );
-      const failed = results.filter((r) => r.status === 'rejected');
-      if (failed.length > 0) {
+      const response = await fetch('/api/tasks/dev-env/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskIds: ids }),
+      });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.details ?? err.error ?? `HTTP ${response.status}`);
+      }
+      const result = (await response.json()) as {
+        failures?: Array<{ taskId: string; error: string }>;
+      };
+      if (result.failures && result.failures.length > 0) {
         setBulkError(
-          `${failed.length} of ${ids.length} deletions failed: ${(failed[0] as PromiseRejectedResult).reason}`,
+          `${result.failures.length} of ${ids.length} deletions failed: ${result.failures[0]?.error ?? 'unknown error'}`,
         );
       }
       setSelected(new Set());

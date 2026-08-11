@@ -10,7 +10,7 @@ import * as wsStore from '../stores/workstream-store.js';
 import { generateSpec as defaultGenerateSpec, type SpecGenerator } from '../engine/spec-generator.js';
 import { triggerSpecReview } from '../engine/reviewer-trigger.js';
 import { listDevPods, getPodLogs } from '../engine/k8s-deployer.js';
-import { startBuild, shipTask, discardTask, closeTask, cancelTask, iterateTask, canIterate, enqueueChatForAgent, hasInFlightAgent, stopDevEnvForTask, startDevEnvForTask, deleteDevEnvForTask } from '../engine/agent-engine.js';
+import { startBuild, shipTask, discardTask, closeTask, cancelTask, iterateTask, canIterate, enqueueChatForAgent, hasInFlightAgent, stopDevEnvForTask, startDevEnvForTask, deleteDevEnvForTask, deleteDevEnvsForTasks } from '../engine/agent-engine.js';
 import { verifyRepositoryAccess } from '../engine/github-pr.js';
 import { runFeatureDecomposer } from '../engine/feature-decomposer-runner.js';
 import { emitIssuesForWorkstream } from '../engine/pm-issue-flow.js';
@@ -1039,6 +1039,22 @@ export function createTasksRouter(
       const message = err instanceof Error ? err.message : String(err);
       logger.warn({ err: message }, 'startDevEnv failed');
       res.status(409).json({ error: 'Failed to start dev environment', details: message });
+    }
+  });
+
+  router.post('/api/tasks/dev-env/bulk-delete', async (req: Request, res: Response) => {
+    try {
+      const taskIds = (req.body as { taskIds?: unknown }).taskIds;
+      if (!Array.isArray(taskIds) || taskIds.length === 0 || taskIds.length > 100 || taskIds.some((id) => typeof id !== 'string' || id.length === 0)) {
+        res.status(400).json({ error: 'taskIds must be a non-empty array of up to 100 task IDs' });
+        return;
+      }
+      const result = await deleteDevEnvsForTasks(io, taskIds);
+      res.json(result);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn({ err: message }, 'bulk deleteDevEnvs failed');
+      res.status(409).json({ error: 'Failed to delete dev environments', details: message });
     }
   });
 
